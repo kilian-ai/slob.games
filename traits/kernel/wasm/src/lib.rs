@@ -226,6 +226,7 @@ pub fn init() -> Result<JsValue, JsValue> {
                 "version": t.version,
                 "tags": t.tags,
                 "wasm_callable": t.wasm_callable,
+                "params": t.params,
             })).collect()
         },
         registry_count: || get_registry().len(),
