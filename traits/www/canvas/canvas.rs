@@ -299,7 +299,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             div .speaker {}
                             div .camera {}
                         }
-                        iframe #phone-viewport sandbox="allow-scripts allow-same-origin" {}
+                        iframe #phone-viewport sandbox="allow-scripts allow-same-origin allow-forms" {}
                         div .phone-home-bar {}
                     }
                 }
