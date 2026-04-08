@@ -1,6 +1,6 @@
 #!/bin/bash
 # traits.build — Install Helper Permanently
-# Usage: curl -fsSL https://slob.games/local/install.sh | bash
+# Usage: curl -fsSL https://traits.build/local/install.sh | bash
 #
 # Installs the traits binary and optionally sets up auto-start.
 set -euo pipefail
@@ -59,7 +59,7 @@ fi
 
 # ── 2. Try Fly.io server binary (fallback) ──
 if [ "$INSTALLED" = false ]; then
-    FLY_URL="${TRAITS_SERVER:-https://relay.slob.games}"
+    FLY_URL="${TRAITS_SERVER:-https://relay.traits.build}"
     HEADERS="$(curl -fsSL --connect-timeout 5 -D - -o "$INSTALL_DIR/traits.tmp" "$FLY_URL/local/binary" 2>/dev/null || true)"
     if [ -f "$INSTALL_DIR/traits.tmp" ] && [ -s "$INSTALL_DIR/traits.tmp" ]; then
         REMOTE_OS="$(echo "$HEADERS" | grep -i 'X-Traits-OS:' | tr -d '\r' | awk '{print $2}')"

@@ -1,7 +1,7 @@
 [trait]
 description = "Interactive trait playground — call any trait from the browser"
-version = "v260326"
-checksum = "86a4e96106fdc34da2324279b1975e281d0ce162c4e121d5804ebb139f8c1d71"
+version = "v260408"
+checksum = "16bd10e5a514e60d35a6e5a63898dfa8193d16b4c20e12f070c7db9504745af7"
 epoch = 0
 author = "system"
 tags = ["www", "playground", "interactive"]

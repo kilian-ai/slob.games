@@ -1,10 +1,10 @@
 #!/bin/bash
 # traits.build — Run any traits command (one-shot)
 # Usage:
-#   curl -fsSL https://slob.games/local/traits.sh | bash
-#   curl -fsSL https://slob.games/local/traits.sh | bash -s -- serve --port 9090
-#   curl -fsSL https://slob.games/local/traits.sh | bash -s -- list
-#   curl -fsSL https://slob.games/local/traits.sh | bash -s -- checksum hash "hello"
+#   curl -fsSL https://traits.build/local/traits.sh | bash
+#   curl -fsSL https://traits.build/local/traits.sh | bash -s -- serve --port 9090
+#   curl -fsSL https://traits.build/local/traits.sh | bash -s -- list
+#   curl -fsSL https://traits.build/local/traits.sh | bash -s -- checksum hash "hello"
 #
 # Downloads the traits binary and runs it. Default: serve --port 8090
 # No package manager required — downloads a single binary to /tmp.
@@ -18,7 +18,7 @@ run_traits() {
 
     if [ "${1:-}" = "serve" ]; then
         if [ -z "${RELAY_URL:-}" ] || [ "$RELAY_URL" = "https://traits-build.fly.dev" ]; then
-            RELAY_URL="https://relay.slob.games"
+            RELAY_URL="https://relay.traits.build"
         fi
         export RELAY_URL
         echo "↳ Relay URL: $RELAY_URL"
@@ -42,7 +42,7 @@ run_traits() {
 if [ $# -eq 0 ]; then
     PORT="${TRAITS_PORT:-8090}"
     if [ -z "${RELAY_URL:-}" ] || [ "$RELAY_URL" = "https://traits-build.fly.dev" ]; then
-        RELAY_URL="https://relay.slob.games"
+        RELAY_URL="https://relay.traits.build"
     fi
     export RELAY_URL
     set -- serve --port "$PORT"
@@ -50,14 +50,14 @@ fi
 
 # Ensure `serve` gets a relay default even when args were provided explicitly.
 if [ "${1:-}" = "serve" ] && { [ -z "${RELAY_URL:-}" ] || [ "$RELAY_URL" = "https://traits-build.fly.dev" ]; }; then
-    RELAY_URL="https://relay.slob.games"
+    RELAY_URL="https://relay.traits.build"
     export RELAY_URL
 fi
 
 # For piped startup (`curl ... | bash`) in serve mode, re-exec via a real script file
 # on /dev/tty so terminal input behaves like a normal local script launch.
 if [ "${1:-}" = "serve" ] && [ ! -t 0 ] && [ -r /dev/tty ] && [ "${TRAITS_HELPER_REEXEC:-0}" != "1" ]; then
-    HELPER_URL="${TRAITS_HELPER_URL:-https://slob.games/local/helper.sh}"
+    HELPER_URL="${TRAITS_HELPER_URL:-https://traits.build/local/helper.sh}"
     HELPER_DIR="$(mktemp -d)"
     trap 'rm -rf "$HELPER_DIR"' EXIT
     HELPER_FILE="$HELPER_DIR/helper.sh"
@@ -179,7 +179,7 @@ echo "✗ Could not download or run the traits binary."
 echo ""
 echo "  Options:"
 echo "    1. Download manually:       https://github.com/$REPO/releases"
-echo "    2. Install permanently:     curl -fsSL https://slob.games/local/install.sh | bash"
+echo "    2. Install permanently:     curl -fsSL https://traits.build/local/install.sh | bash"
 echo "    3. Build from source:       cargo install --git https://github.com/$REPO"
 echo ""
 exit 1

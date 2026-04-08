@@ -1,7 +1,7 @@
 [trait]
 description = "Generate a SKILL.md file from the OpenAPI spec — teaches AI agents to use traits as MCP tools"
-version = "v260322.215420"
-checksum = "9d952ee56ce5f0a2b84d42a30dd2814fe0d0799e6be5934aa1c513c89e6594a9"
+version = "v260408"
+checksum = "f33e937297c2fecd3d2600943f97aedb34d3db7c75c01734e143e7700b4e61ae"
 author = "system"
 tags = ["sys", "docs", "skills", "ai", "mcp"]
 provides = ["sys/docs"]

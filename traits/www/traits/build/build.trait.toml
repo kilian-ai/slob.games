@@ -1,8 +1,8 @@
 [trait]
 description = "Landing page for slob.games"
-version = "v260326.013115"
+version = "v260408"
 epoch = 0
-checksum = "bd869f64d2eb03f578747f8b551b2712ee0eb858411cc0ee85db2658ce8d0cbb"
+checksum = "89d7d6faaea5941258a2499b166d8df85ebd482abaa01389fe56aea9d14a37d9"
 author = "system"
 tags = ["www", "webpage"]
 provides = ["www/webpage"]

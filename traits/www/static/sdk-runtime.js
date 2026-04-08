@@ -49,7 +49,7 @@ const HELPER_PORTS = [8090, 8091, 9090];
 const HELPER_TIMEOUT = 1500;
 
 // ── Relay state (remote helper via pairing code) ──
-const RELAY_DEFAULT_SERVER = 'https://relay.traits.build';
+const RELAY_DEFAULT_SERVER = 'https://relay.slob.games';
 const RELAY_ENABLED_KEY = 'traits.relay.enabled';
 
 function _relayServer() {
@@ -2999,7 +2999,7 @@ class Traits {
     /**
      * Connect to a remote relay. Stores code + server in localStorage.
      * @param {string} code - 4-char pairing code from Mac helper
-     * @param {string} [server] - Relay server URL (defaults to relay.traits.build)
+     * @param {string} [server] - Relay server URL (defaults to relay.slob.games)
      * @returns {Promise<{ok: boolean, active?: boolean, error?: string}>}
      */
     async connectRelay(code, server) {
@@ -3164,7 +3164,7 @@ class Traits {
 
     /**
      * Call a trait and render its HTML result into a DOM element.
-     * @param {string} path - Trait path (e.g. 'www.traits.build')
+     * @param {string} path - Trait path (e.g. 'www.slob.games')
      * @param {Array} [args=[]] - Arguments
      * @param {string|HTMLElement} [target='body'] - CSS selector or element
      * @returns {Promise<{ok: boolean, dispatch: string}>}
