@@ -172,7 +172,7 @@ fn default_http_response() -> String {
 
 // ── Pure parsing functions ──
 
-/// Parse a type string like "int", "list<string>", "map<string, int>" into TraitType
+/// Parse a type string like `"int"`, `"list<string>"`, `"map<string, int>"` into TraitType
 pub fn parse_type(s: &str) -> TraitType {
     let s = s.trim();
     if s.ends_with('?') {
@@ -284,7 +284,7 @@ pub fn derive_trait_path(toml_path: &Path) -> Option<String> {
 
 // ── Signature construction helpers ──
 
-/// Build a Vec<ParamDef> from parsed TOML signature params.
+/// Build a `Vec<ParamDef>` from parsed TOML signature params.
 pub fn build_params(sig: &SignatureToml) -> Vec<ParamDef> {
     sig.params.iter().map(|p| {
         ParamDef {
@@ -346,7 +346,7 @@ pub fn resolve_language(toml: &TraitToml) -> Result<Language, String> {
     Err("Missing [implementation] section (required unless command= is set)".into())
 }
 
-/// Parse a [config] section from TOML into a flat HashMap<String, String>.
+/// Parse a `[config]` section from TOML into a flat `HashMap<String, String>`.
 pub fn parse_config_section(config: Option<HashMap<String, toml::Value>>) -> HashMap<String, String> {
     config.map(|m| {
         m.into_iter().map(|(k, v)| {
