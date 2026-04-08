@@ -1824,7 +1824,7 @@ class Traits {
                 fullInstructions = instrResult?.instructions || instrResult?.result?.instructions || '';
             } catch(_) {}
             if (!fullInstructions) {
-                fullInstructions = 'You are a concise, helpful voice assistant powered by traits.build. Keep responses short and conversational. You have access to function-calling tools that execute locally via WebAssembly.';
+                fullInstructions = 'You are a concise, helpful voice assistant powered by slob.games. Keep responses short and conversational. You have access to function-calling tools that execute locally via WebAssembly.';
             }
             // Canvas page prefix (visual context cue)
             if (currentPage === 'canvas') {
@@ -1910,7 +1910,7 @@ class Traits {
 
             // Handle data channel open — send session config
             _voiceDc.addEventListener('open', () => {
-                const fallbackInstructions = 'You are a concise, helpful voice assistant powered by traits.build. Keep responses short and conversational. You have access to function-calling tools that execute locally via WebAssembly.';
+                const fallbackInstructions = 'You are a concise, helpful voice assistant powered by slob.games. Keep responses short and conversational. You have access to function-calling tools that execute locally via WebAssembly.';
 
                 // WebRTC session.update: instructions and tools are mutable after
                 // session creation. type:'realtime' is required by the API.

@@ -20,7 +20,7 @@ static CUSTOM_INSTRUCTIONS: Mutex<Option<String>> = Mutex::new(None);
 ///   reset        — remove custom override, revert to compiled-in default
 ///   append       — add text to the end of current instructions
 ///   build        — assemble full session instructions: agent + memory + history + instruct
-///     arg1: agent (optional, e.g. "traits.build")
+///     arg1: agent (optional, e.g. "slob.games")
 ///     arg2: session_id (optional — injects recent chat history)
 pub fn voice_instruct(args: &[Value]) -> Value {
     let action = args.first().and_then(|v| v.as_str()).unwrap_or("");
