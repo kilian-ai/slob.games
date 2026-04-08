@@ -1835,6 +1835,7 @@ class Traits {
                 fullInstructions = canvasPrefix + '\n\n' + fullInstructions;
             }
             console.log('[Voice] Instructions loaded (' + fullInstructions.length + ' chars, source: sys.voice.instruct build)');
+            console.log('[Voice] [DEBUG] Instructions first 500 chars:', fullInstructions.slice(0, 500));
 
             // ── Build tool definitions via sys.voice.tools (shared registry, single source of truth) ──
             let tools = [];
@@ -1842,9 +1843,19 @@ class Traits {
                 try {
                     const toolsResult = await this.call('sys.voice.tools', [currentPage]);
                     tools = toolsResult?.tools || toolsResult?.result?.tools || [];
-                } catch(_) {
+                    console.log('[Voice] [DEBUG] Raw toolsResult keys:', Object.keys(toolsResult || {}));
+                } catch(e) {
+                    console.warn('[Voice] [DEBUG] sys.voice.tools failed:', e.message || e);
                     tools = await _buildVoiceTools(this, currentPage); // fallback if trait not yet compiled
                 }
+            }
+            console.log('[Voice] [DEBUG] Tools count:', tools.length, '| enableTools:', enableTools);
+            if (tools.length > 0) {
+                console.log('[Voice] [DEBUG] First 3 tools:', JSON.stringify(tools.slice(0, 3), null, 2));
+                const withParams = tools.filter(t => t.parameters && t.parameters.properties && Object.keys(t.parameters.properties).length > 0);
+                console.log('[Voice] [DEBUG] Tools with params:', withParams.length, '/', tools.length);
+            } else {
+                console.warn('[Voice] [DEBUG] ⚠️ NO TOOLS — model will have no function calling capability');
             }
 
             // ── Ephemeral token: browser WebRTC needs a short-lived token ──
@@ -1910,25 +1921,39 @@ class Traits {
 
             // Handle data channel open — send session config
             _voiceDc.addEventListener('open', () => {
+                console.log('[Voice] [DEBUG] DataChannel OPEN — readyState:', _voiceDc.readyState);
                 const fallbackInstructions = 'You are a concise, helpful voice assistant powered by slob.games. Keep responses short and conversational. You have access to function-calling tools that execute locally via WebAssembly.';
 
                 // WebRTC session.update: instructions and tools are mutable after
-                // session creation. type:'realtime' is required by the API.
+                // session creation. Nested audio config is required by newer models
+                // (gpt-realtime-mini-2025-12-15+). Top-level turn_detection is rejected
+                // with "Unknown parameter" by these models.
                 const sessionConfig = {
                     type: 'realtime',
                     instructions: fullInstructions || fallbackInstructions,
-                    // Give the user more time to finish their thought before the model responds.
-                    // silence_duration_ms: 1200ms (default ~500ms) — waits longer after speech stops.
-                    // prefix_padding_ms: 400ms — more audio before speech counts as a turn start.
-                    turn_detection: {
-                        type: 'server_vad',
-                        silence_duration_ms: 1200,
-                        prefix_padding_ms: 400,
-                        threshold: 0.5,
+                    tool_choice: 'auto',
+                    // Nested audio config for newer Realtime API models
+                    audio: {
+                        input: {
+                            transcription: { model: 'whisper-1' },
+                            turn_detection: {
+                                type: 'server_vad',
+                                silence_duration_ms: 1200,
+                                prefix_padding_ms: 400,
+                                threshold: 0.5,
+                            },
+                        },
                     },
                 };
                 if (tools.length > 0) sessionConfig.tools = tools;
-                _voiceDc.send(JSON.stringify({ type: 'session.update', session: sessionConfig }));
+                const payload = { type: 'session.update', session: sessionConfig };
+                console.log('[Voice] [DEBUG] Sending session.update — tools:', (sessionConfig.tools || []).length,
+                    '| instructions length:', (sessionConfig.instructions || '').length,
+                    '| tool_choice:', sessionConfig.tool_choice);
+                console.log('[Voice] [DEBUG] session.update tool names:', (sessionConfig.tools || []).map(t => t.name).join(', '));
+                console.log('[Voice] [DEBUG] Full session.update payload size:', JSON.stringify(payload).length, 'bytes');
+                _voiceDc.send(JSON.stringify(payload));
+                console.log('[Voice] [DEBUG] session.update SENT');
             });
 
             // Handle incoming events (same JSON format as WebSocket messages)
@@ -1936,6 +1961,32 @@ class Traits {
                 try {
                     const msg = JSON.parse(event.data);
                     const type = msg.type;
+                    
+                    // Log ALL event types for debugging
+                    if (type === 'session.created') {
+                        console.log('[Voice] [DEBUG] ✓ session.created — session ID:', msg.session?.id);
+                    } else if (type === 'session.updated') {
+                        const s = msg.session || {};
+                        console.log('[Voice] [DEBUG] ✓ session.updated — tools:', (s.tools || []).length,
+                            '| tool_choice:', s.tool_choice,
+                            '| instructions length:', (s.instructions || '').length,
+                            '| model:', s.model);
+                        if ((s.tools || []).length > 0) {
+                            console.log('[Voice] [DEBUG] session.updated tool names:', s.tools.map(t => t.name).join(', '));
+                        } else {
+                            console.warn('[Voice] [DEBUG] ⚠️ session.updated has ZERO tools — model cannot call functions!');
+                        }
+                    } else if (type === 'error') {
+                        console.error('[Voice] [DEBUG] ❌ Error event:', JSON.stringify(msg.error || msg));
+                    } else if (type === 'response.function_call_arguments.done') {
+                        console.log('[Voice] [DEBUG] Tool call event received:', msg.name);
+                    } else if (type === 'response.created' || type === 'response.done') {
+                        const usage = msg.response?.usage;
+                        console.log('[Voice] [DEBUG]', type, usage ? '| tokens: in=' + (usage.input_tokens || 0) + ' out=' + (usage.output_tokens || 0) : '');
+                    } else if (!type?.startsWith('response.audio') && !type?.startsWith('input_audio_buffer') && type !== 'response.text.delta' && type !== 'response.audio_transcript.delta') {
+                        // Log all non-audio-streaming events
+                        console.log('[Voice] [DEBUG] Event:', type);
+                    }
 
                     // ── User transcript ──
                     if (type === 'conversation.item.input_audio_transcription.completed') {
@@ -2076,7 +2127,7 @@ class Traits {
                                             if (_voiceDc && _voiceDc.readyState === 'open') {
                                                 _voiceDc.send(JSON.stringify({
                                                     type: 'session.update',
-                                                    session: { type: 'realtime', instructions: updated }
+                                                    session: { instructions: updated }
                                                 }));
                                             }
                                         } else if (r.action === 'reset') {
@@ -2123,6 +2174,7 @@ class Traits {
                     // ── Error ──
                     else if (type === 'error') {
                         const errMsg = msg.error?.message || 'Unknown error';
+                        console.error('[Voice] [DEBUG] ❌ API Error:', errMsg, '| full:', JSON.stringify(msg.error || {}));
                         _dispatchVoiceEvent('error', { message: errMsg });
                         if (opts.onError) opts.onError(errMsg);
                     }
@@ -2133,10 +2185,23 @@ class Traits {
 
             // Handle connection state changes
             _voicePc.onconnectionstatechange = () => {
+                console.log('[Voice] [DEBUG] PeerConnection state:', _voicePc?.connectionState);
                 if (_voicePc && (_voicePc.connectionState === 'disconnected' || _voicePc.connectionState === 'failed')) {
                     _dispatchVoiceEvent('disconnected', {});
                 }
             };
+
+            _voicePc.oniceconnectionstatechange = () => {
+                console.log('[Voice] [DEBUG] ICE state:', _voicePc?.iceConnectionState);
+            };
+
+            _voiceDc.addEventListener('close', () => {
+                console.log('[Voice] [DEBUG] DataChannel CLOSED');
+            });
+
+            _voiceDc.addEventListener('error', (e) => {
+                console.error('[Voice] [DEBUG] DataChannel ERROR:', e);
+            });
 
             // ── SDP negotiation via OpenAI Realtime API ──
             const offer = await _voicePc.createOffer();
