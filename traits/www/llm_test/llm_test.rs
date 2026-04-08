@@ -46,7 +46,7 @@ pub fn llm_test(_args: &[Value]) -> Value {
             }
             body {
                 div.header {
-                    h1 { "traits.build " span { "llm test" } }
+                    h1 { "slob.games " span { "llm test" } }
                     p.subtitle { "Chat with LLM models — OpenAI API, local server, or in-browser WebGPU inference" }
                 }
 

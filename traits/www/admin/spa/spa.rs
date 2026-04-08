@@ -15,7 +15,7 @@ pub fn spa(_args: &[Value]) -> Value {
                 div.page {
                     section.hero.card {
                         p.eyebrow { "settings" }
-                        h1 { "traits.build" }
+                        h1 { "slob.games" }
                         p.subtitle {
                             "Setup, run commands, and configure your environment."
                         }

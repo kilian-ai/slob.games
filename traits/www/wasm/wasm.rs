@@ -15,7 +15,7 @@ pub fn wasm_page(_args: &[Value]) -> Value {
             body {
                 div.container {
                     header {
-                        h1 { "traits.build " span.accent { "wasm" } }
+                        h1 { "slob.games " span.accent { "wasm" } }
                         p.subtitle { "Kernel running in your browser via WebAssembly" }
                         div #status .status { "Loading WASM module..." }
                     }

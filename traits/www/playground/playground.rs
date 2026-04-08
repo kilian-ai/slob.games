@@ -14,7 +14,7 @@ pub fn playground(_args: &[Value]) -> Value {
             body {
                 div.container {
                     header {
-                        h1 { "traits.build " span.accent { "playground" } }
+                        h1 { "slob.games " span.accent { "playground" } }
                         p.subtitle { "Call any trait interactively" }
                     }
 

@@ -281,7 +281,7 @@ pub fn canvas(_args: &[Value]) -> Value {
             }
             body {
                 div .canvas-header {
-                    h1 { "traits.build " span .accent { "canvas" } }
+                    h1 { "slob.games " span .accent { "canvas" } }
                     div .actions {
                         button #btnSave .save-btn { "Save" }
                         button #btnClear { "Clear" }

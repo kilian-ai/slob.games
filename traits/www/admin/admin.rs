@@ -11,12 +11,12 @@ pub fn admin(_args: &[Value]) -> Value {
             head {
                 meta charset="UTF-8";
                 meta name="viewport" content="width=device-width, initial-scale=1.0";
-                title { "traits.build \u{2014} Settings" }
+                title { "slob.games \u{2014} Settings" }
                 style { (PreEscaped(CSS)) }
             }
             body {
                 div.container {
-                    h1 { "traits.build " span { "settings" } }
+                    h1 { "slob.games " span { "settings" } }
                     p.subtitle { "Setup, run commands, and manage your deployment" }
 
                     // Setup
@@ -321,7 +321,7 @@ var _SECRET_PFX = 'traits.secret.';
     h += '<p style="color:#bbb;font-size:0.9rem;">No install needed — everything runs in your browser.</p>';
     h += '<div class="install-row">';
     h += '<button class="primary" onclick="addToHomeScreen()">Add to Home Screen</button>';
-    h += '<button onclick="location.href=\'/\'">Open traits.build</button>';
+    h += '<button onclick="location.href=\'/\'">Open slob.games</button>';
     h += '</div>';
     h += '<p class="note" style="margin-top:1rem;">Traits run via the remote API. For heavy workloads, set up a local server on a desktop machine.</p>';
   } else {
