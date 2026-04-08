@@ -83,7 +83,7 @@ pub fn build_instructions(agent: &str, session_id: Option<&str>) -> String {
     // 1. Agent context
     if !agent.is_empty() {
         parts.push(format!(
-            "You are operating as the \"{}\" coding agent on the traits.build platform. \
+            "You are operating as the \"{}\" coding agent on the slob.games platform. \
              The user is a developer who may ask about code, architecture, or technical topics. \
              Maintain awareness of this agent context in your responses.",
             agent
