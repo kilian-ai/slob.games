@@ -11,6 +11,9 @@ pub fn canvas(args: &[Value]) -> Value {
             let content = args.get(1).and_then(|v| v.as_str()).unwrap_or("");
             let len = content.len();
             kernel_logic::platform::vfs_write(CANVAS_VFS_PATH, content);
+            if !content.is_empty() {
+                kernel_logic::platform::vfs_write("canvas/projects/_autosave.html", content);
+            }
             json!({"ok": true, "action": "set", "length": len})
         }
         "append" => {
@@ -19,6 +22,9 @@ pub fn canvas(args: &[Value]) -> Value {
             let combined = format!("{}{}", existing, content);
             let len = combined.len();
             kernel_logic::platform::vfs_write(CANVAS_VFS_PATH, &combined);
+            if !combined.is_empty() {
+                kernel_logic::platform::vfs_write("canvas/projects/_autosave.html", &combined);
+            }
             json!({"ok": true, "action": "append", "length": len})
         }
         "get" => {

@@ -503,6 +503,11 @@ pub fn canvas(_args: &[Value]) -> Value {
                             }
                             if (content === _currentContent) return; // skip srcdoc reset if content unchanged
                             _currentContent = content;
+                            // Auto-save to project bar on every content change
+                            try {
+                                localStorage.setItem(PROJECT_PFX + '_autosave', JSON.stringify({ content, saved: Date.now() }));
+                                renderProjectBar();
+                            } catch(_) {}
                             empty.style.display = 'none';
                             phoneFrame.classList.add('visible');
                             // No global style injection — iframe provides full CSS isolation.
