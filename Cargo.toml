@@ -1,83 +1,9 @@
-[package]
-name = "traits"
-version = "0.260408.170356"
-edition = "2021"
-description = "slob.games — AI-powered game canvas platform"
-authors = ["kilian"]
-license = "MIT"
-readme = "README.md"
-repository = "https://github.com/kilian-ai/slob.games"
-homepage = "https://slob.games/"
-exclude = [
-    "programs/",
-    "target/",
-    "gui/",
-    "scripts/",
-    "*.bak",
-    "fly.toml",
-    "Dockerfile",
-    ".github/",
-]
-
 [workspace]
 members = [
-    ".",
     "traits/kernel/logic",
-    "traits/kernel/plugin_api",
     "traits/kernel/wasm",
-    "traits/sys/checksum",
 ]
-default-members = [
-    ".",
-    "traits/kernel/logic",
-    "traits/kernel/plugin_api",
-    "traits/sys/checksum",
-]
-
-[[bin]]
-name = "traits"
-path = "src/main.rs"
-
-[dependencies]
-kernel-logic = { path = "traits/kernel/logic", version = "0.260408.170356" }
-actix-web = "4"
-actix-rt = "2"
-actix-ws = "0.3"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-toml = "0.8"
-tokio = { version = "1", features = ["full"] }
-glob = "0.3"
-clap = { version = "4", features = ["derive"] }
-uuid = { version = "1", features = ["v4"] }
-tracing = "0.1"
-tracing-subscriber = "0.3"
-dashmap = "5"
-thiserror = "1"
-regex = "1"
-actix-cors = "0.7"
-libloading = "0.8"
-crossterm = "0.28"
-shell-words = "1"
-tungstenite = { version = "0.21", features = ["native-tls"] }
-base64 = "0.22"
-tokio-stream = "0.1"
-futures = "0.3"
-sha2 = "0.10"
-aes-gcm = "0.10"
-rand = "0.8"
-libc = "0.2"
-pulldown-cmark = "0.12"
-maud = "0.26"
-rusqlite = { version = "0.32", features = ["bundled"] }
-scraper = "0.19"
-
-[build-dependencies]
-sha2 = "0.10"
-
-[dev-dependencies]
-tempfile = "3"
-assert_cmd = "2"
+resolver = "2"
 
 [profile.release]
 opt-level = "s"

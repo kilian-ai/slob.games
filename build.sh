@@ -28,7 +28,11 @@ else
     export TRAITS_BUILD_VERSION="v${TODAY}"
 fi
 # Update version.trait.toml so both build.rs files can read it
-sed -i '' "s/^version = .*/version = \"${TRAITS_BUILD_VERSION}\"/" "$VERSION_TOML"
+if [[ "$(uname)" == "Darwin" ]]; then
+    sed -i '' "s/^version = .*/version = \"${TRAITS_BUILD_VERSION}\"/" "$VERSION_TOML"
+else
+    sed -i "s/^version = .*/version = \"${TRAITS_BUILD_VERSION}\"/" "$VERSION_TOML"
+fi
 echo "Build version: $TRAITS_BUILD_VERSION"
 
 # Build WASM first so the native binary embeds the latest WASM pkg via include_bytes!
@@ -41,19 +45,6 @@ if command -v wasm-pack >/dev/null 2>&1; then
 else
     echo "Skipping WASM build — wasm-pack not found"
 fi
-
-echo "Building traits kernel..."
-cargo build --release
-
-BIN="target/release/traits"
-if [[ ! -f "$BIN" ]]; then
-    echo "Build failed — no binary produced"
-    exit 1
-fi
-
-SIZE=$(du -h "$BIN" | cut -f1)
-echo ""
-echo "Built: $BIN ($SIZE)"
 
 if [[ -f "$WASM_PKG_DIR/traits_wasm_bg.wasm" && -f "$WASM_PKG_DIR/traits_wasm.js" ]]; then
     echo "Generating static WASM runtime..."
@@ -270,22 +261,6 @@ else
 fi
 
 # ── Copy cdylib outputs to trait directories ──
-# The dylib_loader expects lib<dirname>.dylib next to each .trait.toml
-EXT="dylib"
-[[ "$(uname)" == "Linux" ]] && EXT="so"
-
-copy_dylib() {
-    local crate_name="$1" trait_dir="$2" dir_name="$3"
-    local src="target/release/lib${crate_name}.${EXT}"
-    local dst="${trait_dir}/lib${dir_name}.${EXT}"
-    if [[ -f "$src" ]]; then
-        cp "$src" "$dst"
-        # Re-sign on macOS — cp invalidates the kernel's code signature cache
-        [[ "$(uname)" == "Darwin" ]] && codesign -fs - "$dst" 2>/dev/null || true
-        echo "  Copied $src → $dst"
-    fi
-}
-
 # ── Generate terminal-runtime.js (classic script for file:// mode) ──
 TERMINAL_SRC="traits/www/terminal/terminal.js"
 TERMINAL_CSS="traits/www/terminal/terminal.css"
@@ -421,29 +396,4 @@ if [[ -f "$INDEX_STANDALONE_HTML" ]]; then
     echo "Copied $INDEX_STANDALONE_HTML → index.html"
 fi
 
-echo "Copying dylibs..."
-copy_dylib "trait_www_traits_build" "traits/www/traits/build" "build"
-copy_dylib "trait_sys_checksum"     "traits/sys/checksum"     "checksum"
-copy_dylib "trait_sys_ps"           "traits/sys/ps"           "ps"
-
-echo "Syncing local/ scripts from trait sources..."
-cp traits/www/local/helper/helper.sh local/helper.sh
-cp traits/www/local/helper/helper.sh local/traits.sh
-cp traits/www/local/install/install.sh local/install.sh
-
-echo "Traits: $("$BIN" list 2>/dev/null | grep -c '"path"') registered"
-
-# ── Create git release tag ──
-VERSION="$("$BIN" version </dev/null 2>/dev/null | grep -oE 'v[0-9]{6,}\.[0-9]+' | head -1 || true)"
-if [[ -n "$VERSION" ]] && command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    if ! git tag --list "$VERSION" | grep -q .; then
-        git tag "$VERSION"
-        echo "Tagged: $VERSION"
-        # Push tag if remote exists
-        if git remote get-url origin >/dev/null 2>&1; then
-            git push origin "$VERSION" 2>/dev/null && echo "Pushed tag $VERSION" || echo "  (tag push failed — push manually with: git push origin $VERSION)"
-        fi
-    else
-        echo "Tag $VERSION already exists"
-    fi
-fi
+echo "Done. Open index.html or deploy the static site."

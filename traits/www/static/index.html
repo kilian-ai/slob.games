@@ -3,35 +3,32 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>traits.build — composable function kernel in Rust + WASM</title>
-<meta name="description" content="Typed, composable functions compiled into a single Rust binary that serves itself as a web app. The same kernel runs in the browser via WASM. CLI, REST, MCP, and SPA — one binary, four surfaces.">
-<meta name="keywords" content="rust, wasm, webassembly, function kernel, composable functions, mcp, cli, rest api, traits, single binary, spa">
+<title>slob.games — AI game canvas</title>
+<meta name="description" content="AI-powered game canvas platform. Build, play, and share games in the browser — runs entirely in WASM, no server required.">
+<meta name="keywords" content="ai games, game canvas, wasm, webassembly, browser games, ai, slob games">
 <meta name="author" content="Kilian">
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230d1117'/%3E%3Ctext x='16' y='24' font-size='22' font-family='system-ui,sans-serif' font-weight='700' fill='%2358a6ff' text-anchor='middle'%3Et%3C/text%3E%3C/svg%3E">
-<link rel="canonical" href="https://www.traits.build/">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230d1117'/%3E%3Ctext x='16' y='24' font-size='22' font-family='system-ui,sans-serif' font-weight='700' fill='%2300e0ff' text-anchor='middle'%3Es%3C/text%3E%3C/svg%3E">
+<link rel="canonical" href="https://slob.games/">
 <!-- Open Graph -->
 <meta property="og:type" content="website">
-<meta property="og:url" content="https://www.traits.build/">
-<meta property="og:title" content="traits.build — composable function kernel in Rust + WASM">
-<meta property="og:description" content="Typed, composable functions compiled into a single Rust binary and WASM browser kernel. Define traits in TOML, call via CLI, REST, MCP, or directly in the SPA.">
-<meta property="og:site_name" content="traits.build">
+<meta property="og:url" content="https://slob.games/">
+<meta property="og:title" content="slob.games — AI game canvas">
+<meta property="og:description" content="AI-powered game canvas platform. Build, play, and share games in the browser — runs entirely in WASM, no server required.">
+<meta property="og:site_name" content="slob.games">
 <!-- Twitter Card -->
 <meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="traits.build — composable function kernel">
-<meta name="twitter:description" content="Single Rust binary + WASM browser kernel. CLI, REST, MCP, SPA — one trait, four surfaces.">
+<meta name="twitter:title" content="slob.games — AI game canvas">
+<meta name="twitter:description" content="AI-powered game canvas. Build and play browser games powered by WASM + AI.">
 <!-- JSON-LD Structured Data -->
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  "name": "traits.build",
-  "url": "https://www.traits.build/",
-  "applicationCategory": "DeveloperApplication",
-  "operatingSystem": "Linux, macOS, WebAssembly",
-  "programmingLanguage": "Rust",
-  "description": "Typed, composable functions compiled into a single Rust binary that serves itself as a web app. The same kernel runs in the browser via WASM. Define traits in TOML, call them via CLI, REST, MCP, or directly in the SPA.",
-  "license": "https://github.com/kilian-ai/traits.build/blob/main/LICENSE",
-  "codeRepository": "https://github.com/kilian-ai/traits.build",
+  "@type": "WebApplication",
+  "name": "slob.games",
+  "url": "https://slob.games/",
+  "applicationCategory": "GameApplication",
+  "operatingSystem": "WebAssembly",
+  "description": "AI-powered game canvas platform. Build, play, and share games in the browser — runs entirely in WASM, no server required.",
   "author": {
     "@type": "Person",
     "name": "Kilian"
@@ -96,40 +93,26 @@ a:hover{text-decoration:underline}
 
 <noscript>
   <div style="max-width:700px;margin:2rem auto;padding:0 1rem;font-family:system-ui,sans-serif;color:#e0e0e0;background:#0d1117">
-    <h1>traits.build</h1>
-    <p>Typed, composable functions compiled into a single Rust binary that serves itself as a web app. The same kernel runs in the browser via WASM — no server required.</p>
-    <h2>Features</h2>
-    <ul>
-      <li>CLI, REST API, and MCP server from one binary</li>
-      <li>WASM browser kernel — runs traits locally in the browser</li>
-      <li>3-tier dispatch: WASM → local helper → server REST</li>
-      <li>Type-safe signatures with runtime validation</li>
-      <li>Hot-reloadable cdylib plugins via C ABI</li>
-      <li>OpenAPI spec auto-generated from trait definitions</li>
-    </ul>
+    <h1>slob.games</h1>
+    <p>AI-powered game canvas platform. Build, play, and share games in the browser — runs entirely in WASM, no server required.</p>
     <h2>Pages</h2>
     <ul>
-      <li><a href="https://www.traits.build/#/docs">Documentation</a></li>
-      <li><a href="https://www.traits.build/#/docs/api">API Reference</a></li>
-      <li><a href="https://www.traits.build/#/playground">Playground</a></li>
-      <li><a href="https://www.traits.build/#/terminal">Terminal</a></li>
+      <li><a href="https://slob.games/#/canvas">Canvas</a></li>
+      <li><a href="https://slob.games/#/playground">Playground</a></li>
     </ul>
-    <p><a href="https://github.com/kilian-ai/traits.build">View source on GitHub</a></p>
   </div>
 </noscript>
 
 <div id="boot-overlay">
   <div class="spinner"></div>
-  <p>Loading WASM kernel…</p>
+  <p>Loading…</p>
 </div>
 
 <nav id="shell-nav" style="display:none">
-  <div class="logo" data-href="/"><span>traits</span>.build</div>
+  <div class="logo" data-href="/"><span>slob</span>.games</div>
   <div class="links">
-    <a data-href="/" class="active">Home</a>
-    <a data-href="/docs">Docs</a>
-    <a data-href="/docs/api">API</a>
-    <a data-href="/canvas">Canvas</a>
+    <a data-href="/" class="active">Canvas</a>
+    <a data-href="/playground">Playground</a>
     <a data-href="/settings">Settings</a>
   </div>
   <div class="status">
@@ -156,18 +139,12 @@ a:hover{text-decoration:underline}
 
 // ── Route table (mostly mirrors serve.trait.toml bindings; /admin is SPA-specific) ──
 const ROUTES = {
-  '/':           'www.homepage',
-  '/about':      'www.traits.build',
-  '/docs':       'www.docs',
-  '/docs/api':   'www.docs.api',
-  '/chat-logs':  'www.chat_logs',
+  '/':           'www.canvas',
+  '/canvas':     'www.canvas',
+  '/playground': 'www.playground',
+  '/wasm':       'www.wasm',
   '/admin':      'www.admin.spa',
   '/settings':   'www.admin.spa',
-  '/seo':        'www.seo',
-  '/playground': 'www.playground',
-  '/canvas':     'www.canvas',
-  '/terminal':   'www.docs.api',
-  '/wasm':       'www.wasm',
 };
 
 const LOCAL_ROUTE_KEY = 'traits.shell.route';

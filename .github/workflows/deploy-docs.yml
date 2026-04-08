@@ -1,14 +1,8 @@
-name: Deploy Site
+name: Deploy to GitHub Pages
 
 on:
   push:
     branches: [main]
-    paths:
-      - 'traits/www/static/**'
-      - 'traits/www/local/**'
-      - 'traits/www/sdk/**'
-      - 'CNAME'
-      - '.github/workflows/deploy-docs.yml'
   workflow_dispatch:
 
 permissions:
@@ -26,26 +20,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Rust + wasm32 target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-wasm-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build WASM + generate standalone index.html
+        run: bash build.sh
+
       - name: Assemble site
         run: |
-          mkdir -p _site/local
-          # SPA files
-          cp traits/www/static/index.html _site/index.html
-          cp traits/www/static/index.standalone.html _site/standalone.html
-          cp traits/www/static/wasm-runtime.js _site/wasm-runtime.js
-          cp traits/www/static/terminal-runtime.js _site/terminal-runtime.js
-          # SDK
-          if [ -d traits/www/sdk ]; then
-            mkdir -p _site/sdk
-            cp traits/www/sdk/*.js _site/sdk/ 2>/dev/null || true
-          fi
-          # Install scripts
-          cp traits/www/local/helper/helper.sh _site/local/helper.sh
-          cp traits/www/local/helper/helper.sh _site/local/traits.sh
-          cp traits/www/local/install/install.sh _site/local/install.sh
-          # Custom domain
+          mkdir -p _site
+          cp index.html _site/index.html
           cp CNAME _site/CNAME
-          # 404 fallback to SPA
           cp _site/index.html _site/404.html
 
       - name: Upload artifact
@@ -58,6 +60,12 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
     needs: build
     steps:
       - name: Deploy to GitHub Pages
