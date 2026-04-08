@@ -1,0 +1,22 @@
+[trait]
+description = "Get or set persistent voice chat preferences (voice, model, agent) — changes apply immediately and become defaults"
+version = "v260331"
+checksum = "b61a18fb25d4f6caff13ab83895a757737dc7b6292eab5b545212272ac85b050"
+author = "system"
+tags = ["sys", "voice", "config", "preferences"]
+
+[signature]
+params = [
+  { name = "action", type = "string", description = "get | set", required = true, example = "set" },
+  { name = "key", type = "string", description = "Preference key: voice, model, or agent", required = true, example = "voice" },
+  { name = "value", type = "string", description = "New value (required for set)", required = false, example = "shimmer" },
+]
+
+[signature.returns]
+type = "map"
+description = "{ok: bool, key, value, previous?}"
+
+[implementation]
+language = "rust"
+source = "builtin"
+entry = "voice_config"

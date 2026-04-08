@@ -1,0 +1,65 @@
+name: Deploy Site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'traits/www/static/**'
+      - 'traits/www/local/**'
+      - 'traits/www/sdk/**'
+      - 'CNAME'
+      - '.github/workflows/deploy-docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble site
+        run: |
+          mkdir -p _site/local
+          # SPA files
+          cp traits/www/static/index.html _site/index.html
+          cp traits/www/static/index.standalone.html _site/standalone.html
+          cp traits/www/static/wasm-runtime.js _site/wasm-runtime.js
+          cp traits/www/static/terminal-runtime.js _site/terminal-runtime.js
+          # SDK
+          if [ -d traits/www/sdk ]; then
+            mkdir -p _site/sdk
+            cp traits/www/sdk/*.js _site/sdk/ 2>/dev/null || true
+          fi
+          # Install scripts
+          cp traits/www/local/helper/helper.sh _site/local/helper.sh
+          cp traits/www/local/helper/helper.sh _site/local/traits.sh
+          cp traits/www/local/install/install.sh _site/local/install.sh
+          # Custom domain
+          cp CNAME _site/CNAME
+          # 404 fallback to SPA
+          cp _site/index.html _site/404.html
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

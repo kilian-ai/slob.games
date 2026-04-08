@@ -1,0 +1,52 @@
+[trait]
+description = "Make outbound HTTP/REST API calls. Supports JSON APIs with Bearer auth via secrets store."
+version = "v260328"
+checksum = "a1633022898abc41f17602884471c60f16f33108c8b631e7a7f6c19d89ee1d32"
+epoch = 0
+author = "system"
+tags = ["system", "http", "rest", "api", "call"]
+
+[[signature.params]]
+name = "url"
+type = "string"
+description = "Full URL to call (e.g. https://api.openai.com/v1/chat/completions)"
+required = true
+example = "https://httpbin.org/post"
+
+[[signature.params]]
+name = "body"
+type = "any"
+description = "Request body — object/string sent as JSON"
+required = false
+example = "hello"
+
+[[signature.params]]
+name = "auth_secret"
+type = "string"
+description = "Secret ID for Bearer token auth (looked up in secrets store, falls back to env var with same name uppercased)"
+required = false
+example = "OPENAI_API_KEY"
+
+[[signature.params]]
+name = "method"
+type = "string"
+description = "HTTP method: GET, POST, PUT, PATCH, DELETE (default: POST if body given, GET otherwise)"
+required = false
+example = "POST"
+
+[[signature.params]]
+name = "headers"
+type = "any"
+description = "Additional headers as {key: value} object"
+required = false
+example = "X-Custom: value"
+
+[signature.returns]
+type = "any"
+description = "{ ok, status, body } — body is parsed JSON if Content-Type is application/json, otherwise raw string"
+
+[implementation]
+language = "rust"
+source = "builtin"
+entry = "call"
+wasm = true

@@ -1,0 +1,18 @@
+[trait]
+description = "LLM Chat UI — simple prompt interface for OpenAI"
+version = "v260326"
+checksum = "042211c99b77399cdeac66338dd88dceded2d4d1bda2a01634ea06f317d4d66c"
+author = "system"
+tags = ["www", "llm", "openai", "chat"]
+provides = ["www/webpage"]
+
+[signature]
+
+[signature.returns]
+type = "string"
+description = "HTML chat interface"
+
+[implementation]
+language = "rust"
+source = "builtin"
+entry = "openai"

@@ -1,0 +1,48 @@
+{
+  "module": "traits/llm/agent/agent.rs",
+  "description": "WASM-compatible LLM agent loop with compaction, usage tracking, and buddy mode",
+  "features": [
+    {
+      "name": "Agent prompt validation",
+      "description": "Returns structured error when prompt is missing",
+      "examples": [
+        {
+          "input": [],
+          "output": {
+            "contains": [{"ok": false}, "prompt is required"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Agent full mode (requires API key)",
+      "description": "Runs multi-step agent loop with tool calling",
+      "tests": [
+        {
+          "name": "agent returns JSON with ok field",
+          "type": "command",
+          "command": "./target/release/traits call llm.agent 'Say hello' '' 'sys.list' 2>/dev/null",
+          "checks": [
+            { "type": "exit_code", "expected": 0 },
+            { "type": "contains", "expected": "\"ok\"" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Agent turn mode (requires API key)",
+      "description": "Single-turn agent execution returning session for continuation",
+      "tests": [
+        {
+          "name": "turn mode returns JSON with ok field",
+          "type": "command",
+          "command": "./target/release/traits call llm.agent 'List traits' '' 'sys.list' '' null '' 'turn' 2>/dev/null",
+          "checks": [
+            { "type": "exit_code", "expected": 0 },
+            { "type": "contains", "expected": "\"ok\"" }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+[trait]
+description = "CLI bootstrap, trait dispatch, stdin injection, arg parsing, result formatting"
+version = "v260330.235250"
+epoch = 0
+checksum = "30d2bbf2890fc9ed6731d97d49baa364badcb6c9b4996916503e02965af56c20"
+author = "kilian-ai"
+tags = ["system", "cli"]
+provides = ["sys/cli"]
+
+[requires]
+config = "kernel/config"
+call = "kernel/call"
+serve = "sys/serve"
+native = "cli/backend"
+wasm = "cli/backend"
+
+[bindings]
+config = "kernel.config"
+call = "kernel.call"
+serve = "sys.serve"
+native = "sys.cli.native"
+wasm = "sys.cli.wasm"
+
+[signature]
+params = []
+
+[signature.returns]
+type = "object"
+description = "CLI capabilities: features, dispatch flow, formatter status"
+
+[implementation]
+language = "rust"
+source = "builtin"
+entry = "cli"

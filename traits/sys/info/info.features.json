@@ -1,0 +1,83 @@
+{
+  "module": "traits/sys/info/info.rs",
+  "description": "System status overview or detailed trait info with dispatch location",
+  "features": [
+    {
+      "name": "System status",
+      "description": "No args returns system overview with version, uptime, relay, and trait count",
+      "tests": [
+        {
+          "name": "info no args returns system status",
+          "type": "command",
+          "command": "./target/release/traits call sys.info 2>/dev/null",
+          "checks": [
+            { "type": "exit_code", "expected": 0 },
+            { "type": "contains", "expected": "system" },
+            { "type": "contains", "expected": "server" },
+            { "type": "contains", "expected": "traits" },
+            { "type": "contains", "expected": "relay" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Trait info with dispatch",
+      "description": "Passing a trait path returns full metadata plus dispatch location",
+      "tests": [
+        {
+          "name": "info sys.version returns trait details with dispatch",
+          "type": "command",
+          "command": "./target/release/traits call sys.info sys.version 2>/dev/null",
+          "checks": [
+            { "type": "exit_code", "expected": 0 },
+            { "type": "contains", "expected": "sys.version" },
+            { "type": "contains", "expected": "dispatch" },
+            { "type": "contains", "expected": "source_type" },
+            { "type": "contains", "expected": "location" }
+          ]
+        },
+        {
+          "name": "info sys.checksum shows dylib dispatch",
+          "type": "command",
+          "command": "./target/release/traits call sys.info sys.checksum 2>/dev/null",
+          "checks": [
+            { "type": "exit_code", "expected": 0 },
+            { "type": "contains", "expected": "dispatch" },
+            { "type": "contains", "expected": "dylib" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Namespace listing",
+      "description": "Passing a namespace returns list of traits in that namespace",
+      "tests": [
+        {
+          "name": "info sys returns namespace listing",
+          "type": "command",
+          "command": "./target/release/traits call sys.info sys 2>/dev/null",
+          "checks": [
+            { "type": "exit_code", "expected": 0 },
+            { "type": "contains", "expected": "sys." }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Not found error",
+      "description": "Returns error for nonexistent trait/namespace",
+      "tests": [
+        {
+          "name": "info nonexistent returns error",
+          "type": "command",
+          "command": "./target/release/traits call sys.info nonexistent 2>/dev/null",
+          "checks": [
+            { "type": "exit_code", "expected": 0 },
+            { "type": "contains", "expected": "error" },
+            { "type": "contains", "expected": "not found" }
+          ]
+        }
+      ]
+    }
+  ]
+}

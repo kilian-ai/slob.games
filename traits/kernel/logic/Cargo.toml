@@ -1,0 +1,18 @@
+[package]
+name = "kernel-logic"
+version = "0.260408.163049"
+edition = "2021"
+description = "Shared pure-logic kernel: types, registry data model, TOML parsing"
+authors = ["kilian"]
+license = "MIT"
+repository = "https://github.com/kilian-ai/traits.build"
+homepage = "https://traits.build/"
+publish = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"

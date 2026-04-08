@@ -1,0 +1,20 @@
+[trait]
+description = "Set Spotify volume (0-100)"
+version = "v260402"
+checksum = "6c1cd5d02f5e1448ee1467c8f3e39b805882c041989789ae1ed3d3e3b5308756"
+author = "system"
+tags = ["skills", "spotify", "music"]
+
+[signature]
+params = [
+  { name = "level", type = "int", description = "Volume level 0–100", required = true },
+]
+
+[signature.returns]
+type = "map"
+description = "Result with ok status"
+
+[implementation]
+language = "rust"
+source = "builtin"
+entry = "vol"

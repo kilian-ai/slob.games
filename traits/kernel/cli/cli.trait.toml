@@ -1,0 +1,31 @@
+[trait]
+description = "Portable CLI command processor — shared between WASM and native targets"
+version = "v260401"
+checksum = "67a30b74c4e1a5a90d57b69e26cec422d01a0f70fda3cc1f420ed20684fce887"
+author = "system"
+tags = ["kernel", "cli"]
+provides = ["kernel/cli"]
+
+[requires]
+native = "cli/backend"
+wasm = "cli/backend"
+
+[bindings]
+native = "sys.cli.native"
+wasm = "sys.cli.wasm"
+
+[signature]
+params = [
+    { name = "line", type = "string", description = "Command line to execute", required = true },
+]
+
+[signature.returns]
+type = "string"
+description = "ANSI-formatted output text"
+
+[implementation]
+language = "rust"
+source = "builtin"
+entry = "cli_dispatch"
+wasm = true
+wasm_callable = false

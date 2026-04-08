@@ -1,0 +1,49 @@
+{
+  "trait": "sys.mcp",
+  "description": "MCP stdio server — JSON-RPC 2.0 over stdin/stdout",
+  "features": [
+    {
+      "name": "MCP initialize handshake",
+      "description": "Responds to initialize request with server info and capabilities",
+      "tests": [
+        {
+          "name": "initialize returns protocol version and server info",
+          "type": "command",
+          "command": "echo '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0\"}}}' | ./target/release/traits mcp 2>/dev/null | head -1",
+          "checks": [
+            { "type": "contains", "expected": "protocolVersion" },
+            { "type": "contains", "expected": "serverInfo" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "MCP tools/list",
+      "description": "Lists all registered traits as MCP tools with JSON Schema input schemas",
+      "tests": [
+        {
+          "name": "tools/list returns tool definitions",
+          "type": "command",
+          "command": "printf '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0\"}}}\\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\\n' | ./target/release/traits mcp 2>/dev/null | tail -1",
+          "checks": [
+            { "type": "contains", "expected": "tools" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "MCP tools/call",
+      "description": "Calls a trait by tool name and returns the result",
+      "tests": [
+        {
+          "name": "tools/call invokes sys_version",
+          "type": "command",
+          "command": "printf '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0\"}}}\\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\\n{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"sys_version\",\"arguments\":{}}}\\n' | ./target/release/traits mcp 2>/dev/null | tail -1",
+          "checks": [
+            { "type": "contains", "expected": "content" }
+          ]
+        }
+      ]
+    }
+  ]
+}

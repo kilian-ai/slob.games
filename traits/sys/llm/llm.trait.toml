@@ -1,0 +1,52 @@
+[trait]
+description = "Unified LLM inference — routes to OpenAI API or a local model server (wgml, ollama, llama.cpp)"
+version = "v260326"
+checksum = "f015b96d726c055793af87ca4cc70fe096165b43890c2a71ed4feabebcf694ac"
+epoch = 0
+author = "system"
+tags = ["system", "llm", "inference", "openai", "wgml"]
+
+[[signature.params]]
+name = "prompt"
+type = "string"
+description = "User message / prompt text"
+required = true
+example = "Explain traits.build in one sentence"
+
+[[signature.params]]
+name = "provider"
+type = "string"
+description = "Backend: 'openai' (default) or 'local'"
+required = false
+example = "openai"
+
+[[signature.params]]
+name = "model"
+type = "string"
+description = "Model name (default: gpt-4.1-nano for openai, or model loaded on local server)"
+required = false
+example = "gpt-4.1-nano"
+
+[[signature.params]]
+name = "context"
+type = "string"
+description = "System message / context to prepend (e.g. contents of reference .md files)"
+required = false
+example = "You are a helpful assistant."
+
+[[signature.params]]
+name = "local_url"
+type = "string"
+description = "Local inference server base URL (default: http://127.0.0.1:8080)"
+required = false
+example = "http://127.0.0.1:8080"
+
+[signature.returns]
+type = "object"
+description = "{ ok, provider, model, content, usage? }"
+
+[implementation]
+language = "rust"
+source = "builtin"
+entry = "llm"
+wasm = true

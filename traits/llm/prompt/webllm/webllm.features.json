@@ -1,0 +1,17 @@
+{
+  "trait": "llm.prompt.webllm",
+  "features": [
+    {
+      "name": "Browser-only WebLLM inference",
+      "description": "In-browser LLM using WebGPU via WebLLM. On native, returns an error directing users to browser.",
+      "examples": [
+        {
+          "input": ["What is 2+2?"],
+          "output": {
+            "contains": ["only available in the browser"]
+          }
+        }
+      ]
+    }
+  ]
+}

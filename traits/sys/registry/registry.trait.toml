@@ -1,0 +1,30 @@
+[trait]
+description = "Registry read API — list, info, query, search, and inspect registered traits"
+version = "v260326"
+epoch = 0
+checksum = "55fbd3f9f4052b83516b92f129a85ab291c8b470f9d7c3746ca39f920df78181"
+author = "system"
+tags = ["system", "meta", "registry"]
+provides = ["sys/registry"]
+
+[requires]
+globals = "kernel/globals"
+
+[bindings]
+globals = "kernel.globals"
+
+[signature]
+params = [
+  { name = "action", type = "string", description = "Action: list|info|tree|namespaces|count|get|search|namespace", optional = true, example = "info" },
+  { name = "arg", type = "string", description = "Argument for info/get/search/namespace/list actions", optional = true, example = "sys.checksum" }
+]
+
+[signature.returns]
+type = "any"
+description = "Registry data (tree, namespace list, count, trait entry, or search results)"
+
+[implementation]
+language = "rust"
+source = "builtin"
+entry = "registry"
+wasm = true

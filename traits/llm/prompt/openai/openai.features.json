@@ -1,0 +1,88 @@
+{
+  "trait": "llm.prompt.openai",
+  "features": [
+    {
+      "name": "Chat completion with prompt",
+      "description": "Send a prompt to OpenAI and get a response",
+      "tests": [
+        {
+          "name": "returns string response",
+          "type": "rest",
+          "method": "POST",
+          "path": "/traits/llm/prompt/openai",
+          "body": { "args": ["Respond with exactly the word: hello"] },
+          "expect": {
+            "status": 200,
+            "json_path": "$.result",
+            "contains": "hello"
+          },
+          "requires_secret": "openai_api_key"
+        }
+      ],
+      "examples": [
+        {
+          "input": ["Respond with exactly the word: hello", "gpt-4o-mini"],
+          "output": {
+            "contains": ["hello"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Chat completion with custom model",
+      "description": "Send a prompt specifying a model explicitly",
+      "tests": [
+        {
+          "name": "custom model returns response",
+          "type": "rest",
+          "method": "POST",
+          "path": "/traits/llm/prompt/openai",
+          "body": { "args": ["Respond with exactly the word: world", "gpt-4o-mini"] },
+          "expect": {
+            "status": 200,
+            "json_path": "$.result",
+            "contains": "world"
+          },
+          "requires_secret": "openai_api_key"
+        }
+      ],
+      "examples": [
+        {
+          "input": ["Respond with exactly the word: world", "gpt-4o-mini"],
+          "output": {
+            "contains": ["world"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Missing prompt returns error",
+      "description": "Calling without a prompt should fail with arg count error",
+      "tests": [
+        {
+          "name": "error on missing prompt",
+          "type": "rest",
+          "method": "POST",
+          "path": "/traits/llm/prompt/openai",
+          "body": { "args": [] },
+          "expect": {
+            "status": 400
+          }
+        }
+      ]
+    },
+    {
+      "name": "Context file injection",
+      "description": "Pass context files as a system message prepended to the prompt",
+      "tests": [],
+      "examples": [
+        {
+          "input": ["Summarize the context", "gpt-4o-mini", "README.md,docs/*.md"],
+          "output": {
+            "type": "string"
+          }
+        }
+      ]
+    }
+  ]
+}

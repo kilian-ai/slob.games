@@ -1,0 +1,32 @@
+[trait]
+description = "Default REST-backed provider for llm.prompt.openai"
+version = "v260325"
+author = "system"
+tags = ["llm", "openai", "rest", "provider"]
+provides = ["llm/openai", "llm/prompt"]
+priority = 100
+
+[trait.http]
+method = "POST"
+url = "https://api.openai.com/v1/chat/completions"
+auth_secret = "openai_api_key"
+body = '{"model": "{{model}}", "messages": [{"role": "user", "content": "{{prompt}}"}]}'
+response_path = "body.choices.0.message.content"
+
+[trait.http.defaults]
+model = "gpt-4o-mini"
+
+[signature]
+params = [
+  { name = "prompt", type = "string", description = "User message to send to the model", required = true },
+  { name = "model", type = "string", description = "OpenAI model", optional = true },
+]
+
+[signature.returns]
+type = "string"
+description = "Assistant response text"
+
+[implementation]
+language = "rust"
+source = "rest"
+entry = "rest"

@@ -1,0 +1,29 @@
+[trait]
+description = "Show trait system version, or generate YYMMDD version strings"
+version = "v260408.163049"
+epoch = 0
+checksum = "fb5a6a666fed77c63cb31b07a530c7bd65a246db746ce81e19dce2c8054da19d"
+author = "system"
+tags = ["system", "versioning"]
+provides = ["sys/version"]
+
+[signature]
+params = [
+  { name = "action", type = "string", description = "Action: date|hhmmss", optional = true, example = "date" }
+]
+
+[signature.returns]
+type = "object"
+description = "Generated version metadata"
+
+[requires]
+globals = "kernel/globals"
+
+[bindings]
+globals = "kernel.globals"
+
+[implementation]
+language = "rust"
+source = "builtin"
+entry = "version"
+wasm = true

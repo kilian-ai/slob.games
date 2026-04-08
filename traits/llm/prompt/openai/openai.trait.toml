@@ -1,0 +1,23 @@
+[trait]
+description = "OpenAI-compatible prompt→response inference (implements llm/prompt)"
+version = "v260328"
+checksum = "88c74fabc3341e99639a548dc0e0cc898b1db909f5a9af1ec09cb9f8acf11a15"
+author = "system"
+tags = ["llm", "openai", "prompt", "ai"]
+provides = ["llm/prompt"]
+
+[signature]
+params = [
+  { name = "prompt", type = "string", description = "User message to send to the model", required = true },
+  { name = "model", type = "string", description = "OpenAI model (default: gpt-4o-mini)", required = false, default = "gpt-4o-mini" },
+  { name = "context", type = "string", description = "Comma-separated file paths or globs to include as context (e.g. 'agent.md,docs/*.md')", required = false },
+]
+
+[signature.returns]
+type = "string"
+description = "Assistant response text"
+
+[implementation]
+language = "rust"
+source = "builtin"
+entry = "openai"

@@ -1,0 +1,76 @@
+{
+  "features": [
+    {
+      "name": "set canvas content",
+      "examples": [
+        {
+          "input": { "args": ["set", "<h1>Hello</h1>"] },
+          "output": { "contains": "\"ok\":true" }
+        }
+      ]
+    },
+    {
+      "name": "get canvas content",
+      "examples": [
+        {
+          "input": { "args": ["get"] },
+          "output": { "contains": "\"ok\":true" }
+        }
+      ]
+    },
+    {
+      "name": "clear canvas",
+      "examples": [
+        {
+          "input": { "args": ["clear"] },
+          "output": { "contains": "\"ok\":true" }
+        }
+      ]
+    },
+    {
+      "name": "get canvas VFS path",
+      "examples": [
+        {
+          "input": { "args": ["path"] },
+          "output": { "contains": "\"vfs_path\":\"canvas/app.html\"" }
+        }
+      ]
+    },
+    {
+      "name": "save project to VFS",
+      "examples": [
+        {
+          "input": { "args": ["save", "test-project"] },
+          "output": { "contains": "\"action\":\"save\"" }
+        }
+      ]
+    },
+    {
+      "name": "list projects from VFS",
+      "examples": [
+        {
+          "input": { "args": ["projects"] },
+          "output": { "contains": "\"projects\":" }
+        }
+      ]
+    },
+    {
+      "name": "load project from VFS",
+      "examples": [
+        {
+          "input": { "args": ["load", "nonexistent"] },
+          "output": { "contains": "\"error\":" }
+        }
+      ]
+    },
+    {
+      "name": "delete project from VFS",
+      "examples": [
+        {
+          "input": { "args": ["delete_project", "test-project"] },
+          "output": { "contains": "\"ok\":true" }
+        }
+      ]
+    }
+  ]
+}

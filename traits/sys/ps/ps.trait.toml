@@ -1,0 +1,21 @@
+[trait]
+description = "List running background tasks via the platform abstraction layer"
+version = "v260328"
+epoch = 0
+checksum = "5296ee9639be566efe2c18268e36d1814bce1a8599dbd51f021d4345cf5d6c9a"
+author = "system"
+tags = ["system", "process", "background"]
+provides = ["sys/ps"]
+
+[signature]
+params = []
+
+[signature.returns]
+type = "object"
+description = "{ ok, processes: [...] } on native; { ok, runtime, wasm: {...} } on WASM"
+
+[implementation]
+language = "rust"
+source = "builtin"
+entry = "ps"
+wasm = true

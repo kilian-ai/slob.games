@@ -1,0 +1,23 @@
+[trait]
+description = "Text-to-speech synthesis using OpenAI TTS API"
+version = "v260329.214606"
+checksum = "5e220cbc7f3b9b01bfc7a6e238386a5a5fb27acdba309e0535d50170fd2c68ab"
+author = "system"
+tags = ["llm", "voice", "tts", "speech", "audio"]
+
+[signature]
+params = [
+  { name = "text", type = "string", description = "Text to synthesize into speech", required = true },
+  { name = "voice", type = "string", description = "Voice: alloy, echo, fable, onyx, nova, shimmer (default: nova)", required = false, default = "nova" },
+  { name = "model", type = "string", description = "TTS model: tts-1, tts-1-hd (default: tts-1)", required = false, default = "tts-1" },
+  { name = "play", type = "bool", description = "Play audio immediately after synthesis (default: true)", required = false, default = "true" },
+]
+
+[signature.returns]
+type = "map"
+description = "{ok: bool, file?: string, error?: string}"
+
+[implementation]
+language = "rust"
+source = "builtin"
+entry = "speak"
