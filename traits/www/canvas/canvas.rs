@@ -597,10 +597,11 @@ pub fn canvas(_args: &[Value]) -> Value {
                             }
                         });
 
-                        // Don't auto-render stale content from previous sessions.
-                        // Initialise __lastContent so the poller ignores pre-existing storage
-                        // and only fires on NEW writes from the agent.
+                        // Auto-render saved content on page load (from VFS in localStorage)
                         let __lastContent = readCanvasFromStorage();
+                        if (__lastContent) {
+                            renderCanvas(__lastContent);
+                        }
 
                         // Poll localStorage for agent writes (1 s — backup for missed events)
                         const _pollId = setInterval(() => {
