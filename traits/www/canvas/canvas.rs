@@ -898,7 +898,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                         const smTitleEl    = document.getElementById('smTitle');
                         const smBodyEl     = document.getElementById('smBody');
                         const smCloseBtn   = document.getElementById('smClose');
-                        const RELAY        = 'https://relay.slob.games';
+                        const RELAY        = 'https://relay.traits.build';
                         let _smAbort = false;
 
                         smCloseBtn.addEventListener('click', (e) => { e.stopPropagation(); smHide(); });

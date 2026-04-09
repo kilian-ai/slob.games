@@ -3286,7 +3286,7 @@ export class Traits {
     /**
      * Connect to a remote relay. Stores code + server in localStorage.
      * @param {string} code - 4-char pairing code from Mac helper
-     * @param {string} [server] - Relay server URL (defaults to relay.slob.games)
+     * @param {string} [server] - Relay server URL (defaults to relay.traits.build)
      * @returns {Promise<{ok: boolean, active?: boolean, error?: string}>}
      */
     async connectRelay(code, server) {
