@@ -2088,6 +2088,8 @@ class Traits {
             });
 
             // Handle incoming events (same JSON format as WebSocket messages)
+            let _voicePendingToolCalls = []; // Queue tool calls until response.done
+            const _self = this; // capture for closures
             _voiceDc.addEventListener('message', async (event) => {
                 try {
                     const msg = JSON.parse(event.data);
@@ -2114,6 +2116,20 @@ class Traits {
                     } else if (type === 'response.created' || type === 'response.done') {
                         const usage = msg.response?.usage;
                         console.log('[Voice] [DEBUG]', type, usage ? '| tokens: in=' + (usage.input_tokens || 0) + ' out=' + (usage.output_tokens || 0) : '');
+                        // On response.done: flush queued tool calls now that items are committed
+                        if (type === 'response.done' && _voicePendingToolCalls.length > 0) {
+                            const pending = _voicePendingToolCalls.splice(0);
+                            console.log('[Voice] [DEBUG] Flushing', pending.length, 'queued tool calls');
+                            let needsResponse = false;
+                            for (const tc of pending) {
+                                const wants = await tc.execute();
+                                if (wants !== false) needsResponse = true;
+                            }
+                            // Send one response.create if any handler needs the model to respond
+                            if (needsResponse && _voiceDc && _voiceDc.readyState === 'open') {
+                                _voiceDc.send(JSON.stringify({ type: 'response.create' }));
+                            }
+                        }
                     } else if (!type?.startsWith('response.audio') && !type?.startsWith('input_audio_buffer') && type !== 'response.text.delta' && type !== 'response.audio_transcript.delta') {
                         // Log all non-audio-streaming events
                         console.log('[Voice] [DEBUG] Event:', type);
@@ -2136,14 +2152,26 @@ class Traits {
                         }
                     }
 
-                    // ── Function call — model wants to invoke a trait tool ──
+                    // ── Function call — queue until response.done so items are committed ──
                     else if (type === 'response.function_call_arguments.done') {
                         const callId = msg.call_id || '';
                         const funcName = msg.name || '';
                         const argsStr = msg.arguments || '{}';
-                        try { console.log('[Voice] ⚡ Tool call:', funcName, JSON.parse(argsStr)); } catch(_) { console.log('[Voice] ⚡ Tool call:', funcName, argsStr); }
+                        try { console.log('[Voice] ⚡ Tool call queued:', funcName, JSON.parse(argsStr)); } catch(_) { console.log('[Voice] ⚡ Tool call queued:', funcName, argsStr); }
                         if (opts.onToolCall) opts.onToolCall(funcName, argsStr);
                         _dispatchVoiceEvent('tool_call', { name: funcName, arguments: argsStr });
+
+                        // Queue the handler — will be executed on response.done
+                        _voicePendingToolCalls.push({ funcName, callId, argsStr, execute: async () => {
+                        console.log('[Voice] ▶ Executing queued tool:', funcName);
+                        // _sendOutput: send function_call_output (no response.create — caller handles that)
+                        const _sendOutput = (output) => {
+                            if (_voiceDc && _voiceDc.readyState === 'open') {
+                                const out = typeof output === 'string' ? output : JSON.stringify(output);
+                                const truncated = out.length > 4000 ? out.slice(0, 4000) + '…(truncated)' : out;
+                                _voiceDc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: truncated } }));
+                            }
+                        };
 
                         // Handle synthetic canvas tool — route to shared _runCanvasAgent
                         if (funcName === 'canvas') {
@@ -2151,16 +2179,14 @@ class Traits {
                             try { request = JSON.parse(argsStr).request || argsStr; } catch(e) { request = argsStr; }
                             console.log('[Voice/Canvas] ▶ Canvas tool triggered, launching agent for request:', request);
 
-                            // Immediately resolve the tool call so the model speaks now
-                            // rather than waiting silently for the full agent to finish
+                            // Send function_call_output + response.create so model speaks while agent builds
+                            _sendOutput('{"status":"building","message":"Working on it now, give me a moment!"}');
                             if (_voiceDc && _voiceDc.readyState === 'open') {
-                                _voiceDc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: '{"status":"building","message":"Working on it now, give me a moment!"}' } }));
                                 _voiceDc.send(JSON.stringify({ type: 'response.create' }));
                             }
 
-                            _runCanvasAgent(this, request).then(truncated => {
+                            _runCanvasAgent(_self, request).then(truncated => {
                                 console.log('[Voice/Canvas] ✓ Agent finished, injecting completion message');
-                                // Inject a user message so the model knows the canvas is ready and speaks again
                                 if (_voiceDc && _voiceDc.readyState === 'open') {
                                     _voiceDc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Canvas update is ready.' }] } }));
                                     _voiceDc.send(JSON.stringify({ type: 'response.create' }));
@@ -2170,31 +2196,18 @@ class Traits {
                             }).catch(e => {
                                 console.error('[Voice/Canvas] ✗ _runCanvasAgent rejected:', e);
                             });
-                            return;
+                            return false; // manages own response.create
                         }
 
                         // Handle sys_voice_quit — stop the session
                         if (funcName === 'sys_voice_quit') {
-                            if (_voiceDc && _voiceDc.readyState === 'open') {
-                                _voiceDc.send(JSON.stringify({
-                                    type: 'conversation.item.create',
-                                    item: { type: 'function_call_output', call_id: callId, output: '{"ok":true,"action":"quit"}' }
-                                }));
-                            }
-                            this.stopVoice();
-                            return;
+                            _sendOutput('{"ok":true,"action":"quit"}');
+                            _self.stopVoice();
+                            return false; // no response needed
                         }
 
                         // ── Game DevTools handlers ──
                         if (funcName.startsWith('game_')) {
-                            const _sendDevToolsResult = (output) => {
-                                if (_voiceDc && _voiceDc.readyState === 'open') {
-                                    const truncated = typeof output === 'string' ? output : JSON.stringify(output);
-                                    const out = truncated.length > 4000 ? truncated.slice(0, 4000) + '…(truncated)' : truncated;
-                                    _voiceDc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: out } }));
-                                    _voiceDc.send(JSON.stringify({ type: 'response.create' }));
-                                }
-                            };
                             try {
                                 const iframe = document.getElementById('phone-viewport');
                                 const iDoc = iframe?.contentDocument;
@@ -2204,35 +2217,34 @@ class Traits {
                                     const cvs = iDoc?.querySelector('canvas');
                                     if (cvs) {
                                         const dataUrl = cvs.toDataURL('image/jpeg', 0.7);
-                                        // Return tool output first
+                                        _sendOutput(JSON.stringify({ ok: true, width: cvs.width, height: cvs.height, format: 'jpeg' }));
+                                        // Inject screenshot as user message for the model to see
                                         if (_voiceDc && _voiceDc.readyState === 'open') {
-                                            _voiceDc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: JSON.stringify({ ok: true, width: cvs.width, height: cvs.height, format: 'jpeg' }) } }));
-                                            // Inject screenshot as an image for the model to see
                                             _voiceDc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_image', image_url: dataUrl }] } }));
                                             _voiceDc.send(JSON.stringify({ type: 'response.create' }));
                                         }
                                         console.log('[Voice/DevTools] Screenshot captured:', cvs.width, 'x', cvs.height);
+                                        return false; // manages own response.create
                                     } else {
-                                        // No canvas — try to describe the page
                                         const bodyText = (iDoc?.body?.innerText || '').slice(0, 1000);
                                         const elemCount = iDoc?.body?.querySelectorAll('*').length || 0;
-                                        _sendDevToolsResult(JSON.stringify({ ok: true, type: 'html_page', elements: elemCount, visible_text: bodyText }));
+                                        _sendOutput(JSON.stringify({ ok: true, type: 'html_page', elements: elemCount, visible_text: bodyText }));
                                     }
                                 } else if (funcName === 'game_eval') {
                                     let code = '';
                                     try { code = JSON.parse(argsStr).code || ''; } catch(_) { code = argsStr; }
-                                    if (!iWin) { _sendDevToolsResult(JSON.stringify({ error: 'No game loaded' })); }
+                                    if (!iWin) { _sendOutput(JSON.stringify({ error: 'No game loaded' })); }
                                     else {
                                         const fn = new iWin.Function('return (' + code + ')');
                                         let result = fn();
                                         if (result instanceof Promise) result = await result;
                                         const serialized = JSON.stringify(result, null, 2) ?? 'undefined';
                                         console.log('[Voice/DevTools] Eval result:', serialized.slice(0, 200));
-                                        _sendDevToolsResult(JSON.stringify({ ok: true, result: serialized.length > 3000 ? serialized.slice(0, 3000) + '…' : serialized }));
+                                        _sendOutput(JSON.stringify({ ok: true, result: serialized.length > 3000 ? serialized.slice(0, 3000) + '…' : serialized }));
                                     }
                                 } else if (funcName === 'game_console') {
                                     const logs = window.__canvasGameLogs || [];
-                                    _sendDevToolsResult(JSON.stringify({ ok: true, count: logs.length, logs: logs.slice(-30) }));
+                                    _sendOutput(JSON.stringify({ ok: true, count: logs.length, logs: logs.slice(-30) }));
                                 } else if (funcName === 'game_click') {
                                     let x = 0, y = 0;
                                     try { const a = JSON.parse(argsStr); x = a.x || 0; y = a.y || 0; } catch(_) {}
@@ -2242,9 +2254,9 @@ class Traits {
                                         target.dispatchEvent(new MouseEvent('pointerup', { clientX: x, clientY: y, bubbles: true }));
                                         target.dispatchEvent(new MouseEvent('click', { clientX: x, clientY: y, bubbles: true }));
                                         console.log('[Voice/DevTools] Click at', x, y, '→', target.tagName);
-                                        _sendDevToolsResult(JSON.stringify({ ok: true, x, y, element: target.tagName.toLowerCase() }));
+                                        _sendOutput(JSON.stringify({ ok: true, x, y, element: target.tagName.toLowerCase() }));
                                     } else {
-                                        _sendDevToolsResult(JSON.stringify({ error: 'No element at coordinates' }));
+                                        _sendOutput(JSON.stringify({ error: 'No element at coordinates' }));
                                     }
                                 } else if (funcName === 'game_press_key') {
                                     let key = '';
@@ -2252,37 +2264,37 @@ class Traits {
                                     if (key === 'Space') key = ' ';
                                     const target = iDoc?.querySelector('canvas') || iDoc?.body;
                                     if (target) {
-                                        const opts = { key, code: 'Key' + key.toUpperCase(), bubbles: true, cancelable: true };
-                                        if (key.startsWith('Arrow')) opts.code = key;
-                                        if (key === ' ') { opts.code = 'Space'; opts.key = ' '; }
-                                        target.dispatchEvent(new KeyboardEvent('keydown', opts));
-                                        setTimeout(() => target.dispatchEvent(new KeyboardEvent('keyup', opts)), 80);
+                                        const kOpts = { key, code: 'Key' + key.toUpperCase(), bubbles: true, cancelable: true };
+                                        if (key.startsWith('Arrow')) kOpts.code = key;
+                                        if (key === ' ') { kOpts.code = 'Space'; kOpts.key = ' '; }
+                                        target.dispatchEvent(new KeyboardEvent('keydown', kOpts));
+                                        setTimeout(() => target.dispatchEvent(new KeyboardEvent('keyup', kOpts)), 80);
                                         console.log('[Voice/DevTools] Key press:', key);
-                                        _sendDevToolsResult(JSON.stringify({ ok: true, key }));
+                                        _sendOutput(JSON.stringify({ ok: true, key }));
                                     } else {
-                                        _sendDevToolsResult(JSON.stringify({ error: 'No game loaded' }));
+                                        _sendOutput(JSON.stringify({ error: 'No game loaded' }));
                                     }
                                 } else if (funcName === 'game_source') {
                                     const html = iDoc?.documentElement?.outerHTML || iframe?.srcdoc || '';
-                                    const truncated = html.length > 6000 ? html.slice(0, 6000) + '\n…(truncated, ' + html.length + ' chars total)' : html;
-                                    _sendDevToolsResult(JSON.stringify({ ok: true, length: html.length, source: truncated }));
+                                    const src = html.length > 6000 ? html.slice(0, 6000) + '\n…(truncated, ' + html.length + ' chars total)' : html;
+                                    _sendOutput(JSON.stringify({ ok: true, length: html.length, source: src }));
                                 } else if (funcName === 'game_restart') {
                                     if (iframe && iframe.srcdoc) {
                                         const src = iframe.srcdoc;
                                         iframe.srcdoc = '';
                                         setTimeout(() => { iframe.srcdoc = src; }, 50);
-                                        _sendDevToolsResult(JSON.stringify({ ok: true, action: 'restarted' }));
+                                        _sendOutput(JSON.stringify({ ok: true, action: 'restarted' }));
                                     } else {
-                                        _sendDevToolsResult(JSON.stringify({ error: 'No game loaded' }));
+                                        _sendOutput(JSON.stringify({ error: 'No game loaded' }));
                                     }
                                 } else {
-                                    _sendDevToolsResult(JSON.stringify({ error: 'Unknown game tool: ' + funcName }));
+                                    _sendOutput(JSON.stringify({ error: 'Unknown game tool: ' + funcName }));
                                 }
                             } catch(e) {
                                 console.error('[Voice/DevTools] Error:', funcName, e);
-                                _sendDevToolsResult(JSON.stringify({ error: e.message || String(e) }));
+                                _sendOutput(JSON.stringify({ error: e.message || String(e) }));
                             }
-                            return;
+                            return true; // flush sends response.create
                         }
 
                         // Dispatch tool call via SDK cascade (WASM → helper → REST)
@@ -2290,7 +2302,7 @@ class Traits {
                         let callArgs = [];
                         try {
                             const parsed = JSON.parse(argsStr);
-                            const traitInfo = await this.info(traitPath);
+                            const traitInfo = await _self.info(traitPath);
                             if (traitInfo && Array.isArray(traitInfo.params)) {
                                 callArgs = traitInfo.params.map(p => parsed[p.name] !== undefined ? parsed[p.name] : null);
                             } else {
@@ -2298,63 +2310,50 @@ class Traits {
                             }
                         } catch(e) { callArgs = []; }
 
-                        this.call(traitPath, callArgs).then(result => {
+                        try {
+                            const result = await _self.call(traitPath, callArgs);
                             const output = JSON.stringify(result.ok ? (result.result !== undefined ? result.result : result) : { error: result.error });
-                            const truncated = output.length > 2000 ? output.slice(0, 2000) + '…(truncated)' : output;
+                            const truncOut = output.length > 2000 ? output.slice(0, 2000) + '…(truncated)' : output;
                             console.log('[Voice] ✓ Result:', funcName, output.length > 400 ? output.slice(0, 400) + '…' : output);
-                            if (_voiceDc && _voiceDc.readyState === 'open') {
-                                _voiceDc.send(JSON.stringify({
-                                    type: 'conversation.item.create',
-                                    item: { type: 'function_call_output', call_id: callId, output: truncated }
-                                }));
-                                _voiceDc.send(JSON.stringify({ type: 'response.create' }));
-                            }
-                            if (opts.onToolResult) opts.onToolResult(funcName, truncated);
-                            _dispatchVoiceEvent('tool_result', { name: funcName, result: truncated });
+                            _sendOutput(truncOut);
+                            if (opts.onToolResult) opts.onToolResult(funcName, truncOut);
+                            _dispatchVoiceEvent('tool_result', { name: funcName, result: truncOut });
 
                             // After sys.canvas changes: fire live update event for canvas page
                             if (funcName === 'sys_canvas' && result.ok) {
                                 const r = result.result || result;
                                 if (r.action === 'set' || r.action === 'append' || r.action === 'clear') {
-                                    this.call('sys.canvas', ['get']).then(getRes => {
+                                    _self.call('sys.canvas', ['get']).then(getRes => {
                                         const content = getRes?.result?.content ?? getRes?.content ?? '';
-                                        this._lastCanvasContent = content; // keep snapshot fresh for llm_agent check
+                                        _self._lastCanvasContent = content;
                                         window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content } }));
                                     }).catch(() => {
                                         window.dispatchEvent(new CustomEvent('traits-canvas-update', {}));
                                     });
                                 }
-                                // Canvas project actions: fire event for project bridge
                                 if (r.canvas_project_action) {
                                     window.dispatchEvent(new CustomEvent('traits-canvas-project', { detail: r }));
                                 }
                             }
 
-                            // After llm.agent calls: agent may have modified canvas via sys.canvas set.
-                            // Only sync if canvas content actually changed — read-before-call snapshot used.
                             if (funcName === 'llm_agent' && result.ok) {
-                                // The sys_canvas after-hook covers direct sys.canvas calls; the 1-sec poller
-                                // in canvas.rs covers indirect writes via WASM pvfs. No unconditional read
-                                // here to avoid reloading the iframe every time the agent runs a tool.
-                                const _prevCanvas = this._lastCanvasContent ?? null;
-                                this.call('sys.canvas', ['get']).then(getRes => {
+                                const _prevCanvas = _self._lastCanvasContent ?? null;
+                                _self.call('sys.canvas', ['get']).then(getRes => {
                                     const content = getRes?.result?.content ?? getRes?.content ?? '';
                                     if (content && content !== _prevCanvas) {
-                                        this._lastCanvasContent = content;
+                                        _self._lastCanvasContent = content;
                                         window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content } }));
                                     }
                                 }).catch(() => {});
                             }
 
-                            // After sys.voice.instruct changes: persist to localStorage + live session.update
                             if (funcName === 'sys_voice_instruct' && result.ok) {
                                 const r = result.result || result;
                                 if (r.action === 'set' || r.action === 'append' || r.action === 'reset') {
-                                    this.call('sys.voice.instruct', ['get']).then(getRes => {
+                                    _self.call('sys.voice.instruct', ['get']).then(getRes => {
                                         const updated = getRes?.result?.instructions || getRes?.instructions || '';
                                         if (updated) {
                                             try { localStorage.setItem(LS_VOICE_INSTRUCTIONS, updated); } catch(_) {}
-                                            // Live-update the running voice session
                                             if (_voiceDc && _voiceDc.readyState === 'open') {
                                                 _voiceDc.send(JSON.stringify({
                                                     type: 'session.update',
@@ -2368,7 +2367,6 @@ class Traits {
                                 }
                             }
 
-                            // After sys.spa actions: fire event for SPA bridge to execute
                             if (funcName === 'sys_spa' && result.ok) {
                                 const r = result.result || result;
                                 if (r.spa_action) {
@@ -2376,7 +2374,6 @@ class Traits {
                                 }
                             }
 
-                            // After sys.voice.mode actions: fire event for voice mode bridge
                             if (funcName === 'sys_voice_mode' && result.ok) {
                                 const r = result.result || result;
                                 if (r.voice_mode_action) {
@@ -2384,22 +2381,17 @@ class Traits {
                                 }
                             }
 
-                            // After sys.audio actions: fire event for WebAudio bridge
                             if (funcName === 'sys_audio' && result.ok) {
                                 const r = result.result || result;
                                 if (r.audio_action) {
                                     window.dispatchEvent(new CustomEvent('traits-audio-action', { detail: r }));
                                 }
                             }
-                        }).catch(e => {
-                            if (_voiceDc && _voiceDc.readyState === 'open') {
-                                _voiceDc.send(JSON.stringify({
-                                    type: 'conversation.item.create',
-                                    item: { type: 'function_call_output', call_id: callId, output: JSON.stringify({ error: e.message }) }
-                                }));
-                                _voiceDc.send(JSON.stringify({ type: 'response.create' }));
-                            }
-                        });
+                        } catch(e) {
+                            _sendOutput(JSON.stringify({ error: e.message }));
+                        }
+                        return true; // flush sends response.create
+                        } }); // end of push({ execute })
                     }
 
                     // ── Error ──
