@@ -464,7 +464,49 @@ pub fn canvas(_args: &[Value]) -> Value {
                         let _currentContent = '';
 
                         // Click on the phone frame focuses the iframe for keyboard input
-                        phoneFrame.addEventListener('click', () => { phoneViewport.focus(); });
+                        phoneFrame.addEventListener('click', () => {
+                            try {
+                                const iDoc = phoneViewport.contentDocument;
+                                const target = iDoc && (iDoc.querySelector('canvas') || iDoc.body);
+                                if (target) { target.focus(); } else { phoneViewport.focus(); }
+                            } catch(_) { phoneViewport.focus(); }
+                        });
+
+                        // Forward arrow/game keys from parent into iframe content
+                        document.addEventListener('keydown', (e) => {
+                            if (!phoneFrame.classList.contains('visible')) return;
+                            const gameKeys = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '];
+                            if (gameKeys.includes(e.key)) {
+                                e.preventDefault();
+                                try {
+                                    const iDoc = phoneViewport.contentDocument;
+                                    if (iDoc) {
+                                        const target = iDoc.querySelector('canvas') || iDoc.activeElement || iDoc.body;
+                                        if (target) target.dispatchEvent(new KeyboardEvent('keydown', {
+                                            key: e.key, code: e.code, keyCode: e.keyCode,
+                                            which: e.which, bubbles: true, cancelable: true
+                                        }));
+                                    }
+                                } catch(_) {}
+                            }
+                        });
+                        document.addEventListener('keyup', (e) => {
+                            if (!phoneFrame.classList.contains('visible')) return;
+                            const gameKeys = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '];
+                            if (gameKeys.includes(e.key)) {
+                                e.preventDefault();
+                                try {
+                                    const iDoc = phoneViewport.contentDocument;
+                                    if (iDoc) {
+                                        const target = iDoc.querySelector('canvas') || iDoc.activeElement || iDoc.body;
+                                        if (target) target.dispatchEvent(new KeyboardEvent('keyup', {
+                                            key: e.key, code: e.code, keyCode: e.keyCode,
+                                            which: e.which, bubbles: true, cancelable: true
+                                        }));
+                                    }
+                                } catch(_) {}
+                            }
+                        });
 
                         const BRIDGE = `<script>(function(){
                             var sdk = function(){ return window.parent._traitsSDK; };
@@ -519,7 +561,12 @@ pub fn canvas(_args: &[Value]) -> Value {
                             // Focus iframe so keyboard events reach the game
                             phoneViewport.addEventListener('load', function _f() {
                                 phoneViewport.removeEventListener('load', _f);
-                                phoneViewport.focus();
+                                try {
+                                    const iDoc = phoneViewport.contentDocument;
+                                    const target = iDoc && (iDoc.querySelector('canvas') || iDoc.body);
+                                    if (target) { target.setAttribute('tabindex', '0'); target.focus(); }
+                                    else { phoneViewport.focus(); }
+                                } catch(_) { phoneViewport.focus(); }
                             });
                         }
 
@@ -581,13 +628,35 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                         // ── Auto-load on page init ──
                         // Migrate existing canvas/app.html to games.json if no games exist yet.
+                        // Also reconcile orphaned content (agent wrote canvas/app.html but games.json wasn't updated).
                         let __lastContent = '';
                         const _initCol = readGamesCollection();
                         const _initHasGames = Object.keys(_initCol.games || {}).length > 0;
-                        if (!_initHasGames) {
-                            const _existingHtml = readCanvasFromStorage();
-                            if (_existingHtml) {
-                                // Bootstrap: call sys.canvas set to create first game entry
+                        const _existingHtml = readCanvasFromStorage();
+                        if (!_initHasGames && _existingHtml) {
+                            // Bootstrap: call sys.canvas set to create first game entry
+                            __lastContent = _existingHtml;
+                            renderCanvas(_existingHtml);
+                            (async () => {
+                                let tries = 0;
+                                while (!window._traitsSDK && tries < 40) {
+                                    await new Promise(r => setTimeout(r, 250));
+                                    tries++;
+                                }
+                                const sdk = window._traitsSDK;
+                                if (sdk) {
+                                    await sdk.call('sys.canvas', ['set', _existingHtml]);
+                                    const _titleMatch = _existingHtml.match(/<title[^>]*>([^<]+)<\/title>/i);
+                                    const _gameName = _titleMatch ? _titleMatch[1].trim() : 'untitled';
+                                    await sdk.call('sys.canvas', ['rename', _gameName]);
+                                    renderProjectBar();
+                                }
+                            })();
+                        } else if (_initHasGames && _existingHtml) {
+                            // Check for orphaned content: canvas/app.html differs from active game
+                            const activeContent = _initCol.games[_initCol.active]?.content || '';
+                            if (_existingHtml.length > 100 && _existingHtml !== activeContent) {
+                                // Orphan detected — show it now, save as new game once SDK ready
                                 __lastContent = _existingHtml;
                                 renderCanvas(_existingHtml);
                                 (async () => {
@@ -598,14 +667,16 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     }
                                     const sdk = window._traitsSDK;
                                     if (sdk) {
-                                        await sdk.call('sys.canvas', ['set', _existingHtml]);
-                                        // Extract game name from <title> tag
                                         const _titleMatch = _existingHtml.match(/<title[^>]*>([^<]+)<\/title>/i);
                                         const _gameName = _titleMatch ? _titleMatch[1].trim() : 'untitled';
-                                        await sdk.call('sys.canvas', ['rename', _gameName]);
+                                        await sdk.call('sys.canvas', ['new', _gameName]);
+                                        await sdk.call('sys.canvas', ['set', _existingHtml]);
                                         renderProjectBar();
                                     }
                                 })();
+                            } else {
+                                __lastContent = activeContent || _existingHtml;
+                                if (__lastContent) renderCanvas(__lastContent);
                             }
                         } else {
                             __lastContent = getActiveGameContent();

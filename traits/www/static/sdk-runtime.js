@@ -287,8 +287,31 @@ async function _runCanvasAgent(sdk, request) {
             try { const pvfs = JSON.parse(localStorage.getItem('traits.pvfs') || '{}'); content = pvfs['canvas/app.html'] || ''; } catch(_) {}
         }
         if (content) {
-            // Sync to games.json via WASM sys.canvas set
-            try { await sdk.call('sys.canvas', ['set', content]); } catch(_) {}
+            // Sync to games.json via WASM sys.canvas set (detect new game by title)
+            try {
+                let needsNew = false;
+                try {
+                    const pvfs = JSON.parse(localStorage.getItem('traits.pvfs') || '{}');
+                    const gj = JSON.parse(pvfs['canvas/games.json'] || '{}');
+                    const activeContent = gj.games?.[gj.active]?.content || '';
+                    if (activeContent) {
+                        const oldTitle = (activeContent.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '';
+                        const newTitle = (content.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '';
+                        if (newTitle && oldTitle && newTitle.trim().toLowerCase() !== oldTitle.trim().toLowerCase()) {
+                            needsNew = true;
+                        }
+                    }
+                } catch(_) {}
+                if (needsNew) {
+                    const title = (content.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || 'untitled';
+                    await sdk.call('sys.canvas', ['new', title.trim()]);
+                }
+                await sdk.call('sys.canvas', ['set', content]);
+                if (!needsNew) {
+                    const title = (content.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '';
+                    if (title) await sdk.call('sys.canvas', ['rename', title.trim()]).catch(() => {});
+                }
+            } catch(_) {}
             window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content } }));
         }
         return JSON.stringify(r?.ok ? { ok: true, response: r.response || 'Done' } : { error: r?.error || 'agent failed' });
@@ -364,9 +387,35 @@ async function _runCanvasAgentBrowser(request, existing, apiKey) {
                         lastContent = args.content || '';
                         const isCanvas = args.path === 'canvas/app.html' || String(args.path).endsWith('/app.html');
                         if (isCanvas && lastContent) {
-                            // Sync to games.json via WASM sys.canvas set
                             const _sdk = window._traitsSDK;
-                            if (_sdk) _sdk.call('sys.canvas', ['set', lastContent]).catch(() => {});
+                            if (_sdk) {
+                                try {
+                                    // Detect new game: compare <title> of new content vs active game
+                                    let needsNew = false;
+                                    try {
+                                        const gj = JSON.parse(pvfs['canvas/games.json'] || '{}');
+                                        const activeContent = gj.games?.[gj.active]?.content || '';
+                                        if (activeContent) {
+                                            const oldTitle = (activeContent.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '';
+                                            const newTitle = (lastContent.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '';
+                                            if (newTitle && oldTitle && newTitle.trim().toLowerCase() !== oldTitle.trim().toLowerCase()) {
+                                                needsNew = true;
+                                            }
+                                        }
+                                    } catch(_) {}
+                                    if (needsNew) {
+                                        const title = (lastContent.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || 'untitled';
+                                        await _sdk.call('sys.canvas', ['new', title.trim()]);
+                                        console.log('[Canvas/Agent/Browser] New game created:', title.trim());
+                                    }
+                                    await _sdk.call('sys.canvas', ['set', lastContent]);
+                                    // Auto-name from <title> if untitled
+                                    if (!needsNew) {
+                                        const title = (lastContent.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '';
+                                        if (title) await _sdk.call('sys.canvas', ['rename', title.trim()]).catch(() => {});
+                                    }
+                                } catch(e) { console.warn('[Canvas/Agent/Browser] games.json sync error:', e); }
+                            }
                             console.log('[Canvas/Agent/Browser] Firing traits-canvas-update, len:', lastContent.length);
                             window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content: lastContent } }));
                         }
