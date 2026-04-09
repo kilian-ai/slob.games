@@ -311,7 +311,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                         }
                         button #fabVoice {
                             span .fab-icon { "🎤" }
-                            span { "Start Voice" }
+                            span #fabVoiceLabel { "Start Voice" }
                         }
                         button #fabSplats {
                             span .fab-icon { "🔮" }
@@ -800,12 +800,21 @@ pub fn canvas(_args: &[Value]) -> Value {
                             renderProjectBar();
                         });
 
-                        // Voice button
-                        document.getElementById('fabVoice').addEventListener('click', () => {
+                        // Voice button — toggles start/stop
+                        let _voiceActive = false;
+                        const fabVoiceBtn = document.getElementById('fabVoice');
+                        const fabVoiceLabel = document.getElementById('fabVoiceLabel');
+                        function updateVoiceBtn(active) {
+                            _voiceActive = active;
+                            fabVoiceLabel.textContent = active ? 'Stop Voice' : 'Start Voice';
+                            fabVoiceBtn.querySelector('.fab-icon').textContent = active ? '⏹' : '🎤';
+                        }
+                        fabVoiceBtn.addEventListener('click', () => {
                             fabMenu.classList.remove('show');
                             fabToggle.classList.remove('open');
-                            // Dispatch voice start via the global voice control bridge
-                            window.dispatchEvent(new CustomEvent('traits-voice-control', { detail: { voice_control_action: 'start' } }));
+                            const action = _voiceActive ? 'stop' : 'start';
+                            window.dispatchEvent(new CustomEvent('traits-voice-control', { detail: { voice_control_action: action } }));
+                            updateVoiceBtn(!_voiceActive);
                         });
                         // Splat viewer button
                         document.getElementById('fabSplats').addEventListener('click', async () => {
@@ -1132,15 +1141,17 @@ pub fn canvas(_args: &[Value]) -> Value {
                             document.addEventListener('mouseup', () => { drag = false; });
                         })();
 
-                        // Voice events → chat log
+                        // Voice events → chat log + sync button state
                         window.addEventListener('voice-event', (e) => {
                             const d = e.detail;
                             switch (d.type) {
                                 case 'started':
+                                    updateVoiceBtn(true);
                                     vcmAppend('system', '🎤 Voice session started');
                                     break;
                                 case 'stopped':
                                 case 'disconnected':
+                                    updateVoiceBtn(false);
                                     vcmAppend('system', '⏹ Voice session ended');
                                     break;
                                 case 'transcript':
