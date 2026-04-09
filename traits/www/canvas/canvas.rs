@@ -592,7 +592,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 renderCanvas(_existingHtml);
                                 (async () => {
                                     let tries = 0;
-                                    while (!window._traitsSDK?.wasmReady && tries < 40) {
+                                    while (!window._traitsSDK && tries < 40) {
                                         await new Promise(r => setTimeout(r, 250));
                                         tries++;
                                     }
@@ -617,7 +617,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                         (async () => {
                             try {
                                 let tries = 0;
-                                while (!window._traitsSDK?.wasmReady && tries < 40) {
+                                while (!window._traitsSDK && tries < 40) {
                                     await new Promise(r => setTimeout(r, 250));
                                     tries++;
                                 }
