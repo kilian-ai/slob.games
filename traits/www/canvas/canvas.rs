@@ -366,6 +366,10 @@ pub fn canvas(_args: &[Value]) -> Value {
                             audio: (action, ...a) => _sdk()?.call('sys.audio', [action, ...a]),
                         };
 
+                        // ── Built-in seed games ──────────────────────────────────────────────
+                        const SNAKE_GAME_HTML = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Snake</title><style>*{margin:0;padding:0;box-sizing:border-box}body{width:390px;height:844px;overflow:hidden;background:#0a0a0a;color:#e0e0e0;font-family:system-ui,sans-serif;user-select:none}#hdr{display:flex;align-items:center;justify-content:space-between;padding:18px 20px 10px}#hdr .title{font-size:22px;font-weight:700}.accent{color:#00ff88}#score{font-size:22px;font-weight:700;color:#00ff88}#hs{font-size:11px;color:#555;margin-top:2px}#cw{display:flex;justify-content:center;padding:0 20px}canvas{border-radius:8px;border:1px solid #1a1a1a}#ctrl{display:flex;flex-direction:column;align-items:center;gap:4px;padding:14px}#ctrl .row{display:flex;gap:4px}.btn{width:68px;height:52px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:12px;font-size:20px;display:flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:background .1s}.btn:active,.btn.pressed{background:rgba(0,255,136,.15);border-color:#00ff88}#overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(10,10,10,.92);text-align:center;z-index:20}#overlay.off{display:none}#overlay h2{font-size:30px;font-weight:700;margin-bottom:8px}#overlay p{color:#666;font-size:13px;margin-bottom:24px}#overlay button{background:rgba(0,255,136,.15);border:1px solid #00ff88;color:#00ff88;padding:12px 36px;border-radius:10px;font-size:15px;cursor:pointer;font-family:inherit}</style></head><body><div id="hdr"><div><div class="title"><span class="accent">Snake</span></div><div id="hs">best: 0</div></div><div id="score">0</div></div><div id="cw"><canvas id="c" width="350" height="560"></canvas></div><div id="ctrl"><div class="row"><div class="btn" id="bU">\u25b2</div></div><div class="row"><div class="btn" id="bL">\u25c4</div><div class="btn" style="visibility:hidden">\u25bc</div><div class="btn" id="bR">\u25ba</div></div><div class="row"><div class="btn" id="bD">\u25bc</div></div></div><div id="overlay"><h2 id="otitle">\uD83D\uDC0D Snake</h2><p id="otext">Tap buttons or use arrow keys</p><button id="obtn">Start</button></div><script>const cv=document.getElementById('c'),ctx=cv.getContext('2d'),C=25,R=40,CW=cv.width/C,CH=cv.height/R;let sn,dir,nd,fd,sc,hs=0,running=false,iv;const seEl=document.getElementById('score'),hsEl=document.getElementById('hs'),ov=document.getElementById('overlay'),ot=document.getElementById('otitle'),op=document.getElementById('otext'),ob=document.getElementById('obtn');function rn(n){return Math.floor(Math.random()*n)}function spawnFood(){let p;do{p={x:rn(C),y:rn(R)}}while(sn.some(s=>s.x===p.x&&s.y===p.y));fd=p}function init(){const mx=Math.floor(C/2),my=Math.floor(R/2);sn=[{x:mx,y:my},{x:mx-1,y:my},{x:mx-2,y:my}];dir={x:1,y:0};nd={x:1,y:0};sc=0;seEl.textContent=0;spawnFood()}function step(){dir=nd;const h={(x:(sn[0].x+dir.x+C)%C),(y:(sn[0].y+dir.y+R)%R)};if(sn.some(s=>s.x===h.x&&s.y===h.y)){over();return}sn.unshift(h);if(h.x===fd.x&&h.y===fd.y){sc++;seEl.textContent=sc;if(sc>hs){hs=sc;hsEl.textContent='best: '+hs}spawnFood()}else{sn.pop()}draw()}function draw(){ctx.fillStyle='#0a0a0a';ctx.fillRect(0,0,cv.width,cv.height);ctx.strokeStyle='#111';ctx.lineWidth=.5;for(let i=0;i<=C;i++){ctx.beginPath();ctx.moveTo(i*CW,0);ctx.lineTo(i*CW,cv.height);ctx.stroke()}for(let j=0;j<=R;j++){ctx.beginPath();ctx.moveTo(0,j*CH);ctx.lineTo(cv.width,j*CH);ctx.stroke()}ctx.shadowColor='#ff4444';ctx.shadowBlur=10;ctx.fillStyle='#ff4444';ctx.beginPath();ctx.arc(fd.x*CW+CW/2,fd.y*CH+CH/2,Math.min(CW,CH)*.38,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;sn.forEach((s,i)=>{const t=i/sn.length;ctx.fillStyle=i===0?'#00ff88':\`hsl(\${145-t*30},\${80-t*20}%,\${50-t*15}%)\`;const p=i===0?1:2;if(ctx.roundRect){ctx.beginPath();ctx.roundRect(s.x*CW+p,s.y*CH+p,CW-p*2,CH-p*2,i===0?4:3);ctx.fill()}else{ctx.fillRect(s.x*CW+p,s.y*CH+p,CW-p*2,CH-p*2)}})}function over(){clearInterval(iv);running=false;ot.textContent='\uD83D\uDC80 Game Over';op.textContent='Score: '+sc;ob.textContent='Play Again';ov.classList.remove('off')}function start(){ov.classList.add('off');init();clearInterval(iv);running=true;iv=setInterval(step,120)}ob.addEventListener('click',start);const DM={ArrowUp:{x:0,y:-1},ArrowDown:{x:0,y:1},ArrowLeft:{x:-1,y:0},ArrowRight:{x:1,y:0},w:{x:0,y:-1},s:{x:0,y:1},a:{x:-1,y:0},d:{x:1,y:0}};function tryDir(d){if(running&&!(d.x===-dir.x&&d.y===-dir.y))nd=d}function onKey(e){if(!running){if(e.key==='Enter')start();return}const d=DM[e.key];if(d){tryDir(d);e.preventDefault()}}window.addEventListener('keydown',onKey);document.addEventListener('keydown',onKey);document.getElementById('bU').addEventListener('click',()=>tryDir({x:0,y:-1}));document.getElementById('bD').addEventListener('click',()=>tryDir({x:0,y:1}));document.getElementById('bL').addEventListener('click',()=>tryDir({x:-1,y:0}));document.getElementById('bR').addEventListener('click',()=>tryDir({x:1,y:0}));let tx=0,ty=0;cv.addEventListener('touchstart',e=>{tx=e.touches[0].clientX;ty=e.touches[0].clientY},{passive:true});cv.addEventListener('touchend',e=>{const dx=e.changedTouches[0].clientX-tx,dy=e.changedTouches[0].clientY-ty;if(!running)return;if(Math.abs(dx)>Math.abs(dy)){tryDir(dx>0?{x:1,y:0}:{x:-1,y:0})}else{tryDir(dy>0?{x:0,y:1}:{x:0,y:-1})}});draw();<\/script></body></html>`;
+                        // ────────────────────────────────────────────────────────────────────
+
                         const container = document.getElementById('canvas-container');
                         const empty = document.getElementById('canvas-empty');
                         let sourceMode = false;
@@ -721,6 +725,36 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 if (content && content !== __lastContent) {
                                     __lastContent = content;
                                     renderCanvas(content);
+                                }
+                                renderProjectBar();
+                            } catch(_) {}
+                        })();
+
+                        // ── Seed built-in games if missing ──
+                        // Adds Snake (and optionally other defaults) if not present by name.
+                        // Never overwrites or changes the currently active game.
+                        (async () => {
+                            try {
+                                let tries = 0;
+                                while (!window._traitsSDK && tries < 40) {
+                                    await new Promise(r => setTimeout(r, 250));
+                                    tries++;
+                                }
+                                const sdk = window._traitsSDK;
+                                if (!sdk) return;
+                                const col = readGamesCollection();
+                                const names = Object.values(col.games || {}).map(g => (g.name || '').toLowerCase());
+                                if (names.includes('snake')) return; // already seeded
+                                const prevActive = col.active;
+                                // Create snake game as a new inactive entry
+                                await sdk.call('sys.canvas', ['new', 'Snake']);
+                                await sdk.call('sys.canvas', ['set', SNAKE_GAME_HTML]);
+                                // Restore the previously active game
+                                if (prevActive) {
+                                    await sdk.call('sys.canvas', ['activate', prevActive]);
+                                    const col2 = readGamesCollection();
+                                    const restored = col2.games[prevActive]?.content || '';
+                                    if (restored) renderCanvas(restored);
                                 }
                                 renderProjectBar();
                             } catch(_) {}
