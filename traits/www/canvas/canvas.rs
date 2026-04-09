@@ -597,11 +597,41 @@ pub fn canvas(_args: &[Value]) -> Value {
                             }
                         });
 
-                        // Auto-render saved content on page load (from VFS in localStorage)
+                        // ── Auto-load on page init ──
+                        // Try VFS first (traits.pvfs), fallback to _autosave project in localStorage.
                         let __lastContent = readCanvasFromStorage();
+                        if (!__lastContent) {
+                            // Fallback: load from _autosave project entry
+                            try {
+                                const raw = localStorage.getItem(PROJECT_PFX + '_autosave');
+                                if (raw) {
+                                    const proj = JSON.parse(raw);
+                                    if (proj.content) { __lastContent = proj.content; }
+                                }
+                            } catch(_) {}
+                        }
                         if (__lastContent) {
                             renderCanvas(__lastContent);
                         }
+
+                        // Also restore from WASM VFS once SDK is ready (catches Worker writes)
+                        (async () => {
+                            try {
+                                let tries = 0;
+                                while (!window._traitsSDK?.wasmReady && tries < 40) {
+                                    await new Promise(r => setTimeout(r, 250));
+                                    tries++;
+                                }
+                                const sdk = window._traitsSDK;
+                                if (!sdk) return;
+                                const res = await sdk.call('sys.canvas', ['get']);
+                                const content = res?.result?.content || res?.content || '';
+                                if (content && content !== __lastContent) {
+                                    __lastContent = content;
+                                    renderCanvas(content);
+                                }
+                            } catch(_) {}
+                        })();
 
                         // Poll localStorage for agent writes (1 s — backup for missed events)
                         const _pollId = setInterval(() => {
