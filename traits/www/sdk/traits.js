@@ -680,7 +680,8 @@ function _traitTypeToSchema(typeStr) {
  *  In WASM-only mode (no helper/server), only WASM-callable traits are included
  *  since non-WASM traits cannot be dispatched in the browser. */
 // Tools allowed on the canvas page — everything else is stripped
-const CANVAS_PAGE_TOOLS = new Set(['canvas', 'sys_echo', 'sys_audio', 'sys_voice_quit']);
+const CANVAS_PAGE_TOOLS = new Set(['canvas', 'sys_echo', 'sys_audio', 'sys_voice_quit',
+    'game_screenshot', 'game_eval', 'game_console', 'game_click', 'game_press_key', 'game_source', 'game_restart']);
 
 async function _buildVoiceTools(sdk, page) {
     let traits = [];
@@ -736,7 +737,7 @@ async function _buildVoiceTools(sdk, page) {
         }
     });
 
-    // On canvas page, also include echo and audio, strip everything else
+    // On canvas page, also include echo, audio, and game devtools
     if (isCanvas) {
         for (const t of traits) {
             if (!t.path) continue;
@@ -757,6 +758,14 @@ async function _buildVoiceTools(sdk, page) {
                 tools.push({ type: 'function', name: toolName, description: t.description || '', parameters });
             }
         }
+        // Game DevTools tools (browser-native, handled in voice function_call handler)
+        tools.push({ type: 'function', name: 'game_screenshot', description: 'Take a screenshot of the current game. Returns the game canvas as an image you can see.', parameters: { type: 'object', properties: {} } });
+        tools.push({ type: 'function', name: 'game_eval', description: 'Execute JavaScript in the running game. Inspect state, check scores, debug.', parameters: { type: 'object', properties: { code: { type: 'string', description: 'JS expression to evaluate' } }, required: ['code'] } });
+        tools.push({ type: 'function', name: 'game_console', description: 'Read recent console output (logs, warnings, errors) from the game.', parameters: { type: 'object', properties: {} } });
+        tools.push({ type: 'function', name: 'game_click', description: 'Click at x,y coordinates in the game (390x844 viewport).', parameters: { type: 'object', properties: { x: { type: 'number', description: 'X (0-390)' }, y: { type: 'number', description: 'Y (0-844)' } }, required: ['x', 'y'] } });
+        tools.push({ type: 'function', name: 'game_press_key', description: 'Press a key in the game (ArrowUp, ArrowDown, Space, etc).', parameters: { type: 'object', properties: { key: { type: 'string', description: 'Key name' } }, required: ['key'] } });
+        tools.push({ type: 'function', name: 'game_source', description: 'Read the current game HTML source code.', parameters: { type: 'object', properties: {} } });
+        tools.push({ type: 'function', name: 'game_restart', description: 'Restart the game without modifying code.', parameters: { type: 'object', properties: {} } });
     }
 
     return tools;
@@ -1930,7 +1939,17 @@ export class Traits {
                     '- Interpret ALL requests as game modifications or new game creation\n' +
                     '- Call the `canvas` tool immediately with the user\'s request\n' +
                     '- After the tool runs, briefly confirm what was done (e.g. "Done, added a shield power-up")\n' +
-                    '- Keep responses under 2 sentences\n' +
+                    '- Keep responses under 2 sentences\n\n' +
+                    'GAME DEVTOOLS:\n' +
+                    'You also have game inspection tools. Use them proactively:\n' +
+                    '- game_screenshot: Take a screenshot to SEE the game. Use when debugging visual issues.\n' +
+                    '- game_eval: Run JavaScript in the game to check state, scores, variables.\n' +
+                    '- game_console: Read console logs/errors from the game.\n' +
+                    '- game_click: Click at x,y coordinates to interact with the game.\n' +
+                    '- game_press_key: Press keys (ArrowUp, Space, etc) to play-test the game.\n' +
+                    '- game_source: Read the current game HTML source.\n' +
+                    '- game_restart: Reload the game without changing code.\n' +
+                    'When the user reports a bug, use game_console and game_screenshot FIRST to diagnose, then use canvas to fix.\n' +
                     '=== END HARD RULES ===';
                 fullInstructions = canvasPrefix + '\n\n' + fullInstructions;
                 // Append recent game console logs so the voice model knows about errors
@@ -2162,6 +2181,106 @@ export class Traits {
                                 }));
                             }
                             this.stopVoice();
+                            return;
+                        }
+
+                        // ── Game DevTools handlers ──
+                        if (funcName.startsWith('game_')) {
+                            const _sendDevToolsResult = (output) => {
+                                if (_voiceDc && _voiceDc.readyState === 'open') {
+                                    const truncated = typeof output === 'string' ? output : JSON.stringify(output);
+                                    const out = truncated.length > 4000 ? truncated.slice(0, 4000) + '…(truncated)' : truncated;
+                                    _voiceDc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: out } }));
+                                    _voiceDc.send(JSON.stringify({ type: 'response.create' }));
+                                }
+                            };
+                            try {
+                                const iframe = document.getElementById('phone-viewport');
+                                const iDoc = iframe?.contentDocument;
+                                const iWin = iframe?.contentWindow;
+
+                                if (funcName === 'game_screenshot') {
+                                    const cvs = iDoc?.querySelector('canvas');
+                                    if (cvs) {
+                                        const dataUrl = cvs.toDataURL('image/jpeg', 0.7);
+                                        // Return tool output first
+                                        if (_voiceDc && _voiceDc.readyState === 'open') {
+                                            _voiceDc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: JSON.stringify({ ok: true, width: cvs.width, height: cvs.height, format: 'jpeg' }) } }));
+                                            // Inject screenshot as an image for the model to see
+                                            _voiceDc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_image', image_url: dataUrl }] } }));
+                                            _voiceDc.send(JSON.stringify({ type: 'response.create' }));
+                                        }
+                                        console.log('[Voice/DevTools] Screenshot captured:', cvs.width, 'x', cvs.height);
+                                    } else {
+                                        // No canvas — try to describe the page
+                                        const bodyText = (iDoc?.body?.innerText || '').slice(0, 1000);
+                                        const elemCount = iDoc?.body?.querySelectorAll('*').length || 0;
+                                        _sendDevToolsResult(JSON.stringify({ ok: true, type: 'html_page', elements: elemCount, visible_text: bodyText }));
+                                    }
+                                } else if (funcName === 'game_eval') {
+                                    let code = '';
+                                    try { code = JSON.parse(argsStr).code || ''; } catch(_) { code = argsStr; }
+                                    if (!iWin) { _sendDevToolsResult(JSON.stringify({ error: 'No game loaded' })); }
+                                    else {
+                                        const fn = new iWin.Function('return (' + code + ')');
+                                        let result = fn();
+                                        if (result instanceof Promise) result = await result;
+                                        const serialized = JSON.stringify(result, null, 2) ?? 'undefined';
+                                        console.log('[Voice/DevTools] Eval result:', serialized.slice(0, 200));
+                                        _sendDevToolsResult(JSON.stringify({ ok: true, result: serialized.length > 3000 ? serialized.slice(0, 3000) + '…' : serialized }));
+                                    }
+                                } else if (funcName === 'game_console') {
+                                    const logs = window.__canvasGameLogs || [];
+                                    _sendDevToolsResult(JSON.stringify({ ok: true, count: logs.length, logs: logs.slice(-30) }));
+                                } else if (funcName === 'game_click') {
+                                    let x = 0, y = 0;
+                                    try { const a = JSON.parse(argsStr); x = a.x || 0; y = a.y || 0; } catch(_) {}
+                                    const target = iDoc?.elementFromPoint(x, y) || iDoc?.body;
+                                    if (target) {
+                                        target.dispatchEvent(new MouseEvent('pointerdown', { clientX: x, clientY: y, bubbles: true }));
+                                        target.dispatchEvent(new MouseEvent('pointerup', { clientX: x, clientY: y, bubbles: true }));
+                                        target.dispatchEvent(new MouseEvent('click', { clientX: x, clientY: y, bubbles: true }));
+                                        console.log('[Voice/DevTools] Click at', x, y, '→', target.tagName);
+                                        _sendDevToolsResult(JSON.stringify({ ok: true, x, y, element: target.tagName.toLowerCase() }));
+                                    } else {
+                                        _sendDevToolsResult(JSON.stringify({ error: 'No element at coordinates' }));
+                                    }
+                                } else if (funcName === 'game_press_key') {
+                                    let key = '';
+                                    try { key = JSON.parse(argsStr).key || ''; } catch(_) { key = argsStr; }
+                                    if (key === 'Space') key = ' ';
+                                    const target = iDoc?.querySelector('canvas') || iDoc?.body;
+                                    if (target) {
+                                        const opts = { key, code: 'Key' + key.toUpperCase(), bubbles: true, cancelable: true };
+                                        if (key.startsWith('Arrow')) opts.code = key;
+                                        if (key === ' ') { opts.code = 'Space'; opts.key = ' '; }
+                                        target.dispatchEvent(new KeyboardEvent('keydown', opts));
+                                        setTimeout(() => target.dispatchEvent(new KeyboardEvent('keyup', opts)), 80);
+                                        console.log('[Voice/DevTools] Key press:', key);
+                                        _sendDevToolsResult(JSON.stringify({ ok: true, key }));
+                                    } else {
+                                        _sendDevToolsResult(JSON.stringify({ error: 'No game loaded' }));
+                                    }
+                                } else if (funcName === 'game_source') {
+                                    const html = iDoc?.documentElement?.outerHTML || iframe?.srcdoc || '';
+                                    const truncated = html.length > 6000 ? html.slice(0, 6000) + '\n…(truncated, ' + html.length + ' chars total)' : html;
+                                    _sendDevToolsResult(JSON.stringify({ ok: true, length: html.length, source: truncated }));
+                                } else if (funcName === 'game_restart') {
+                                    if (iframe && iframe.srcdoc) {
+                                        const src = iframe.srcdoc;
+                                        iframe.srcdoc = '';
+                                        setTimeout(() => { iframe.srcdoc = src; }, 50);
+                                        _sendDevToolsResult(JSON.stringify({ ok: true, action: 'restarted' }));
+                                    } else {
+                                        _sendDevToolsResult(JSON.stringify({ error: 'No game loaded' }));
+                                    }
+                                } else {
+                                    _sendDevToolsResult(JSON.stringify({ error: 'Unknown game tool: ' + funcName }));
+                                }
+                            } catch(e) {
+                                console.error('[Voice/DevTools] Error:', funcName, e);
+                                _sendDevToolsResult(JSON.stringify({ error: e.message || String(e) }));
+                            }
                             return;
                         }
 

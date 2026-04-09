@@ -124,7 +124,7 @@ pub fn voice_tools(args: &[Value]) -> Value {
         }
     }));
 
-    // On canvas page: also expose sys_echo and sys_audio from the registry
+    // On canvas page: also expose sys_echo, sys_audio, and game devtools
     if is_canvas {
         for entry in &all_traits {
             let path = entry.get("path").and_then(|v| v.as_str()).unwrap_or("");
@@ -146,6 +146,69 @@ pub fn voice_tools(args: &[Value]) -> Value {
                 "parameters": parameters,
             }));
         }
+
+        // ── Game DevTools — browser-native inspection/interaction tools ──
+        tools.push(json!({
+            "type": "function",
+            "name": "game_screenshot",
+            "description": "Take a screenshot of the current game. Returns the game canvas as an image you can see. Use to visually inspect the game state.",
+            "parameters": { "type": "object", "properties": {} }
+        }));
+        tools.push(json!({
+            "type": "function",
+            "name": "game_eval",
+            "description": "Execute JavaScript code inside the running game. Use to inspect game state, read variables, check scores, debug issues. Returns the evaluation result.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": { "type": "string", "description": "JavaScript expression to evaluate in the game iframe. Must return a value." }
+                },
+                "required": ["code"]
+            }
+        }));
+        tools.push(json!({
+            "type": "function",
+            "name": "game_console",
+            "description": "Read recent console output (logs, warnings, errors) from the game. Useful for debugging crashes or unexpected behavior.",
+            "parameters": { "type": "object", "properties": {} }
+        }));
+        tools.push(json!({
+            "type": "function",
+            "name": "game_click",
+            "description": "Click at specific x,y coordinates in the game. Coordinates are relative to the game viewport (390x844).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "x": { "type": "number", "description": "X coordinate (0-390)" },
+                    "y": { "type": "number", "description": "Y coordinate (0-844)" }
+                },
+                "required": ["x", "y"]
+            }
+        }));
+        tools.push(json!({
+            "type": "function",
+            "name": "game_press_key",
+            "description": "Press a keyboard key in the game. Use for testing keyboard controls like arrow keys, space, etc.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": { "type": "string", "description": "Key to press, e.g. ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Space, Enter, a, w, s, d" }
+                },
+                "required": ["key"]
+            }
+        }));
+        tools.push(json!({
+            "type": "function",
+            "name": "game_source",
+            "description": "Read the current game HTML source code. Returns the full HTML/CSS/JS of the running game.",
+            "parameters": { "type": "object", "properties": {} }
+        }));
+        tools.push(json!({
+            "type": "function",
+            "name": "game_restart",
+            "description": "Restart/reload the current game without modifying the code.",
+            "parameters": { "type": "object", "properties": {} }
+        }));
     }
 
     json!({ "ok": true, "tools": tools, "count": tools.len() })
