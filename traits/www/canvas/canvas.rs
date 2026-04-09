@@ -12,7 +12,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                 style {
                     (PreEscaped(r#"
                         :root { --bg: #0a0a0a; --fg: #e0e0e0; --accent: #00e0ff; --border: #222; }
-                        body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); font-family: system-ui, sans-serif; }
+                        html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); font-family: system-ui, sans-serif; overflow: hidden; height: 100%; }
                         .canvas-header {
                             display: flex; align-items: center; justify-content: space-between;
                             padding: 12px 20px; border-bottom: 1px solid var(--border);
@@ -47,9 +47,10 @@ pub fn canvas(_args: &[Value]) -> Value {
                         #game-select option { background: #181818; color: var(--fg); }
 
                         #canvas-container {
-                            width: 100%; min-height: calc(100vh - 100px);
-                            padding: 40px 20px; position: relative;
-                            display: flex; justify-content: center; align-items: flex-start;
+                            width: 100%; height: calc(100vh - 49px);
+                            padding: 0 20px; position: relative;
+                            display: flex; justify-content: center; align-items: center;
+                            overflow: hidden; box-sizing: border-box;
                         }
                         .canvas-empty {
                             display: flex; flex-direction: column; align-items: center;
@@ -472,58 +473,47 @@ pub fn canvas(_args: &[Value]) -> Value {
                             } catch(_) { phoneViewport.focus(); }
                         });
 
-                        // Forward arrow/game keys from parent into iframe content
-                        // Games may listen on canvas, document, or window — dispatch on all three
-                        document.addEventListener('keydown', (e) => {
+                        // Forward game keys from parent into iframe
+                        // Strategy: dispatch KeyboardEvent on iDoc (for event listeners),
+                        // directly set iWin.keys[code] (for poll-based games),
+                        // and call iWin.handleInput() if it exists (fixes games where handleInput isn't in the loop)
+                        const GAME_KEYS = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' ','w','a','s','d','z','c','Shift'];
+                        function forwardKey(e, type) {
                             if (!phoneFrame.classList.contains('visible')) return;
-                            const gameKeys = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' ','w','a','s','d','z','c','Shift'];
-                            if (gameKeys.includes(e.key)) {
-                                e.preventDefault();
-                                try {
-                                    const iDoc = phoneViewport.contentDocument;
-                                    const iWin = phoneViewport.contentWindow;
-                                    if (iDoc) {
-                                        const evt = new KeyboardEvent('keydown', {
-                                            key: e.key, code: e.code, keyCode: e.keyCode,
-                                            which: e.which, shiftKey: e.shiftKey,
-                                            bubbles: true, cancelable: true
-                                        });
-                                        // Dispatch on document (for document.onkeydown listeners)
-                                        iDoc.dispatchEvent(evt);
-                                        // Also dispatch on canvas if present (for canvas.addEventListener)
-                                        const canvas = iDoc.querySelector('canvas');
-                                        if (canvas) canvas.dispatchEvent(new KeyboardEvent('keydown', {
-                                            key: e.key, code: e.code, keyCode: e.keyCode,
-                                            which: e.which, shiftKey: e.shiftKey,
-                                            bubbles: true, cancelable: true
-                                        }));
-                                    }
-                                } catch(_) {}
-                            }
-                        });
-                        document.addEventListener('keyup', (e) => {
-                            if (!phoneFrame.classList.contains('visible')) return;
-                            const gameKeys = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' ','w','a','s','d','z','c','Shift'];
-                            if (gameKeys.includes(e.key)) {
-                                e.preventDefault();
-                                try {
-                                    const iDoc = phoneViewport.contentDocument;
-                                    if (iDoc) {
-                                        const evt = new KeyboardEvent('keyup', {
-                                            key: e.key, code: e.code, keyCode: e.keyCode,
-                                            which: e.which, shiftKey: e.shiftKey,
-                                            bubbles: true, cancelable: true
-                                        });
-                                        iDoc.dispatchEvent(evt);
-                                        const canvas = iDoc.querySelector('canvas');
-                                        if (canvas) canvas.dispatchEvent(new KeyboardEvent('keyup', {
-                                            key: e.key, code: e.code, keyCode: e.keyCode,
-                                            which: e.which, shiftKey: e.shiftKey,
-                                            bubbles: true, cancelable: true
-                                        }));
-                                    }
-                                } catch(_) {}
-                            }
+                            if (!GAME_KEYS.includes(e.key)) return;
+                            e.preventDefault();
+                            try {
+                                const iDoc = phoneViewport.contentDocument;
+                                const iWin = phoneViewport.contentWindow;
+                                if (!iDoc || !iWin) return;
+                                // 1. Dispatch event on iframe document (for document.onkeydown listeners)
+                                iDoc.dispatchEvent(new KeyboardEvent(type, {
+                                    key: e.key, code: e.code, keyCode: e.keyCode,
+                                    which: e.which, shiftKey: e.shiftKey,
+                                    bubbles: true, cancelable: true
+                                }));
+                                // 2. Directly set key state for poll-based games (keys[code] pattern)
+                                if (iWin.keys && typeof iWin.keys === 'object') {
+                                    iWin.keys[e.code || e.key] = (type === 'keydown');
+                                }
+                                // 3. Call handleInput() if game exposes it (fixes games where it's not in the loop)
+                                if (type === 'keydown' && typeof iWin.handleInput === 'function') {
+                                    try { iWin.handleInput(); } catch(_) {}
+                                }
+                            } catch(_) {}
+                        }
+                        document.addEventListener('keydown', (e) => forwardKey(e, 'keydown'));
+                        document.addEventListener('keyup', (e) => forwardKey(e, 'keyup'));
+                        // Also intercept keys when iframe itself has focus (prevent parent scroll)
+                        phoneViewport.addEventListener('load', () => {
+                            try {
+                                const iDoc = phoneViewport.contentDocument;
+                                if (iDoc) {
+                                    iDoc.addEventListener('keydown', (e) => {
+                                        if (GAME_KEYS.includes(e.key)) e.preventDefault();
+                                    }, { passive: false });
+                                }
+                            } catch(_) {}
                         });
 
                         const BRIDGE = `<script>(function(){
