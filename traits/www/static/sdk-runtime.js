@@ -287,6 +287,8 @@ async function _runCanvasAgent(sdk, request) {
             try { const pvfs = JSON.parse(localStorage.getItem('traits.pvfs') || '{}'); content = pvfs['canvas/app.html'] || ''; } catch(_) {}
         }
         if (content) {
+            // Sync to games.json via WASM sys.canvas set
+            try { await sdk.call('sys.canvas', ['set', content]); } catch(_) {}
             window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content } }));
         }
         return JSON.stringify(r?.ok ? { ok: true, response: r.response || 'Done' } : { error: r?.error || 'agent failed' });
@@ -362,6 +364,9 @@ async function _runCanvasAgentBrowser(request, existing, apiKey) {
                         lastContent = args.content || '';
                         const isCanvas = args.path === 'canvas/app.html' || String(args.path).endsWith('/app.html');
                         if (isCanvas && lastContent) {
+                            // Sync to games.json via WASM sys.canvas set
+                            const _sdk = window._traitsSDK;
+                            if (_sdk) _sdk.call('sys.canvas', ['set', lastContent]).catch(() => {});
                             console.log('[Canvas/Agent/Browser] Firing traits-canvas-update, len:', lastContent.length);
                             window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content: lastContent } }));
                         }
