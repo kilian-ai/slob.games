@@ -463,6 +463,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                         const phoneViewport = document.getElementById('phone-viewport');
                         let _currentContent = '';
 
+                        // Click on the phone frame focuses the iframe for keyboard input
+                        phoneFrame.addEventListener('click', () => { phoneViewport.focus(); });
+
                         const BRIDGE = `<script>(function(){
                             var sdk = function(){ return window.parent._traitsSDK; };
                             window.traits = {
@@ -513,6 +516,11 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 }
                             }
                             phoneViewport.srcdoc = fullHtml;
+                            // Focus iframe so keyboard events reach the game
+                            phoneViewport.addEventListener('load', function _f() {
+                                phoneViewport.removeEventListener('load', _f);
+                                phoneViewport.focus();
+                            });
                         }
 
                         // Read canvas/app.html from VFS (backward compat for poller)
@@ -572,13 +580,37 @@ pub fn canvas(_args: &[Value]) -> Value {
                         });
 
                         // ── Auto-load on page init ──
-                        // Read active game from games.json collection (in VFS → localStorage).
-                        let __lastContent = getActiveGameContent();
-                        if (!__lastContent) {
-                            __lastContent = readCanvasFromStorage();
-                        }
-                        if (__lastContent) {
-                            renderCanvas(__lastContent);
+                        // Migrate existing canvas/app.html to games.json if no games exist yet.
+                        let __lastContent = '';
+                        const _initCol = readGamesCollection();
+                        const _initHasGames = Object.keys(_initCol.games || {}).length > 0;
+                        if (!_initHasGames) {
+                            const _existingHtml = readCanvasFromStorage();
+                            if (_existingHtml) {
+                                // Bootstrap: call sys.canvas set to create first game entry
+                                __lastContent = _existingHtml;
+                                renderCanvas(_existingHtml);
+                                (async () => {
+                                    let tries = 0;
+                                    while (!window._traitsSDK?.wasmReady && tries < 40) {
+                                        await new Promise(r => setTimeout(r, 250));
+                                        tries++;
+                                    }
+                                    const sdk = window._traitsSDK;
+                                    if (sdk) {
+                                        await sdk.call('sys.canvas', ['set', _existingHtml]);
+                                        // Extract game name from <title> tag
+                                        const _titleMatch = _existingHtml.match(/<title[^>]*>([^<]+)<\/title>/i);
+                                        const _gameName = _titleMatch ? _titleMatch[1].trim() : 'untitled';
+                                        await sdk.call('sys.canvas', ['rename', _gameName]);
+                                        renderProjectBar();
+                                    }
+                                })();
+                            }
+                        } else {
+                            __lastContent = getActiveGameContent();
+                            if (!__lastContent) __lastContent = readCanvasFromStorage();
+                            if (__lastContent) renderCanvas(__lastContent);
                         }
 
                         // Also restore from WASM VFS once SDK is ready
