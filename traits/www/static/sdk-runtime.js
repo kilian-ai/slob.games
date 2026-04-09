@@ -49,7 +49,7 @@ const HELPER_PORTS = [8090, 8091, 9090];
 const HELPER_TIMEOUT = 1500;
 
 // ── Relay state (remote helper via pairing code) ──
-const RELAY_DEFAULT_SERVER = 'https://relay.slob.games';
+const RELAY_DEFAULT_SERVER = 'https://relay.traits.build';
 const RELAY_ENABLED_KEY = 'traits.relay.enabled';
 
 function _relayServer() {
