@@ -241,7 +241,22 @@ const CANVAS_AGENT_SYSTEM =
 
 // ── Shared canvas agent runner — used by BOTH WebRTC and local voice paths ──
 // Prefers browser-native direct OpenAI fetch (no helper/server needed).
+let _canvasAgentRunning = false;
 async function _runCanvasAgent(sdk, request) {
+    // Guard against concurrent agent runs — abort if one is already active
+    if (_canvasAgentRunning) {
+        console.warn('[Canvas/Agent] ⏳ Already running, queueing request');
+        // Wait for the current run to finish (max 60s)
+        const waitStart = Date.now();
+        while (_canvasAgentRunning && Date.now() - waitStart < 60000) {
+            await new Promise(r => setTimeout(r, 500));
+        }
+        if (_canvasAgentRunning) return JSON.stringify({ error: 'Canvas agent timed out waiting for previous run' });
+    }
+    _canvasAgentRunning = true;
+    // Signal the canvas page that an update is in progress
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('traits-canvas-agent-status', { detail: { running: true } }));
+    try {
     let _existing = '';
     try {
         const pvfs = JSON.parse(localStorage.getItem('traits.pvfs') || '{}');
@@ -317,6 +332,10 @@ async function _runCanvasAgent(sdk, request) {
     } catch(e) {
         console.error('[Canvas/Agent] ✗ Error:', e.message || e);
         return JSON.stringify({ error: e.message || String(e) });
+    }
+    } finally {
+        _canvasAgentRunning = false;
+        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('traits-canvas-agent-status', { detail: { running: false } }));
     }
 }
 
@@ -429,6 +448,9 @@ async function _runCanvasAgentBrowser(request, existing, apiKey) {
     } catch(e) {
         console.error('[Canvas/Agent/Browser] ✗', e);
         return JSON.stringify({ error: e.message || String(e) });
+    } finally {
+        _canvasAgentRunning = false;
+        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('traits-canvas-agent-status', { detail: { running: false } }));
     }
 }
 

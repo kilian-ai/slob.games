@@ -52,6 +52,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             display: flex; justify-content: center; align-items: center;
                             overflow: hidden; box-sizing: border-box;
                         }
+                        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
                         .canvas-empty {
                             display: flex; flex-direction: column; align-items: center;
                             justify-content: center; height: 60vh; color: #555;
@@ -298,6 +299,10 @@ pub fn canvas(_args: &[Value]) -> Value {
                         }
                         iframe #phone-viewport sandbox="allow-scripts allow-same-origin allow-forms" {}
                         div .phone-home-bar {}
+                    }
+                    div #canvasLoading style="display:none;position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(10,10,10,0.85);z-index:9999;align-items:center;justify-content:center;flex-direction:column;border-radius:24px" {
+                        div style="font-size:32px;margin-bottom:12px;animation:spin 1.2s linear infinite" { "⚙️" }
+                        div style="color:#00ff88;font:bold 14px monospace" { "Updating game..." }
                     }
                 }
 
@@ -552,6 +557,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                             _currentContent = content;
                             empty.style.display = 'none';
                             phoneFrame.classList.add('visible');
+                            // Hide loading overlay when content renders
+                            const _lo = document.getElementById('canvasLoading');
+                            if (_lo) _lo.style.display = 'none';
                             document.querySelectorAll('style[data-canvas]').forEach(s => s.remove());
 
                             let fullHtml = content.trim();
@@ -760,10 +768,18 @@ pub fn canvas(_args: &[Value]) -> Value {
                             } catch(_) {}
                         })();
 
+                        // Track canvas agent status — suppress poll while agent is running
+                        let __canvasAgentRunning = false;
+                        window.addEventListener('traits-canvas-agent-status', (e) => {
+                            __canvasAgentRunning = !!e.detail?.running;
+                            const overlay = document.getElementById('canvasLoading');
+                            if (overlay) overlay.style.display = __canvasAgentRunning ? 'flex' : 'none';
+                        });
+
                         // Poll VFS for agent writes (1s backup for missed events)
                         const _pollId = setInterval(() => {
                             try {
-                                if (sourceMode) return;
+                                if (sourceMode || __canvasAgentRunning) return;
                                 const content = getActiveGameContent() || readCanvasFromStorage();
                                 if (content && content !== __lastContent) {
                                     __lastContent = content;
