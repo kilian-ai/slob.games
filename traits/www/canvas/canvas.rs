@@ -30,26 +30,21 @@ pub fn canvas(_args: &[Value]) -> Value {
                         .canvas-header button.save-btn { border-color: #2a5; color: #2a5; }
                         .canvas-header button.save-btn:hover { border-color: #3c8; color: #3c8; }
 
-                        /* Project bar */
-                        #project-bar {
-                            display: none; padding: 6px 20px; background: #0d0d0d;
-                            border-bottom: 1px solid var(--border);
-                            overflow-x: auto; white-space: nowrap;
+                        /* Game selector dropdown */
+                        #game-select {
+                            background: #181818; color: var(--fg);
+                            border: 1px solid var(--border); border-radius: 4px;
+                            padding: 4px 8px; font-size: 12px;
+                            cursor: pointer; outline: none; max-width: 180px;
+                            font-family: system-ui, sans-serif;
+                            -webkit-appearance: none; appearance: none;
+                            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E");
+                            background-repeat: no-repeat; background-position: right 8px center;
+                            padding-right: 22px;
                         }
-                        #project-bar.has-projects { display: flex; gap: 6px; align-items: center; }
-                        #project-bar .project-chip {
-                            display: inline-flex; align-items: center; gap: 4px;
-                            padding: 3px 10px; border-radius: 4px; font-size: 11px;
-                            background: #181818; border: 1px solid var(--border);
-                            color: #aaa; cursor: pointer; flex-shrink: 0;
-                        }
-                        #project-bar .project-chip:hover { border-color: var(--accent); color: var(--accent); }
-                        #project-bar .project-chip.active { border-color: var(--accent); color: var(--accent); background: #1a1a2e; }
-                        #project-bar .project-chip .del {
-                            color: #555; cursor: pointer; font-size: 13px; margin-left: 2px;
-                        }
-                        #project-bar .project-chip .del:hover { color: #f44; }
-                        #project-bar .project-label { font-size: 10px; color: #555; margin-right: 4px; flex-shrink: 0; }
+                        #game-select:hover { border-color: var(--accent); }
+                        #game-select:focus { border-color: var(--accent); }
+                        #game-select option { background: #181818; color: var(--fg); }
 
                         #canvas-container {
                             width: 100%; min-height: calc(100vh - 100px);
@@ -284,12 +279,12 @@ pub fn canvas(_args: &[Value]) -> Value {
                 div .canvas-header {
                     h1 { "slob.games " span .accent { "canvas" } }
                     div .actions {
+                        select #game-select { option value="" disabled selected { "no games" } }
                         button #btnSave .save-btn { "Save" }
                         button #btnClear { "Clear" }
                         button #btnSource { "View Source" }
                     }
                 }
-                div #project-bar {}
                 div #canvas-container {
                     div .canvas-empty #canvas-empty {
                         div .icon { "🎨" }
@@ -372,7 +367,6 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                         const container = document.getElementById('canvas-container');
                         const empty = document.getElementById('canvas-empty');
-                        const projectBar = document.getElementById('project-bar');
                         let sourceMode = false;
 
                         // ── Games collection: single source of truth in VFS canvas/games.json ──
@@ -410,45 +404,29 @@ pub fn canvas(_args: &[Value]) -> Value {
                             return list;
                         }
 
+                        const gameSelect = document.getElementById('game-select');
+
                         function renderProjectBar() {
                             const games = getGamesList();
+                            const sel = gameSelect;
+                            sel.innerHTML = '';
                             if (!games.length) {
-                                projectBar.className = '';
-                                projectBar.innerHTML = '';
+                                sel.innerHTML = '<option value="" disabled selected>no games</option>';
                                 return;
                             }
-                            projectBar.className = 'has-projects';
-                            projectBar.innerHTML = '<span class="project-label">Games:</span>' +
-                                games.map(g =>
-                                    '<span class="project-chip' + (g.active ? ' active' : '') + '" data-id="' + g.id + '">' +
-                                    (g.name || 'untitled') +
-                                    ' <span class="del" data-del="' + g.id + '">&times;</span>' +
-                                    '</span>'
-                                ).join('');
-                            projectBar.querySelectorAll('.project-chip').forEach(chip => {
-                                chip.addEventListener('click', (e) => {
-                                    if (e.target.classList.contains('del')) return;
-                                    activateGame(chip.dataset.id);
-                                });
-                            });
-                            projectBar.querySelectorAll('.del').forEach(del => {
-                                del.addEventListener('click', async (e) => {
-                                    e.stopPropagation();
-                                    const id = del.dataset.del;
-                                    const col = readGamesCollection();
-                                    const name = col.games[id]?.name || id;
-                                    if (!confirm('Delete "' + name + '"?')) return;
-                                    const sdk = window._traitsSDK;
-                                    if (sdk) {
-                                        await sdk.call('sys.canvas', ['delete', id]);
-                                        const updated = readGamesCollection();
-                                        const content = getActiveGameContent();
-                                        renderProjectBar();
-                                        renderCanvas(content);
-                                    }
-                                });
+                            games.forEach(g => {
+                                const opt = document.createElement('option');
+                                opt.value = g.id;
+                                opt.textContent = (g.name || 'untitled');
+                                if (g.active) opt.selected = true;
+                                sel.appendChild(opt);
                             });
                         }
+
+                        gameSelect.addEventListener('change', (e) => {
+                            const id = e.target.value;
+                            if (id) activateGame(id);
+                        });
 
                         async function activateGame(id) {
                             const sdk = window._traitsSDK;
