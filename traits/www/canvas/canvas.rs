@@ -44,6 +44,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             color: #aaa; cursor: pointer; flex-shrink: 0;
                         }
                         #project-bar .project-chip:hover { border-color: var(--accent); color: var(--accent); }
+                        #project-bar .project-chip.active { border-color: var(--accent); color: var(--accent); background: #1a1a2e; }
                         #project-bar .project-chip .del {
                             color: #555; cursor: pointer; font-size: 13px; margin-left: 2px;
                         }
@@ -383,6 +384,8 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                         // ── Project management ──
                         const PROJECT_PFX = 'traits.canvas.project.';
+                        let _activeProject = localStorage.getItem('traits.canvas.activeProject') || '';
+                        let _loadingProject = false;
 
                         function getProjects() {
                             const projects = [];
@@ -400,16 +403,16 @@ pub fn canvas(_args: &[Value]) -> Value {
                         }
 
                         function renderProjectBar() {
-                            const projects = getProjects();
+                            const projects = getProjects().filter(p => p.name !== '_autosave');
                             if (!projects.length) {
                                 projectBar.className = '';
                                 projectBar.innerHTML = '';
                                 return;
                             }
                             projectBar.className = 'has-projects';
-                            projectBar.innerHTML = '<span class="project-label">Projects:</span>' +
+                            projectBar.innerHTML = '<span class="project-label">Games:</span>' +
                                 projects.map(p =>
-                                    '<span class="project-chip" data-name="' + p.name.replace(/"/g, '&quot;') + '">' +
+                                    '<span class="project-chip' + (p.name === _activeProject ? ' active' : '') + '" data-name="' + p.name.replace(/"/g, '&quot;') + '">' +
                                     p.name +
                                     ' <span class="del" data-del="' + p.name.replace(/"/g, '&quot;') + '">&times;</span>' +
                                     '</span>'
@@ -438,10 +441,15 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 const raw = localStorage.getItem(PROJECT_PFX + name);
                                 if (!raw) return;
                                 const proj = JSON.parse(raw);
+                                _loadingProject = true;
+                                _activeProject = name;
+                                localStorage.setItem('traits.canvas.activeProject', name);
                                 const sdk = window._traitsSDK;
                                 if (sdk) await sdk.call('sys.canvas', ['set', proj.content]);
                                 renderCanvas(proj.content);
-                            } catch(e) { console.warn('load project:', e); }
+                                _loadingProject = false;
+                                renderProjectBar();
+                            } catch(e) { _loadingProject = false; console.warn('load project:', e); }
                         }
 
                         async function saveProject() {
@@ -450,9 +458,12 @@ pub fn canvas(_args: &[Value]) -> Value {
                             const res = await sdk.call('sys.canvas', ['get']);
                             const content = res?.result?.content || res?.content || '';
                             if (!content) { alert('Canvas is empty — nothing to save.'); return; }
-                            const name = prompt('Project name:');
+                            const name = prompt('Game name:');
                             if (!name || !name.trim()) return;
-                            localStorage.setItem(PROJECT_PFX + name.trim(), JSON.stringify({ content, saved: Date.now() }));
+                            const trimmed = name.trim();
+                            localStorage.setItem(PROJECT_PFX + trimmed, JSON.stringify({ content, saved: Date.now() }));
+                            _activeProject = trimmed;
+                            localStorage.setItem('traits.canvas.activeProject', trimmed);
                             renderProjectBar();
                         }
 
@@ -492,6 +503,46 @@ pub fn canvas(_args: &[Value]) -> Value {
                             };
                         })();<\/script>`;
 
+                        // Detect if two HTML strings are substantially different games
+                        function isDifferentGame(a, b) {
+                            if (!a || !b) return true;
+                            if (a === b) return false;
+                            // Compare title tags
+                            const titleA = (a.match(/<title[^>]*>([^<]*)<\/title>/i) || [])[1] || '';
+                            const titleB = (b.match(/<title[^>]*>([^<]*)<\/title>/i) || [])[1] || '';
+                            if (titleA && titleB && titleA !== titleB) return true;
+                            // Compare first significant content (skip boilerplate)
+                            const bodyA = (a.match(/<body[^>]*>([\s\S]{0,200})/i) || [])[1] || a.slice(0, 200);
+                            const bodyB = (b.match(/<body[^>]*>([\s\S]{0,200})/i) || [])[1] || b.slice(0, 200);
+                            // If first 200 chars of body content share < 30% chars, it's a different game
+                            const setA = new Set(bodyA.replace(/\s+/g, ''));
+                            const setB = new Set(bodyB.replace(/\s+/g, ''));
+                            let overlap = 0;
+                            setA.forEach(c => { if (setB.has(c)) overlap++; });
+                            const similarity = overlap / Math.max(setA.size, setB.size, 1);
+                            // Also check length ratio
+                            const lenRatio = Math.min(a.length, b.length) / Math.max(a.length, b.length, 1);
+                            return similarity < 0.5 || lenRatio < 0.3;
+                        }
+
+                        function autoVersionOldGame(oldContent) {
+                            if (!oldContent || oldContent.length < 50) return;
+                            try {
+                                const d = new Date();
+                                const autoName = 'game-' + (d.getMonth()+1) + d.getDate() + '-' +
+                                    String(d.getHours()).padStart(2,'0') + String(d.getMinutes()).padStart(2,'0');
+                                // Don't overwrite existing auto-names
+                                if (localStorage.getItem(PROJECT_PFX + autoName)) return;
+                                // Limit auto-saved games to 20
+                                const autoGames = getProjects().filter(p => p.name.startsWith('game-'));
+                                if (autoGames.length >= 20) {
+                                    const oldest = autoGames.sort((a, b) => (a.saved || 0) - (b.saved || 0))[0];
+                                    localStorage.removeItem(PROJECT_PFX + oldest.name);
+                                }
+                                localStorage.setItem(PROJECT_PFX + autoName, JSON.stringify({ content: oldContent, saved: Date.now() }));
+                            } catch(_) {}
+                        }
+
                         function renderCanvas(content) {
                             if (!content) {
                                 if (_currentContent === '') return; // already cleared
@@ -502,10 +553,20 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 return;
                             }
                             if (content === _currentContent) return; // skip srcdoc reset if content unchanged
+                            // Auto-version: if this is a substantially different game, save old one first
+                            if (!_loadingProject && _currentContent && isDifferentGame(_currentContent, content)) {
+                                autoVersionOldGame(_currentContent);
+                                _activeProject = '';
+                                localStorage.removeItem('traits.canvas.activeProject');
+                            }
                             _currentContent = content;
                             // Auto-save to project bar on every content change
                             try {
                                 localStorage.setItem(PROJECT_PFX + '_autosave', JSON.stringify({ content, saved: Date.now() }));
+                                // Also update the active project if one is selected
+                                if (_activeProject && _activeProject !== '_autosave') {
+                                    localStorage.setItem(PROJECT_PFX + _activeProject, JSON.stringify({ content, saved: Date.now() }));
+                                }
                                 renderProjectBar();
                             } catch(_) {}
                             empty.style.display = 'none';
@@ -598,10 +659,21 @@ pub fn canvas(_args: &[Value]) -> Value {
                         });
 
                         // ── Auto-load on page init ──
-                        // Try VFS first (traits.pvfs), fallback to _autosave project in localStorage.
-                        let __lastContent = readCanvasFromStorage();
+                        // Try active project first, then VFS, then _autosave fallback.
+                        let __lastContent = '';
+                        if (_activeProject && _activeProject !== '_autosave') {
+                            try {
+                                const raw = localStorage.getItem(PROJECT_PFX + _activeProject);
+                                if (raw) {
+                                    const proj = JSON.parse(raw);
+                                    if (proj.content) { __lastContent = proj.content; }
+                                }
+                            } catch(_) {}
+                        }
                         if (!__lastContent) {
-                            // Fallback: load from _autosave project entry
+                            __lastContent = readCanvasFromStorage();
+                        }
+                        if (!__lastContent) {
                             try {
                                 const raw = localStorage.getItem(PROJECT_PFX + '_autosave');
                                 if (raw) {
