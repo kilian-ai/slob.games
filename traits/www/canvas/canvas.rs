@@ -542,6 +542,26 @@ pub fn canvas(_args: &[Value]) -> Value {
                             document.querySelector = function(s) {
                                 return _qs(s.replace(/^#phone-viewport\s+/,'').replace(/^#canvas-container\s+/,''));
                             };
+                            // Capture console output and forward to parent for voice agent context
+                            ['log','warn','error'].forEach(function(level){
+                                var orig = console[level].bind(console);
+                                console[level] = function(){
+                                    orig.apply(console, arguments);
+                                    try {
+                                        var msg = Array.prototype.slice.call(arguments).map(function(a){
+                                            return typeof a === 'object' ? JSON.stringify(a) : String(a);
+                                        }).join(' ');
+                                        window.parent.postMessage({type:'canvas-console', level:level, message:msg}, '*');
+                                    } catch(_){}
+                                };
+                            });
+                            // Capture uncaught errors
+                            window.addEventListener('error', function(e){
+                                try {
+                                    var msg = (e.message||'') + (e.filename ? ' at '+e.filename+':'+e.lineno : '');
+                                    window.parent.postMessage({type:'canvas-console', level:'error', message:msg}, '*');
+                                } catch(_){}
+                            });
                         })();<\/script>`;
 
                         function renderCanvas(content) {
@@ -578,6 +598,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 }
                             }
                             phoneViewport.srcdoc = fullHtml;
+                            // Clear game logs on new content load
+                            if (window.__canvasGameLogs) window.__canvasGameLogs.length = 0;
                             // Focus iframe so keyboard events reach the game
                             phoneViewport.addEventListener('load', function _f() {
                                 phoneViewport.removeEventListener('load', _f);
@@ -767,6 +789,19 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 renderProjectBar();
                             } catch(_) {}
                         })();
+
+                        // ── Game console log ring buffer (last 50 entries) ──
+                        const __gameLogs = [];
+                        const __GAME_LOG_MAX = 50;
+                        window.addEventListener('message', (e) => {
+                            if (e.data?.type === 'canvas-console') {
+                                const entry = '[' + e.data.level.toUpperCase() + '] ' + (e.data.message || '').slice(0, 300);
+                                __gameLogs.push(entry);
+                                if (__gameLogs.length > __GAME_LOG_MAX) __gameLogs.shift();
+                            }
+                        });
+                        // Expose for the SDK canvas agent to read
+                        window.__canvasGameLogs = __gameLogs;
 
                         // Track canvas agent status — suppress poll while agent is running
                         let __canvasAgentRunning = false;

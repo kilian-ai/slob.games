@@ -263,17 +263,26 @@ async function _runCanvasAgent(sdk, request) {
         _existing = pvfs['canvas/app.html'] || '';
     } catch(_) {}
 
-    console.log('[Canvas/Agent] ▶ Starting — existing:', _existing.length, 'chars | request:', request);
+    // Collect recent game console logs for diagnostic context
+    let _gameLogs = '';
+    try {
+        const logs = (typeof window !== 'undefined' && window.__canvasGameLogs) || [];
+        if (logs.length > 0) {
+            _gameLogs = '\n\nRECENT GAME CONSOLE OUTPUT (last ' + logs.length + ' entries):\n' + logs.join('\n');
+        }
+    } catch(_) {}
+
+    console.log('[Canvas/Agent] ▶ Starting — existing:', _existing.length, 'chars | request:', request, '| logs:', _gameLogs.length, 'chars');
 
     // ── Browser-native path: direct OpenAI fetch — works without helper or server ──
     const apiKey = _voiceApiKey || await _ensureVoiceApiKey(sdk).catch(() => null);
     if (apiKey) {
-        return await _runCanvasAgentBrowser(request, _existing, apiKey);
+        return await _runCanvasAgentBrowser(request, _existing, apiKey, _gameLogs);
     }
 
     // ── Fallback: dispatch through SDK cascade (needs helper or server) ──
     const prompt = _existing
-        ? `User request: ${request}\n\nRead canvas/app.html, apply the change, write the COMPLETE updated file back immediately.`
+        ? `User request: ${request}${_gameLogs}\n\nRead canvas/app.html, apply the change, write the COMPLETE updated file back immediately.`
 : `Build the following for the canvas:\n\n${request}\n\nWrite a complete, self-contained HTML+CSS+JS file to canvas/app.html. Requirements:\n- 390px wide × 844px tall, fills the phone viewport\n- Dark theme: background #0a0a0a, bright accent colors\n- Inline all CSS and JS — no external dependencies\n- querySelector('canvas') for canvas access (scripts run inside an iframe)\n- let (not const) for any reassigned variables\n- Cancel any existing animation first: if(window.__canvasAnimId) cancelAnimationFrame(window.__canvasAnimId)\n- Store new animation ID: window.__canvasAnimId = requestAnimationFrame(loop)\n- No DOMContentLoaded listeners`;
 
     const agentArgs = [prompt, CANVAS_AGENT_SYSTEM, 'sys.vfs,sys.canvas', 'gpt-4.1', 20];
@@ -341,7 +350,8 @@ async function _runCanvasAgent(sdk, request) {
 
 // ── Browser-native canvas agent loop — direct OpenAI chat completions, no server needed ──
 // Handles sys_vfs read/write locally via localStorage['traits.pvfs'].
-async function _runCanvasAgentBrowser(request, existing, apiKey) {
+async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs) {
+    gameLogs = gameLogs || '';
     const SYS_VFS_TOOL = {
         type: 'function',
         function: {
@@ -362,8 +372,8 @@ async function _runCanvasAgentBrowser(request, existing, apiKey) {
     const messages = [
         { role: 'system', content: CANVAS_AGENT_SYSTEM },
         { role: 'user', content: existing
-            ? `User request: ${request}\n\nRead canvas/app.html, apply the change, write the COMPLETE updated file back immediately.`
-: `Build the following for the canvas:\n\n${request}\n\nWrite a complete, self-contained HTML+CSS+JS file to canvas/app.html. Requirements:\n- 390px wide × 844px tall, fills the phone viewport\n- Dark theme: background #0a0a0a, bright accent colors\n- Inline all CSS and JS — no external dependencies\n- querySelector('canvas') for canvas access (scripts run inside an iframe)\n- let (not const) for any reassigned variables\n- Cancel any existing animation first: if(window.__canvasAnimId) cancelAnimationFrame(window.__canvasAnimId)\n- Store new animation ID: window.__canvasAnimId = requestAnimationFrame(loop)\n- No DOMContentLoaded listeners`
+            ? `User request: ${request}${gameLogs}\n\nRead canvas/app.html, apply the change, write the COMPLETE updated file back immediately.`
+: `Build the following for the canvas:\n\n${request}${gameLogs}\n\nWrite a complete, self-contained HTML+CSS+JS file to canvas/app.html. Requirements:\n- 390px wide × 844px tall, fills the phone viewport\n- Dark theme: background #0a0a0a, bright accent colors\n- Inline all CSS and JS — no external dependencies\n- querySelector('canvas') for canvas access (scripts run inside an iframe)\n- let (not const) for any reassigned variables\n- Cancel any existing animation first: if(window.__canvasAnimId) cancelAnimationFrame(window.__canvasAnimId)\n- Store new animation ID: window.__canvasAnimId = requestAnimationFrame(loop)\n- No DOMContentLoaded listeners`
         }
     ];
 
@@ -1923,6 +1933,17 @@ export class Traits {
                     '- Keep responses under 2 sentences\n' +
                     '=== END HARD RULES ===';
                 fullInstructions = canvasPrefix + '\n\n' + fullInstructions;
+                // Append recent game console logs so the voice model knows about errors
+                try {
+                    const logs = window.__canvasGameLogs || [];
+                    if (logs.length > 0) {
+                        const errorLogs = logs.filter(l => l.startsWith('[ERROR]') || l.startsWith('[WARN]'));
+                        const relevantLogs = errorLogs.length > 0 ? errorLogs.slice(-20) : logs.slice(-10);
+                        fullInstructions += '\n\n=== RECENT GAME CONSOLE OUTPUT ===\n' + relevantLogs.join('\n') + '\n=== END CONSOLE OUTPUT ===\n' +
+                            'If the user mentions a bug, crash, or problem, use these logs as context when calling the canvas tool. ' +
+                            'Include relevant error messages in your canvas tool request so the code agent can fix them.';
+                    }
+                } catch(_) {}
             }
             console.log('[Voice] Instructions loaded (' + fullInstructions.length + ' chars, source: sys.voice.instruct build)');
             console.log('[Voice] [DEBUG] Instructions first 500 chars:', fullInstructions.slice(0, 500));
