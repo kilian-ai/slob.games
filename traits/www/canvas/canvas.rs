@@ -357,23 +357,16 @@ pub fn canvas(_args: &[Value]) -> Value {
                 script { (PreEscaped(r#"
                     (function() {
                         // ── Canvas SDK: thin global API for scripts injected into the canvas ──
-                        // Available as `traits.call(...)`, `traits.list()`, etc. in canvas scripts
                         const _sdk = () => window._traitsSDK;
                         window.traits = {
-                            /** Call any trait: traits.call('skills.spotify.play', ['spotify:track:...']) */
                             call: (path, args) => _sdk()?.call(path, args || []),
-                            /** List traits, optional namespace filter: traits.list('skills') */
                             list: (ns) => _sdk()?.call('sys.list', ns ? [ns] : []),
-                            /** Get trait info: traits.info('skills.spotify.play') */
                             info: (path) => _sdk()?.call('sys.info', [path]),
-                            /** Update the canvas itself: traits.canvas('set', html) */
                             canvas: (action, content) => {
                                 const args = content !== undefined ? [action, content] : [action];
                                 return _sdk()?.call('sys.canvas', args);
                             },
-                            /** Echo text to the terminal: traits.echo('hello') */
                             echo: (text) => _sdk()?.call('sys.echo', [text]),
-                            /** Play audio: traits.audio('tone', 440, 0.5) */
                             audio: (action, ...a) => _sdk()?.call('sys.audio', [action, ...a]),
                         };
 
@@ -382,107 +375,116 @@ pub fn canvas(_args: &[Value]) -> Value {
                         const projectBar = document.getElementById('project-bar');
                         let sourceMode = false;
 
-                        // ── Project management ──
-                        const PROJECT_PFX = 'traits.canvas.project.';
-                        let _activeProject = localStorage.getItem('traits.canvas.activeProject') || '';
-                        let _loadingProject = false;
+                        // ── Games collection: single source of truth in VFS canvas/games.json ──
+                        // VFS auto-syncs to localStorage['traits.pvfs'] on every write.
 
-                        function getProjects() {
-                            const projects = [];
-                            for (let i = 0; i < localStorage.length; i++) {
-                                const k = localStorage.key(i);
-                                if (k && k.startsWith(PROJECT_PFX)) {
-                                    const name = k.slice(PROJECT_PFX.length);
-                                    try {
-                                        const data = JSON.parse(localStorage.getItem(k));
-                                        projects.push({ name, length: (data.content || '').length, saved: data.saved });
-                                    } catch(_) { projects.push({ name, length: 0 }); }
-                                }
+                        function readGamesCollection() {
+                            try {
+                                const raw = localStorage.getItem('traits.pvfs');
+                                if (!raw) return { active: null, games: {} };
+                                const files = JSON.parse(raw);
+                                const json = files['canvas/games.json'];
+                                if (!json) return { active: null, games: {} };
+                                return JSON.parse(json);
+                            } catch(_) { return { active: null, games: {} }; }
+                        }
+
+                        function getActiveGameContent() {
+                            const col = readGamesCollection();
+                            if (!col.active || !col.games[col.active]) return '';
+                            return col.games[col.active].content || '';
+                        }
+
+                        function getGamesList() {
+                            const col = readGamesCollection();
+                            const list = [];
+                            for (const [id, g] of Object.entries(col.games || {})) {
+                                list.push({
+                                    id, name: g.name || 'untitled',
+                                    length: (g.content || '').length,
+                                    active: id === col.active,
+                                    updated: g.updated || ''
+                                });
                             }
-                            return projects.sort((a, b) => (b.saved || 0) - (a.saved || 0));
+                            list.sort((a, b) => (b.updated || '').localeCompare(a.updated || ''));
+                            return list;
                         }
 
                         function renderProjectBar() {
-                            const projects = getProjects().filter(p => p.name !== '_autosave');
-                            if (!projects.length) {
+                            const games = getGamesList();
+                            if (!games.length) {
                                 projectBar.className = '';
                                 projectBar.innerHTML = '';
                                 return;
                             }
                             projectBar.className = 'has-projects';
                             projectBar.innerHTML = '<span class="project-label">Games:</span>' +
-                                projects.map(p =>
-                                    '<span class="project-chip' + (p.name === _activeProject ? ' active' : '') + '" data-name="' + p.name.replace(/"/g, '&quot;') + '">' +
-                                    p.name +
-                                    ' <span class="del" data-del="' + p.name.replace(/"/g, '&quot;') + '">&times;</span>' +
+                                games.map(g =>
+                                    '<span class="project-chip' + (g.active ? ' active' : '') + '" data-id="' + g.id + '">' +
+                                    (g.name || 'untitled') +
+                                    ' <span class="del" data-del="' + g.id + '">&times;</span>' +
                                     '</span>'
                                 ).join('');
-                            // Click handlers
                             projectBar.querySelectorAll('.project-chip').forEach(chip => {
                                 chip.addEventListener('click', (e) => {
                                     if (e.target.classList.contains('del')) return;
-                                    loadProject(chip.dataset.name);
+                                    activateGame(chip.dataset.id);
                                 });
                             });
                             projectBar.querySelectorAll('.del').forEach(del => {
-                                del.addEventListener('click', (e) => {
+                                del.addEventListener('click', async (e) => {
                                     e.stopPropagation();
-                                    const name = del.dataset.del;
-                                    if (confirm('Delete project "' + name + '"?')) {
-                                        localStorage.removeItem(PROJECT_PFX + name);
+                                    const id = del.dataset.del;
+                                    const col = readGamesCollection();
+                                    const name = col.games[id]?.name || id;
+                                    if (!confirm('Delete "' + name + '"?')) return;
+                                    const sdk = window._traitsSDK;
+                                    if (sdk) {
+                                        await sdk.call('sys.canvas', ['delete', id]);
+                                        const updated = readGamesCollection();
+                                        const content = getActiveGameContent();
                                         renderProjectBar();
+                                        renderCanvas(content);
                                     }
                                 });
                             });
                         }
 
-                        async function loadProject(name) {
-                            try {
-                                const raw = localStorage.getItem(PROJECT_PFX + name);
-                                if (!raw) return;
-                                const proj = JSON.parse(raw);
-                                _loadingProject = true;
-                                _activeProject = name;
-                                localStorage.setItem('traits.canvas.activeProject', name);
-                                const sdk = window._traitsSDK;
-                                if (sdk) await sdk.call('sys.canvas', ['set', proj.content]);
-                                renderCanvas(proj.content);
-                                _loadingProject = false;
-                                renderProjectBar();
-                            } catch(e) { _loadingProject = false; console.warn('load project:', e); }
-                        }
-
-                        async function saveProject() {
+                        async function activateGame(id) {
                             const sdk = window._traitsSDK;
                             if (!sdk) return;
-                            const res = await sdk.call('sys.canvas', ['get']);
-                            const content = res?.result?.content || res?.content || '';
-                            if (!content) { alert('Canvas is empty — nothing to save.'); return; }
-                            const name = prompt('Game name:');
-                            if (!name || !name.trim()) return;
-                            const trimmed = name.trim();
-                            localStorage.setItem(PROJECT_PFX + trimmed, JSON.stringify({ content, saved: Date.now() }));
-                            _activeProject = trimmed;
-                            localStorage.setItem('traits.canvas.activeProject', trimmed);
+                            const res = await sdk.call('sys.canvas', ['activate', id]);
+                            const r = res?.result || res || {};
+                            const content = r.content || '';
+                            _currentContent = ''; // force re-render
+                            renderCanvas(content);
                             renderProjectBar();
                         }
 
-                        // Save button
+                        async function saveProject() {
+                            const col = readGamesCollection();
+                            if (!col.active || !col.games[col.active]) {
+                                alert('Canvas is empty — nothing to save.');
+                                return;
+                            }
+                            const current = col.games[col.active].name || '';
+                            const name = prompt('Game name:', current === 'untitled' ? '' : current);
+                            if (!name || !name.trim()) return;
+                            const sdk = window._traitsSDK;
+                            if (sdk) {
+                                await sdk.call('sys.canvas', ['rename', name.trim()]);
+                                renderProjectBar();
+                            }
+                        }
+
                         document.getElementById('btnSave').addEventListener('click', saveProject);
-
-                        // Listen for external project changes (from voice/MCP bridge)
                         window.addEventListener('traits-canvas-projects-changed', renderProjectBar);
-
-                        // Initial render
                         renderProjectBar();
 
                         const phoneFrame    = document.getElementById('phone-frame');
                         const phoneViewport = document.getElementById('phone-viewport');
                         let _currentContent = '';
 
-                        // Bridge script injected into every iframe render.
-                        // Exposes window.traits, forward calls to parent SDK.
-                        // Also adds querySelector shim for legacy #phone-viewport/#canvas-container selectors.
                         const BRIDGE = `<script>(function(){
                             var sdk = function(){ return window.parent._traitsSDK; };
                             window.traits = {
@@ -496,88 +498,29 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     return sdk() && sdk().call('sys.audio', [a].concat(r));
                                 },
                             };
-                            // querySelector compat: strip legacy outer-DOM prefixes
                             var _qs = document.querySelector.bind(document);
                             document.querySelector = function(s) {
                                 return _qs(s.replace(/^#phone-viewport\s+/,'').replace(/^#canvas-container\s+/,''));
                             };
                         })();<\/script>`;
 
-                        // Detect if two HTML strings are substantially different games
-                        function isDifferentGame(a, b) {
-                            if (!a || !b) return true;
-                            if (a === b) return false;
-                            // Compare title tags
-                            const titleA = (a.match(/<title[^>]*>([^<]*)<\/title>/i) || [])[1] || '';
-                            const titleB = (b.match(/<title[^>]*>([^<]*)<\/title>/i) || [])[1] || '';
-                            if (titleA && titleB && titleA !== titleB) return true;
-                            // Compare first significant content (skip boilerplate)
-                            const bodyA = (a.match(/<body[^>]*>([\s\S]{0,200})/i) || [])[1] || a.slice(0, 200);
-                            const bodyB = (b.match(/<body[^>]*>([\s\S]{0,200})/i) || [])[1] || b.slice(0, 200);
-                            // If first 200 chars of body content share < 30% chars, it's a different game
-                            const setA = new Set(bodyA.replace(/\s+/g, ''));
-                            const setB = new Set(bodyB.replace(/\s+/g, ''));
-                            let overlap = 0;
-                            setA.forEach(c => { if (setB.has(c)) overlap++; });
-                            const similarity = overlap / Math.max(setA.size, setB.size, 1);
-                            // Also check length ratio
-                            const lenRatio = Math.min(a.length, b.length) / Math.max(a.length, b.length, 1);
-                            return similarity < 0.5 || lenRatio < 0.3;
-                        }
-
-                        function autoVersionOldGame(oldContent) {
-                            if (!oldContent || oldContent.length < 50) return;
-                            try {
-                                const d = new Date();
-                                const autoName = 'game-' + (d.getMonth()+1) + d.getDate() + '-' +
-                                    String(d.getHours()).padStart(2,'0') + String(d.getMinutes()).padStart(2,'0');
-                                // Don't overwrite existing auto-names
-                                if (localStorage.getItem(PROJECT_PFX + autoName)) return;
-                                // Limit auto-saved games to 20
-                                const autoGames = getProjects().filter(p => p.name.startsWith('game-'));
-                                if (autoGames.length >= 20) {
-                                    const oldest = autoGames.sort((a, b) => (a.saved || 0) - (b.saved || 0))[0];
-                                    localStorage.removeItem(PROJECT_PFX + oldest.name);
-                                }
-                                localStorage.setItem(PROJECT_PFX + autoName, JSON.stringify({ content: oldContent, saved: Date.now() }));
-                            } catch(_) {}
-                        }
-
                         function renderCanvas(content) {
                             if (!content) {
-                                if (_currentContent === '') return; // already cleared
+                                if (_currentContent === '') return;
                                 _currentContent = '';
                                 phoneFrame.classList.remove('visible');
                                 container.appendChild(empty);
                                 empty.style.display = 'flex';
                                 return;
                             }
-                            if (content === _currentContent) return; // skip srcdoc reset if content unchanged
-                            // Auto-version: if this is a substantially different game, save old one first
-                            if (!_loadingProject && _currentContent && isDifferentGame(_currentContent, content)) {
-                                autoVersionOldGame(_currentContent);
-                                _activeProject = '';
-                                localStorage.removeItem('traits.canvas.activeProject');
-                            }
+                            if (content === _currentContent) return;
                             _currentContent = content;
-                            // Auto-save to project bar on every content change
-                            try {
-                                localStorage.setItem(PROJECT_PFX + '_autosave', JSON.stringify({ content, saved: Date.now() }));
-                                // Also update the active project if one is selected
-                                if (_activeProject && _activeProject !== '_autosave') {
-                                    localStorage.setItem(PROJECT_PFX + _activeProject, JSON.stringify({ content, saved: Date.now() }));
-                                }
-                                renderProjectBar();
-                            } catch(_) {}
                             empty.style.display = 'none';
                             phoneFrame.classList.add('visible');
-                            // No global style injection — iframe provides full CSS isolation.
                             document.querySelectorAll('style[data-canvas]').forEach(s => s.remove());
 
-                            // Build a complete HTML document, injecting the traits bridge.
                             let fullHtml = content.trim();
                             if (!/<html[\s>]/i.test(fullHtml)) {
-                                // Fragment — wrap in a minimal document
                                 fullHtml = '<!DOCTYPE html><html><head>' +
                                     '<meta charset="UTF-8">' +
                                     '<style>*{margin:0;padding:0;box-sizing:border-box}' +
@@ -585,29 +528,16 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     'canvas{display:block}</style>' +
                                     BRIDGE + '</head><body>' + fullHtml + '</body></html>';
                             } else {
-                                // Full document — inject bridge after opening <head> tag
                                 if (/<head\b[^>]*>/i.test(fullHtml)) {
                                     fullHtml = fullHtml.replace(/(<head\b[^>]*>)/i, '$1' + BRIDGE);
                                 } else {
                                     fullHtml = fullHtml.replace(/(<html\b[^>]*>)/i, '$1<head>' + BRIDGE + '</head>');
                                 }
                             }
-
                             phoneViewport.srcdoc = fullHtml;
                         }
 
-                        async function loadCanvas() {
-                            try {
-                                const sdk = window._traitsSDK;
-                                if (!sdk) return;
-                                const res = await sdk.call('sys.canvas', ['get']);
-                                const content = res?.result?.content || res?.content || '';
-                                renderCanvas(content || '');
-                            } catch(e) { console.warn('canvas load:', e); }
-                        }
-
-                        // Read canvas/app.html directly from localStorage (shared by Worker + main-thread WASM).
-                        // Bypasses the in-memory WASM VFS which may be stale.
+                        // Read canvas/app.html from VFS (backward compat for poller)
                         function readCanvasFromStorage() {
                             try {
                                 const raw = localStorage.getItem('traits.pvfs');
@@ -621,13 +551,18 @@ pub fn canvas(_args: &[Value]) -> Value {
                         window.addEventListener('traits-canvas-update', (e) => {
                             const content = e.detail?.content;
                             if (content !== undefined) {
-                                __lastContent = content; // keep poller in sync — avoid duplicate re-render
+                                __lastContent = content;
                                 renderCanvas(content);
+                                renderProjectBar();
                             } else {
-                                // Re-read from localStorage (Worker may have written)
-                                const stored = readCanvasFromStorage();
-                                if (stored) { __lastContent = stored; renderCanvas(stored); }
-                                else loadCanvas();
+                                // Re-read from games.json via VFS
+                                const active = getActiveGameContent();
+                                if (active) { __lastContent = active; renderCanvas(active); }
+                                else {
+                                    const stored = readCanvasFromStorage();
+                                    if (stored) { __lastContent = stored; renderCanvas(stored); }
+                                }
+                                renderProjectBar();
                             }
                         });
 
@@ -659,34 +594,16 @@ pub fn canvas(_args: &[Value]) -> Value {
                         });
 
                         // ── Auto-load on page init ──
-                        // Try active project first, then VFS, then _autosave fallback.
-                        let __lastContent = '';
-                        if (_activeProject && _activeProject !== '_autosave') {
-                            try {
-                                const raw = localStorage.getItem(PROJECT_PFX + _activeProject);
-                                if (raw) {
-                                    const proj = JSON.parse(raw);
-                                    if (proj.content) { __lastContent = proj.content; }
-                                }
-                            } catch(_) {}
-                        }
+                        // Read active game from games.json collection (in VFS → localStorage).
+                        let __lastContent = getActiveGameContent();
                         if (!__lastContent) {
                             __lastContent = readCanvasFromStorage();
-                        }
-                        if (!__lastContent) {
-                            try {
-                                const raw = localStorage.getItem(PROJECT_PFX + '_autosave');
-                                if (raw) {
-                                    const proj = JSON.parse(raw);
-                                    if (proj.content) { __lastContent = proj.content; }
-                                }
-                            } catch(_) {}
                         }
                         if (__lastContent) {
                             renderCanvas(__lastContent);
                         }
 
-                        // Also restore from WASM VFS once SDK is ready (catches Worker writes)
+                        // Also restore from WASM VFS once SDK is ready
                         (async () => {
                             try {
                                 let tries = 0;
@@ -694,25 +611,24 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     await new Promise(r => setTimeout(r, 250));
                                     tries++;
                                 }
-                                const sdk = window._traitsSDK;
-                                if (!sdk) return;
-                                const res = await sdk.call('sys.canvas', ['get']);
-                                const content = res?.result?.content || res?.content || '';
+                                const content = getActiveGameContent();
                                 if (content && content !== __lastContent) {
                                     __lastContent = content;
                                     renderCanvas(content);
                                 }
+                                renderProjectBar();
                             } catch(_) {}
                         })();
 
-                        // Poll localStorage for agent writes (1 s — backup for missed events)
+                        // Poll VFS for agent writes (1s backup for missed events)
                         const _pollId = setInterval(() => {
                             try {
                                 if (sourceMode) return;
-                                const content = readCanvasFromStorage();
+                                const content = getActiveGameContent() || readCanvasFromStorage();
                                 if (content && content !== __lastContent) {
                                     __lastContent = content;
                                     renderCanvas(content);
+                                    renderProjectBar();
                                 }
                             } catch(_) {}
                         }, 1000);
@@ -732,14 +648,16 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 fabToggle.classList.remove('open');
                             }
                         });
-                        // New Canvas button
+                        // New Canvas button — creates a new game entry
                         document.getElementById('fabNew').addEventListener('click', async () => {
                             fabMenu.classList.remove('show');
                             fabToggle.classList.remove('open');
                             const sdk = window._traitsSDK;
-                            if (sdk) await sdk.call('sys.canvas', ['clear']);
+                            if (sdk) await sdk.call('sys.canvas', ['new']);
                             __lastContent = '';
+                            _currentContent = '';
                             renderCanvas('');
+                            renderProjectBar();
                         });
 
                         // Voice button
@@ -988,18 +906,16 @@ pub fn canvas(_args: &[Value]) -> Value {
                             if (!content) return;
                             try {
                                 const sdk = window._traitsSDK;
-                                if (sdk) await sdk.call('sys.canvas', ['set', content]);
-                            } catch(_) {}
-                            // Auto-save as named project + autosave slot
-                            try {
-                                const saved = Date.now();
-                                const entry = JSON.stringify({ content, saved });
-                                localStorage.setItem(PROJECT_PFX + '(received)', entry);
-                                localStorage.setItem('traits.canvas.project._autosave', entry);
-                                renderProjectBar();
+                                if (sdk) {
+                                    // Create a new game for the received project
+                                    await sdk.call('sys.canvas', ['new', 'received']);
+                                    await sdk.call('sys.canvas', ['set', content]);
+                                }
                             } catch(_) {}
                             __lastContent = content;
+                            _currentContent = '';
                             renderCanvas(content);
+                            renderProjectBar();
                             smStatus('\u2713 Project received & saved!', 'ok');
                             smProgress(100);
                             setTimeout(() => smHide(), 1800);
@@ -1007,19 +923,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                         window._pageCleanup = async () => {
                             clearInterval(_pollId);
                             fabMenu.classList.remove('show');
-                            // Remove injected canvas styles so they don't bleed into other pages
                             document.querySelectorAll('style[data-canvas]').forEach(s => s.remove());
-                            // Auto-save canvas content before leaving
-                            try {
-                                const sdk = window._traitsSDK;
-                                if (sdk) {
-                                    const res = await sdk.call('sys.canvas', ['get']);
-                                    const content = res?.result?.content || res?.content || '';
-                                    if (content) {
-                                        localStorage.setItem('traits.canvas.project._autosave', JSON.stringify({ content, saved: Date.now() }));
-                                    }
-                                }
-                            } catch(_) {}
                             try { delete window.traits; } catch(_) {}
                         };
 

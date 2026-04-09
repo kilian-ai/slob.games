@@ -1,7 +1,7 @@
 {
   "features": [
     {
-      "name": "set canvas content",
+      "name": "set canvas content (creates game if none active)",
       "examples": [
         {
           "input": { "args": ["set", "<h1>Hello</h1>"] },
@@ -10,7 +10,7 @@
       ]
     },
     {
-      "name": "get canvas content",
+      "name": "get active game content",
       "examples": [
         {
           "input": { "args": ["get"] },
@@ -19,7 +19,7 @@
       ]
     },
     {
-      "name": "clear canvas",
+      "name": "clear active game",
       "examples": [
         {
           "input": { "args": ["clear"] },
@@ -28,47 +28,74 @@
       ]
     },
     {
-      "name": "get canvas VFS path",
+      "name": "create new game",
       "examples": [
         {
-          "input": { "args": ["path"] },
-          "output": { "contains": "\"vfs_path\":\"canvas/app.html\"" }
+          "input": { "args": ["new", "my-game"] },
+          "output": { "contains": "\"action\":\"new\"" }
         }
       ]
     },
     {
-      "name": "save project to VFS",
+      "name": "list all games",
       "examples": [
         {
-          "input": { "args": ["save", "test-project"] },
-          "output": { "contains": "\"action\":\"save\"" }
+          "input": { "args": ["games"] },
+          "output": { "contains": "\"games\":" }
         }
       ]
     },
     {
-      "name": "list projects from VFS",
+      "name": "activate game by id",
       "examples": [
         {
-          "input": { "args": ["projects"] },
-          "output": { "contains": "\"projects\":" }
-        }
-      ]
-    },
-    {
-      "name": "load project from VFS",
-      "examples": [
-        {
-          "input": { "args": ["load", "nonexistent"] },
+          "input": { "args": ["activate", "nonexistent"] },
           "output": { "contains": "\"error\":" }
         }
       ]
     },
     {
-      "name": "delete project from VFS",
+      "name": "rename active game",
       "examples": [
         {
-          "input": { "args": ["delete_project", "test-project"] },
+          "input": { "args": ["rename", "cool-game"] },
+          "output": { "contains": "\"ok\":" }
+        }
+      ]
+    },
+    {
+      "name": "delete game by id",
+      "examples": [
+        {
+          "input": { "args": ["delete", "nonexistent"] },
           "output": { "contains": "\"ok\":true" }
+        }
+      ]
+    },
+    {
+      "name": "get VFS paths",
+      "examples": [
+        {
+          "input": { "args": ["path"] },
+          "output": { "contains": "\"games_path\":\"canvas/games.json\"" }
+        }
+      ]
+    },
+    {
+      "name": "legacy: save (rename alias)",
+      "examples": [
+        {
+          "input": { "args": ["save", "test-name"] },
+          "output": { "contains": "\"action\":\"save\"" }
+        }
+      ]
+    },
+    {
+      "name": "legacy: projects (games alias)",
+      "examples": [
+        {
+          "input": { "args": ["projects"] },
+          "output": { "contains": "\"games\":" }
         }
       ]
     }
