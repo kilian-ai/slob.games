@@ -1991,9 +1991,9 @@ export class Traits {
                             transcription: { model: 'whisper-1' },
                             turn_detection: {
                                 type: 'server_vad',
-                                silence_duration_ms: 1200,
-                                prefix_padding_ms: 400,
-                                threshold: 0.5,
+                                silence_duration_ms: 1500,
+                                prefix_padding_ms: 500,
+                                threshold: 0.35,
                             },
                         },
                     },
@@ -2469,7 +2469,7 @@ export class Traits {
             let silenceStart = 0;  // timestamp when silence began
             let processing = false; // true during STT→LLM→TTS pipeline
             const SILENCE_THRESHOLD = 0.015;
-            const SILENCE_TIMEOUT = 1200; // ms of silence to trigger end-of-speech
+            const SILENCE_TIMEOUT = 1500; // ms of silence to trigger end-of-speech
             const MIN_SPEECH = 500;       // ms minimum speech duration
             const sdk = this;
 
@@ -2819,7 +2819,7 @@ export class Traits {
             let silenceStart = 0;
             let processing = false;
             const SILENCE_THRESHOLD = 0.015;
-            const SILENCE_TIMEOUT = 1200;
+            const SILENCE_TIMEOUT = 1500;
             const MIN_SPEECH = 500;
             const sdk = this;
 
