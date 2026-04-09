@@ -473,18 +473,29 @@ pub fn canvas(_args: &[Value]) -> Value {
                         });
 
                         // Forward arrow/game keys from parent into iframe content
+                        // Games may listen on canvas, document, or window — dispatch on all three
                         document.addEventListener('keydown', (e) => {
                             if (!phoneFrame.classList.contains('visible')) return;
-                            const gameKeys = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '];
+                            const gameKeys = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' ','w','a','s','d','z','c','Shift'];
                             if (gameKeys.includes(e.key)) {
                                 e.preventDefault();
                                 try {
                                     const iDoc = phoneViewport.contentDocument;
+                                    const iWin = phoneViewport.contentWindow;
                                     if (iDoc) {
-                                        const target = iDoc.querySelector('canvas') || iDoc.activeElement || iDoc.body;
-                                        if (target) target.dispatchEvent(new KeyboardEvent('keydown', {
+                                        const evt = new KeyboardEvent('keydown', {
                                             key: e.key, code: e.code, keyCode: e.keyCode,
-                                            which: e.which, bubbles: true, cancelable: true
+                                            which: e.which, shiftKey: e.shiftKey,
+                                            bubbles: true, cancelable: true
+                                        });
+                                        // Dispatch on document (for document.onkeydown listeners)
+                                        iDoc.dispatchEvent(evt);
+                                        // Also dispatch on canvas if present (for canvas.addEventListener)
+                                        const canvas = iDoc.querySelector('canvas');
+                                        if (canvas) canvas.dispatchEvent(new KeyboardEvent('keydown', {
+                                            key: e.key, code: e.code, keyCode: e.keyCode,
+                                            which: e.which, shiftKey: e.shiftKey,
+                                            bubbles: true, cancelable: true
                                         }));
                                     }
                                 } catch(_) {}
@@ -492,16 +503,23 @@ pub fn canvas(_args: &[Value]) -> Value {
                         });
                         document.addEventListener('keyup', (e) => {
                             if (!phoneFrame.classList.contains('visible')) return;
-                            const gameKeys = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '];
+                            const gameKeys = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' ','w','a','s','d','z','c','Shift'];
                             if (gameKeys.includes(e.key)) {
                                 e.preventDefault();
                                 try {
                                     const iDoc = phoneViewport.contentDocument;
                                     if (iDoc) {
-                                        const target = iDoc.querySelector('canvas') || iDoc.activeElement || iDoc.body;
-                                        if (target) target.dispatchEvent(new KeyboardEvent('keyup', {
+                                        const evt = new KeyboardEvent('keyup', {
                                             key: e.key, code: e.code, keyCode: e.keyCode,
-                                            which: e.which, bubbles: true, cancelable: true
+                                            which: e.which, shiftKey: e.shiftKey,
+                                            bubbles: true, cancelable: true
+                                        });
+                                        iDoc.dispatchEvent(evt);
+                                        const canvas = iDoc.querySelector('canvas');
+                                        if (canvas) canvas.dispatchEvent(new KeyboardEvent('keyup', {
+                                            key: e.key, code: e.code, keyCode: e.keyCode,
+                                            which: e.which, shiftKey: e.shiftKey,
+                                            bubbles: true, cancelable: true
                                         }));
                                     }
                                 } catch(_) {}
@@ -677,6 +695,23 @@ pub fn canvas(_args: &[Value]) -> Value {
                             } else {
                                 __lastContent = activeContent || _existingHtml;
                                 if (__lastContent) renderCanvas(__lastContent);
+                                // Fix name mismatch: if content <title> differs from game name, rename
+                                (async () => {
+                                    let tries = 0;
+                                    while (!window._traitsSDK && tries < 40) {
+                                        await new Promise(r => setTimeout(r, 250));
+                                        tries++;
+                                    }
+                                    const sdk = window._traitsSDK;
+                                    if (sdk && activeContent) {
+                                        const contentTitle = (activeContent.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1]?.trim();
+                                        const gameName = _initCol.games[_initCol.active]?.name;
+                                        if (contentTitle && gameName && contentTitle.toLowerCase() !== gameName.toLowerCase()) {
+                                            await sdk.call('sys.canvas', ['rename', contentTitle]);
+                                            renderProjectBar();
+                                        }
+                                    }
+                                })();
                             }
                         } else {
                             __lastContent = getActiveGameContent();
