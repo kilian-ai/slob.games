@@ -349,77 +349,355 @@ dep = "namespace.concrete_trait"
 
 ---
 
-## Canvas Bridge Script
+## Game SDK (In-Iframe Bridge)
 
-Every game loaded into the `#phone-viewport` iframe gets a **bridge `<script>`** injected into its `<head>`. This bridge runs inside the iframe's execution context and provides the game-to-parent communication layer.
+Every game loaded into the `#phone-viewport` iframe gets a **bridge `<script>`** injected into its `<head>`. The bridge runs inside the iframe and exposes `window.traits` — the game SDK.
 
-**Location:** `traits/www/canvas/canvas.rs` — the `const BRIDGE` template literal (~line 600).
+**Source:** `traits/www/canvas/canvas.rs` — `const BRIDGE` template literal (~line 601).
 
-**Injection mechanism:** The `renderCanvas(content)` function prepends BRIDGE into the game HTML before setting `phoneViewport.srcdoc`:
-- If the content has `<head>`, BRIDGE is inserted after the opening `<head>` tag.
-- If the content has `<html>` but no `<head>`, a `<head>` wrapper is created for BRIDGE.
-- If the content is a bare fragment, a full HTML skeleton is generated with BRIDGE included.
+**Injection:** `renderCanvas(content)` prepends BRIDGE into game HTML before setting `phoneViewport.srcdoc`:
+- Content with `<head>` → inserted after opening `<head>` tag
+- Content with `<html>` but no `<head>` → `<head>` wrapper created
+- Bare fragment → full HTML skeleton generated with BRIDGE included
 
-### What the bridge provides:
+### `window.traits` API Reference
 
-1. **`window.traits` SDK** — Proxy object that delegates to `window.parent._traitsSDK`:
-   ```javascript
-   window.traits.call(path, args)    // call any trait
-   window.traits.list(namespace?)    // sys.list
-   window.traits.info(path)          // sys.info
-   window.traits.echo(text)          // sys.echo
-   window.traits.canvas(action, content?) // sys.canvas
-   window.traits.audio(action, ...rest)   // sys.audio
-   window.traits.onPause = function() {}  // called when game is paused (optional)
-   window.traits.onResume = function() {} // called when game is resumed (optional)
-   ```
+All methods are available to game code running inside the iframe. The bridge proxies calls to `window.parent._traitsSDK`.
 
-2. **`document.querySelector` patch** — Strips `#phone-viewport` and `#canvas-container` prefixes from selectors, so code written for the outer document works inside the iframe.
+```javascript
+// ── General ──
+window.traits.call(path, args)        // Call any trait by dot-path (e.g. 'sys.echo')
+window.traits.list(namespace?)        // List traits (optionally filtered by namespace)
+window.traits.info(path)              // Get trait metadata
+window.traits.echo(text)              // Echo test
 
-3. **Pause engine** — Monkey-patches `requestAnimationFrame`, `setTimeout`, `setInterval` and their cancel counterparts. On `canvas-pause` message from parent, queues all new rAF/timer callbacks instead of scheduling them. On `canvas-resume`, flushes the queues. Games are generically frozen without cooperation, but can optionally implement `window.traits.onPause` / `window.traits.onResume` for custom pause behavior (e.g., save state, show pause screen).
+// ── Canvas ──
+window.traits.canvas(action, content?) // Canvas operations (read/write scratchpad)
 
-4. **Console capture** — Wraps `console.log/warn/error` to forward messages to the parent via `postMessage`:
-   ```javascript
-   window.parent.postMessage({type:'canvas-console', level:'log'|'warn'|'error', message:string}, '*')
-   ```
-   The parent stores these in `window.__canvasGameLogs` for voice agent context.
+// ── Audio (WebAudio API) ──
+window.traits.audio(action, ...args)  // See Audio section below
 
-5. **Uncaught error capture** — Listens for `window.error` events and forwards them as `canvas-console` error messages.
+// ── High Score ──
+window.traits.score(value?)           // Submit score (if value given) or read synced high score
+                                       // Returns: number (current synced high score for this game)
 
-6. **Two-finger gesture forwarding** — Detects two-finger `touchstart`, `touchmove`, and `touchend` and forwards raw coordinates to the parent via `postMessage`. The parent handles all gesture logic (tap vs swipe, carousel animation). This keeps the bridge thin and ensures the game never receives two-finger events.
+// ── Pause/Resume Hooks (optional) ──
+window.traits.onPause = function() {} // Called when game is paused by two-finger gesture
+window.traits.onResume = function() {} // Called when game is resumed
+```
 
-### postMessage protocol (iframe → parent):
+### Audio API (`window.traits.audio`)
+
+Games can generate sounds via the WebAudio API. The `sys.audio` trait returns action descriptors that the SDK JS bridge executes.
+
+```javascript
+// Tone — single oscillator note
+traits.audio('tone', freq, duration, waveform, volume)
+// freq: 20-20000 Hz (default 440)
+// duration: 0.01-30 seconds (default 0.5)
+// waveform: 'sine'|'square'|'sawtooth'|'triangle' (default 'sine')
+// volume: 0.0-1.0 (default 0.3)
+
+// Sequence — play notes in order
+traits.audio('sequence', notes, tempo, volume)
+// notes: array of {freq, dur, wave} objects
+// tempo: 20-300 BPM (default 120)
+
+// Drum pattern
+traits.audio('drum', pattern, bpm, loops, volume)
+// pattern: string like 'k..s..k.ks..s...' (k=kick, s=snare, h=hihat, .=rest)
+// bpm: 20-300 (default 120), loops: 1-16 (default 2)
+
+// Noise generator
+traits.audio('noise', type, duration, volume)
+// type: 'white'|'pink'|'brown' (default 'white')
+
+// Chord — simultaneous frequencies
+traits.audio('chord', freqs, duration, waveform, volume)
+// freqs: array of Hz values
+
+// Frequency sweep
+traits.audio('sweep', startFreq, endFreq, duration, waveform, volume)
+
+// Control
+traits.audio('stop')     // Stop all audio
+traits.audio('status')   // Check AudioContext state
+```
+
+**Note:** Most games implement their own WebAudio sound effects directly (creating `AudioContext`, `OscillatorNode`, etc.) rather than using `traits.audio()`. The bridge's pause engine automatically patches `AudioContext` to suspend/resume all contexts on pause/resume. Either approach works.
+
+### High Score System (`window.traits.score`)
+
+Cross-client high score synchronization via the relay WebSocket.
+
+**Game-side usage:**
+```javascript
+// Report a score (call whenever score increases)
+window.traits.score(newScore);
+
+// Read the current synced high score for this game
+var best = window.traits.score();
+
+// Listen for real-time high score updates from other clients
+window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'highscore-update') {
+        // e.data.score = new high score from another player
+    }
+});
+```
+
+**Flow:**
+1. Game calls `traits.score(val)` → bridge posts `{type:'canvas-score', score:N}` to parent
+2. Parent computes SHA-256 hash of game content → `window.__activeGameHash` (first 16 hex chars)
+3. Parent updates `window.__highScores[hash]` and sends `{type:'score', game_hash, score}` via sync WebSocket
+4. Relay broadcasts `{type:'score-update', game_hash, score}` to all connected clients
+5. Other clients receive and post `{type:'highscore-update', score}` into their game iframe
+
+**Score variable patterns in existing games:**
+- DOM-based: `<div id="score">0</div>` + `<div id="hs">best: 0</div>` (Snake)
+- Canvas-rendered: `game.score` (Tetronix, Arcanoid, Pixel Runner), `score` global (Blast Zone)
+- All games now have a universal score hook injected before `</body>` that uses MutationObserver on `#score` elements + polling `score`/`game.score` globals every 500ms
+
+### Touch Controls
+
+Games must implement their own touch controls. The bridge does NOT inject any touch abstraction — it only handles two-finger gestures (for carousel navigation) and forwards single-finger touches to the game unmodified.
+
+**Common patterns in existing games:**
+
+| Pattern | Games | Implementation |
+|---------|-------|----------------|
+| Swipe direction | Snake, Tetronix | `touchstart`/`touchend` → compute dx/dy → map to direction |
+| Touch zones (left/center/right) | Pixel Runner | Left 1/3 = left, Right 1/3 = right, Center = jump |
+| Touch drag position | Blast Zone, BrickStorm, Arcanoid | `touchstart`/`touchmove` → set paddle x from touch x |
+| Touch position (aim) | ShooterX | Touch y ≥ 70% = move left/right, else = aim direction |
+| D-pad buttons | Snake (built-in default) | HTML buttons with `click` handlers |
+
+**Multi-touch gotcha:** When using touch zones, track touches by `touch.identifier` and only clear the zone for that specific finger on `touchend`/`touchcancel`. Clearing ALL state on any `touchend` breaks simultaneous left+jump. See Pixel Runner's fixed implementation for reference.
+
+**Two-finger is reserved:** The bridge intercepts all two-finger events for carousel navigation. Games should only rely on single-finger touch.
+
+### Pause Engine
+
+The bridge monkey-patches `requestAnimationFrame`, `setTimeout`, `setInterval` (and their cancel counterparts) plus `AudioContext`. On pause:
+- All new rAF/timer callbacks are queued instead of scheduled
+- All active intervals are cleared and stashed
+- All AudioContexts are suspended
+- `window.traits.onPause()` is called if defined
+
+On resume: queued callbacks are flushed, intervals restarted, AudioContexts resumed, `window.traits.onResume()` called.
+
+**Games are generically frozen without cooperation** — no game code changes needed for basic pause. Custom hooks are optional (e.g., show pause screen, save state).
+
+### Console Capture
+
+The bridge wraps `console.log/warn/error` to forward messages to the parent:
+```javascript
+window.parent.postMessage({type:'canvas-console', level:'log'|'warn'|'error', message:string}, '*')
+```
+Parent stores last 50 entries in `window.__canvasGameLogs` for voice agent context. Uncaught errors (`window.error` events) are also captured.
+
+### postMessage Protocol
+
+**iframe → parent:**
 
 | `type` | Fields | Purpose |
 |--------|--------|---------|
-| `canvas-console` | `level`, `message` | Forward game console output to parent |
-| `canvas-two-finger-start` | `x`, `y` | Two-finger touchstart: midpoint coordinates |
-| `canvas-two-finger-move` | `x`, `y` | Two-finger touchmove: midpoint coordinates |
+| `canvas-console` | `level`, `message` | Forward game console output |
+| `canvas-score` | `score` | Report game score to sync system |
+| `canvas-two-finger-start` | `x`, `y` | Two-finger touchstart midpoint |
+| `canvas-two-finger-move` | `x`, `y` | Two-finger touchmove midpoint |
 | `canvas-two-finger-end` | — | All fingers lifted after two-finger gesture |
 
-### postMessage protocol (parent → iframe):
+**parent → iframe:**
 
 | `type` | Fields | Purpose |
 |--------|--------|---------|
-| `canvas-pause` | — | Freeze game execution (rAF + timers) |
+| `canvas-pause` | — | Freeze game execution (rAF + timers + audio) |
 | `canvas-resume` | — | Resume game execution, flush queued callbacks |
+| `highscore-update` | `score` | New high score from another client |
 
-### Mobile carousel gestures (parent-side):
+### Mobile Carousel Gestures (parent-side)
 
-- **Two-finger contact** → immediately pauses game (sends `canvas-pause` to iframe), shows chrome
-- **Two-finger drag** → physically translates `#phone-viewport` via CSS `translateX`, shows peeking game labels on edges
-- **Release after drag >30% screen width** → animate off-screen, switch game, animate new game in from opposite side, auto-resume
-- **Release after small drag** → snap back, game stays paused, chrome stays visible
-- **Two-finger tap (no drag)** → pause game, show chrome. Single tap while paused → resume + hide chrome
+- **Two-finger contact** → immediately pauses game (sends `canvas-pause`), shows chrome
+- **Two-finger drag** → translates `#phone-viewport` via CSS `translateX`, shows peeking game labels
+- **Release after drag >30% screen width** → animate off-screen, switch game, animate in, auto-resume
+- **Release after small drag** → snap back, game paused, chrome visible
+- **Two-finger tap (no drag)** → pause + show chrome. Single tap while paused → resume + hide chrome
 
-### Extending the bridge:
+### Extending the Bridge
 
-- Edit the `const BRIDGE` template literal in `canvas.rs`.
-- Use `window.parent.postMessage({type:'canvas-*', ...}, '*')` for new iframe→parent messages.
-- Add the corresponding `window.addEventListener('message', ...)` handler in the parent script section of `canvas.rs`.
-- Keep the bridge ES5-compatible (use `var`, `function`, no arrow functions) — some games may set strict CSP or run in older WebView contexts.
-- The bridge must be a **self-executing IIFE** wrapped in `<script>...</script>` tags.
-- The closing tag must be escaped as `<\/script>` since it lives inside a JS template literal.
+- Edit `const BRIDGE` in `canvas.rs` (~line 601)
+- Use `window.parent.postMessage({type:'canvas-*', ...}, '*')` for new iframe→parent messages
+- Add corresponding `window.addEventListener('message', ...)` in the parent script section
+- **Keep ES5-compatible** (`var`, `function`, no arrow functions)
+- Must be a self-executing IIFE wrapped in `<script>...</script>`
+- Escape closing tag as `<\/script>` (lives inside a JS template literal)
+
+---
+
+## Game Sync & REST API
+
+Games are synced between all connected clients via a **Cloudflare Durable Object** (`GameRoom`). The relay also exposes a REST API for reading, editing, and deleting games programmatically.
+
+**Relay:** `relay/src/index.js` — Cloudflare Worker at `https://relay.traits.build`
+**Deploy:** `cd relay && npx wrangler deploy`
+
+### REST Endpoints
+
+All endpoints are under `https://relay.traits.build/sync/`. CORS allows all origins.
+
+```bash
+# List all games (name, hash, size, updated)
+curl -s https://relay.traits.build/sync/games | python3 -m json.tool
+
+# Get full HTML content of one game
+curl -s https://relay.traits.build/sync/game/<HASH>
+
+# Update a game (content + optional rename) — returns new hash
+curl -X PUT https://relay.traits.build/sync/game/<HASH> \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "Game Name", "content": "<html>...</html>"}'
+
+# Delete a game
+curl -X DELETE https://relay.traits.build/sync/game/<HASH>
+
+# List all high scores
+curl -s https://relay.traits.build/sync/scores
+```
+
+### REST Response Formats
+
+**GET /sync/games:**
+```json
+[{"content_hash":"42ac8829...","name":"Pixel Runner","size":28288,"updated":"2026-04-09T..."}]
+```
+
+**GET /sync/game/:hash:**
+```json
+{"content_hash":"42ac8829...","name":"Pixel Runner","content":"<!DOCTYPE html>...","updated":"..."}
+```
+
+**PUT /sync/game/:hash:**
+```json
+{"ok":true,"old_hash":"f52da07a...","content_hash":"42ac8829...","name":"Pixel Runner","size":28288}
+```
+Note: PUT computes a new SHA-256 hash from the updated content. The old hash becomes invalid. Broadcasts the update to all connected WebSocket clients immediately.
+
+**DELETE /sync/game/:hash:**
+```json
+{"ok":true,"deleted":"71e0d5ff..."}
+```
+
+### Agent Workflow: Editing Games via REST
+
+To programmatically view and modify synced games:
+
+```bash
+# 1. List games to find the hash
+curl -s https://relay.traits.build/sync/games | python3 -c "
+import sys,json
+for g in json.loads(sys.stdin.read()):
+    print(f'{g[\"content_hash\"]} {g[\"size\"]:>6}B  {g[\"name\"]}')
+"
+
+# 2. Download a game
+curl -s https://relay.traits.build/sync/game/HASH | python3 -c "
+import sys,json; print(json.loads(sys.stdin.read())['content'])" > /tmp/game.html
+
+# 3. Edit the HTML (search/replace, inject code, fix bugs)
+
+# 4. Push the modified game back
+python3 -c "
+import urllib.request, ssl, json
+html = open('/tmp/game.html').read()
+data = json.dumps({'name': 'Game Name', 'content': html}).encode()
+req = urllib.request.Request(
+    'https://relay.traits.build/sync/game/HASH',
+    data=data,
+    headers={'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'},
+    method='PUT')
+with urllib.request.urlopen(req, context=ssl.create_default_context()) as r:
+    print(json.loads(r.read()))
+"
+```
+
+**Important:** Python's default `User-Agent` (`Python-urllib/3.x`) is blocked by Cloudflare. Always set `User-Agent: Mozilla/5.0` when using Python `urllib`. Alternatively, use `curl` via subprocess.
+
+### Batch Processing Games
+
+For bulk operations (fix controls, inject score hooks, rename, delete stubs), write a Python script:
+
+```python
+import urllib.request, ssl, json
+API = 'https://relay.traits.build/sync'
+UA = {'User-Agent': 'Mozilla/5.0'}
+ctx = ssl.create_default_context()
+
+def api_get(path):
+    req = urllib.request.Request(f'{API}{path}', headers=UA)
+    with urllib.request.urlopen(req, context=ctx) as r:
+        return json.loads(r.read())
+
+def api_put(path, data):
+    body = json.dumps(data).encode()
+    req = urllib.request.Request(f'{API}{path}', data=body,
+        headers={**UA, 'Content-Type': 'application/json'}, method='PUT')
+    with urllib.request.urlopen(req, context=ctx) as r:
+        return json.loads(r.read())
+
+def api_delete(path):
+    req = urllib.request.Request(f'{API}{path}', headers=UA, method='DELETE')
+    with urllib.request.urlopen(req, context=ctx) as r:
+        return json.loads(r.read())
+
+# List all games
+games = api_get('/games')
+
+# Get game content
+data = api_get(f'/game/{hash}')
+html = data['content']
+
+# Modify and push back
+html = html.replace('old', 'new')
+result = api_put(f'/game/{hash}', {'name': 'New Name', 'content': html})
+# result['content_hash'] = new hash (old hash is now invalid)
+```
+
+### WebSocket Game Sync Protocol
+
+Clients connect via `wss://relay.traits.build/sync` for real-time game sync. The parent `canvas.rs` manages this connection.
+
+**Server → Client messages:**
+
+| `type` | Fields | Purpose |
+|--------|--------|---------|
+| `sync` | `games[]` | Full game catalog or incremental update. Each entry: `{content_hash, name, content, updated}` |
+| `scores` | `scores[]` | Initial high score catalog. Each: `{game_hash, score, player, updated}` |
+| `score-update` | `game_hash`, `score` | Real-time high score broadcast |
+
+**Client → Server messages:**
+
+| `type` | Fields | Purpose |
+|--------|--------|---------|
+| `sync` | `games[]` | Push local games to server |
+| `score` | `game_hash`, `score` | Report a new high score |
+
+### Current Game Inventory (as of April 2026)
+
+8 games, all with score integration + touch controls:
+
+| Hash (first 8) | Name | Size | Controls | Notes |
+|----------------|------|------|----------|-------|
+| `f3861a4b` | Snake Classic | ~7KB | D-pad buttons + keyboard + swipe | Simple grid snake |
+| `d1bd2198` | Snake | ~26KB | D-pad buttons + keyboard + canvas swipe | Feature-rich snake |
+| `fef61d05` | Tetronix | ~29KB | Keyboard + swipe gestures | Tetris clone with powerups |
+| `420c8ded` | ShooterX | ~27KB | Keyboard + touch position | Space shooter |
+| `ebb3564c` | Blast Zone! | ~29KB | Keyboard + touch drag paddle | Breakout with levels/powerups |
+| `8b4fa1da` | BrickStorm DX | ~28KB | Keyboard + touch drag paddle | Breakout variant |
+| `d58e092b` | Arcanoid Ultra | ~23KB | Keyboard + touch drag paddle | Arcanoid clone |
+| `42ac8829` | Pixel Runner | ~28KB | Keyboard + touch zones (L/J/R) | Platformer runner |
+
+**Note:** Game hashes change whenever content is updated (hash = SHA-256 of content, first 16 hex chars). Always use `GET /sync/games` to get current hashes before editing.
 
 ---
 
