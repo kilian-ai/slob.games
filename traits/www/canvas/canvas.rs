@@ -1200,6 +1200,23 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 if (!sdk) return;
                                 const res = await sdk.call('sys.canvas', ['fork']);
                                 const r = res?.result || res || {};
+                                // Best-effort: also fork the source external game into relay internal room for logged-in users.
+                                try {
+                                    const token = (localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '').trim();
+                                    const col = readGamesCollection();
+                                    const active = col.active && col.games ? col.games[col.active] : null;
+                                    const sourceHash = active ? (active._sync_hash || active.checksum || '') : '';
+                                    if (token && sourceHash) {
+                                        await fetch('https://relay.traits.build/sync/internal/fork', {
+                                            method: 'POST',
+                                            headers: {
+                                                'Content-Type': 'application/json',
+                                                'Authorization': 'Bearer ' + token,
+                                            },
+                                            body: JSON.stringify({ source_hash: sourceHash }),
+                                        });
+                                    }
+                                } catch(_) {}
                                 if (r.forked) {
                                     renderProjectBar();
                                     alert('Saved to your internal games: ' + (r.name || 'untitled'));
