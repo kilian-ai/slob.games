@@ -269,9 +269,77 @@ export class GameRoom {
   }
 
   async fetch(request) {
+    const url = new URL(request.url);
+
+    // ── REST API (non-WebSocket) ──
     if (request.headers.get("Upgrade") !== "websocket") {
-      return new Response("WebSocket required", { status: 426, headers: cors() });
+      // GET /games — list all games (name, hash, size, updated)
+      if (url.pathname === "/games" && request.method === "GET") {
+        const rows = this.sql.exec(
+          "SELECT content_hash, name, size, updated FROM games ORDER BY updated DESC"
+        ).toArray();
+        return json(rows);
+      }
+
+      // GET /game/:hash — full HTML content of one game
+      if (url.pathname.startsWith("/game/") && request.method === "GET") {
+        const hash = url.pathname.slice(6);
+        if (!hash) return json({ error: "missing hash" }, 400);
+        const rows = this.sql.exec(
+          "SELECT content_hash, name, content, updated FROM games WHERE content_hash = ?", hash
+        ).toArray();
+        if (rows.length === 0) return json({ error: "not found" }, 404);
+        return json(rows[0]);
+      }
+
+      // PUT /game/:hash — update game content, broadcast to all connected clients
+      if (url.pathname.startsWith("/game/") && request.method === "PUT") {
+        const hash = url.pathname.slice(6);
+        if (!hash) return json({ error: "missing hash" }, 400);
+        const existing = this.sql.exec(
+          "SELECT content_hash, name FROM games WHERE content_hash = ?", hash
+        ).toArray();
+        if (existing.length === 0) return json({ error: "not found" }, 404);
+
+        const body = await request.json();
+        const content = body.content;
+        if (!content || typeof content !== 'string') return json({ error: "missing content" }, 400);
+        if (content.length > 256 * 1024) return json({ error: "too large" }, 413);
+
+        // Compute new hash
+        const newHash = await sha256hex16(content);
+        const name = body.name || existing[0].name;
+        const updated = new Date().toISOString();
+
+        // Delete old row, insert with new hash
+        this.sql.exec("DELETE FROM games WHERE content_hash = ?", hash);
+        this.sql.exec(
+          "INSERT INTO games (content_hash, name, content, updated, size) VALUES (?, ?, ?, ?, ?)",
+          newHash, name.slice(0, 100), content, updated, content.length
+        );
+
+        // Broadcast updated game to all connected WebSocket clients
+        const msg = JSON.stringify({
+          type: 'sync',
+          games: [{ content_hash: newHash, name: name.slice(0, 100), content, updated }]
+        });
+        for (const sock of this.state.getWebSockets()) {
+          try { sock.send(msg); } catch (_) {}
+        }
+
+        return json({ ok: true, old_hash: hash, content_hash: newHash, name, size: content.length });
+      }
+
+      // GET /scores — all high scores
+      if (url.pathname === "/scores" && request.method === "GET") {
+        const rows = this.sql.exec("SELECT game_hash, score, player, updated FROM scores").toArray();
+        return json(rows);
+      }
+
+      return json({ error: "WebSocket upgrade required or use REST endpoints" }, 426);
     }
+
+    // ── WebSocket upgrade ──
     const pair = new WebSocketPair();
     this.state.acceptWebSocket(pair[1]);
 
@@ -510,13 +578,25 @@ export default {
       return json({ ...data, code }); // always include resolved code in response
     }
 
-    // GET /sync → WebSocket upgrade to global GameRoom
-    if (url.pathname === "/sync") {
-      if (request.headers.get("Upgrade") !== "websocket") {
-        return json({ error: "WebSocket upgrade required" }, 426);
-      }
+    // /sync routes → global GameRoom
+    if (url.pathname === "/sync" || url.pathname.startsWith("/sync/")) {
       const room = env.GAME_ROOM.get(env.GAME_ROOM.idFromName("global"));
-      return room.fetch(request);
+
+      // WebSocket upgrade: /sync
+      if (url.pathname === "/sync") {
+        if (request.headers.get("Upgrade") !== "websocket") {
+          return json({ error: "WebSocket upgrade required" }, 426);
+        }
+        return room.fetch(request);
+      }
+
+      // REST: /sync/games → DO /games
+      // REST: /sync/game/:hash → DO /game/:hash
+      // REST: /sync/scores → DO /scores
+      const doPath = url.pathname.slice(5); // strip '/sync'
+      const doUrl = new URL(request.url);
+      doUrl.pathname = doPath;
+      return room.fetch(new Request(doUrl.toString(), request));
     }
 
     return json({ error: "not found" }, 404);
