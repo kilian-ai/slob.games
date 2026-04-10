@@ -556,7 +556,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             games.forEach(g => {
                                 const opt = document.createElement('option');
                                 opt.value = g.id;
-                                const scopeTag = (g.scope === 'external') ? '[E]' : '[I]';
+                                const scopeTag = (g.scope === 'external') ? '🌐' : '🏠';
                                 opt.textContent = scopeTag + ' ' + (g.name || 'untitled');
                                 if (g.active) opt.selected = true;
                                 sel.appendChild(opt);
