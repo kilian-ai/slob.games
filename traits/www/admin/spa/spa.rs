@@ -65,6 +65,7 @@ pub fn spa(_args: &[Value]) -> Value {
                         h2 { "Games" }
                         p.note { "Games synced to this device. Play or edit in Build mode, or delete." }
                         div id="gamesList" { p.muted { "Loading games…" } }
+                        button.danger onclick="cleanupGames()" style="margin-top:8px;font-size:11px;opacity:0.7" { "Clean up duplicates" }
                     }
 
                     // Secrets & Environment
@@ -647,6 +648,50 @@ function deleteGame(id, name) {
   callTrait('sys.canvas', ['delete', id]).then(function() {
     renderGames();
   });
+}
+
+function cleanupGames() {
+  try {
+    var raw = localStorage.getItem('traits.pvfs') || '{}';
+    var files = JSON.parse(raw);
+    var col = files['canvas/games.json'] ? JSON.parse(files['canvas/games.json']) : { active: null, games: {} };
+    var byName = {};
+    for (var id in col.games) {
+      if (!col.games.hasOwnProperty(id)) continue;
+      var g = col.games[id];
+      var nk = (g.name || 'untitled').trim().toLowerCase();
+      if (!byName[nk]) { byName[nk] = []; }
+      byName[nk].push(id);
+    }
+    var removed = 0;
+    for (var nk in byName) {
+      var ids = byName[nk];
+      if (ids.length <= 1) continue;
+      ids.sort(function(a, b) {
+        var la = (col.games[a].content || '').length;
+        var lb = (col.games[b].content || '').length;
+        if (lb !== la) return lb - la;
+        return (col.games[b].updated || '').localeCompare(col.games[a].updated || '');
+      });
+      var keep = ids[0];
+      for (var i = 1; i < ids.length; i++) {
+        var del = ids[i];
+        if (col.active === del) col.active = keep;
+        delete col.games[del];
+        removed++;
+      }
+    }
+    if (removed > 0) {
+      files['canvas/games.json'] = JSON.stringify(col);
+      localStorage.setItem('traits.pvfs', JSON.stringify(files));
+      renderGames();
+      alert('Removed ' + removed + ' duplicate' + (removed === 1 ? '' : 's') + '.');
+    } else {
+      alert('No duplicates found.');
+    }
+  } catch(e) {
+    alert('Cleanup failed: ' + e.message);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
