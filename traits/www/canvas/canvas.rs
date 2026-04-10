@@ -533,6 +533,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             for (const [id, g] of Object.entries(col.games || {})) {
                                 list.push({
                                     id, name: g.name || 'untitled',
+                                    scope: g.scope || g._scope || 'internal',
                                     length: (g.content || '').length,
                                     active: id === col.active,
                                     updated: g.updated || ''
@@ -555,7 +556,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                             games.forEach(g => {
                                 const opt = document.createElement('option');
                                 opt.value = g.id;
-                                opt.textContent = (g.name || 'untitled');
+                                const scopeTag = (g.scope === 'external') ? '[E]' : '[I]';
+                                opt.textContent = scopeTag + ' ' + (g.name || 'untitled');
                                 if (g.active) opt.selected = true;
                                 sel.appendChild(opt);
                             });
