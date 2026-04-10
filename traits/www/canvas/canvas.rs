@@ -489,7 +489,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 var byName = {};
                                 for (var id in col.games) {
                                     var g = col.games[id];
-                                    var n = (g.name || 'untitled').trim().toLowerCase();
+                                    var scope = (g.scope || g._scope || 'internal');
+                                    var n = scope + '|' + (g.name || 'untitled').trim().toLowerCase();
                                     if (!byName[n]) byName[n] = [];
                                     byName[n].push(id);
                                 }
@@ -1924,7 +1925,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                                         let matchedId = null;
                                         if (nameKey) {
                                             for (const [eid, eg] of Object.entries(col.games)) {
-                                                if ((eg.name || '').trim().toLowerCase() === nameKey) {
+                                                const es = (eg.scope || eg._scope || 'internal');
+                                                if (es === 'external' && (eg.name || '').trim().toLowerCase() === nameKey) {
                                                     matchedId = eid;
                                                     break;
                                                 }

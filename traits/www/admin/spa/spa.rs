@@ -66,7 +66,7 @@ pub fn spa(_args: &[Value]) -> Value {
                         h2 style="margin:0;" { "Games" }
                         button.primary onclick="cleanupGames()" style="font-size:11px;padding:6px 10px;" { "Clean Duplicates" }
                       }
-                        p.note { "Games synced to this device. Play or edit in Build mode, or delete." }
+                        p.note { "Internal games only. External games appear on the Play page." }
                       p.note id="gamesSummary" { "—" }
                         div id="gamesList" { p.muted { "Loading games…" } }
                     }
@@ -578,11 +578,11 @@ function renderGames() {
       var gx = gObj[id] || {};
       var scope = (gx.scope || gx._scope || 'internal');
       if (scope === 'external') externalCount++; else internalCount++;
-      games.push([id, gx]);
+      if (scope !== 'external') games.push([id, gx]);
     }
   }
   if (summary) {
-    summary.textContent = 'Local library: ' + internalCount + ' internal, ' + externalCount + ' external copies.';
+    summary.textContent = 'Internal: ' + internalCount + '. External hidden here: ' + externalCount + '.';
   }
   if (!games.length) {
     el.innerHTML = '<div class="no-games">No games stored yet. Play some games first.</div>';
@@ -673,6 +673,8 @@ function cleanupGames() {
     for (var id in col.games) {
       if (!col.games.hasOwnProperty(id)) continue;
       var g = col.games[id];
+      var scope = (g.scope || g._scope || 'internal');
+      if (scope === 'external') continue;
       var nk = (g.name || 'untitled').trim().toLowerCase();
       if (!byName[nk]) { byName[nk] = []; }
       byName[nk].push(id);
