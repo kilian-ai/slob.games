@@ -573,16 +573,21 @@ function renderGames() {
     el.innerHTML = '<div class="no-games">No games stored yet. Play some games first.</div>';
     return;
   }
-  games.sort(function(a, b) { return (a[1].name || '').localeCompare(b[1].name || ''); });
-  var seen = {};
-  var unique = [];
+  // Dedupe by name: keep largest/newest per name
+  var byName = {};
   for (var j = 0; j < games.length; j++) {
     var gg = games[j][1] || {};
-    var key = gg.checksum || gg._sync_hash || '';
-    if (key && seen[key]) continue;
-    if (key) seen[key] = true;
-    unique.push(games[j]);
+    var nk = (gg.name || 'untitled').trim().toLowerCase();
+    if (!byName[nk]) { byName[nk] = games[j]; continue; }
+    var prevLen = (byName[nk][1].content || '').length;
+    var curLen = (gg.content || '').length;
+    if (curLen > prevLen || (curLen === prevLen && (gg.updated || '') > (byName[nk][1].updated || ''))) {
+      byName[nk] = games[j];
+    }
   }
+  var unique = [];
+  for (var nk in byName) { if (byName.hasOwnProperty(nk)) unique.push(byName[nk]); }
+  unique.sort(function(a, b) { return (a[1].name || '').localeCompare(b[1].name || ''); });
   games = unique;
   var html = '';
   for (var i = 0; i < games.length; i++) {
