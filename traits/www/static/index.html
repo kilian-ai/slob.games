@@ -62,7 +62,8 @@ a:hover{text-decoration:underline}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
 
 /* ── Page frame ── */
-#page-frame{min-height:calc(100vh - 48px);position:relative;overflow:hidden}
+#page-frame{min-height:calc(100vh - 48px);position:relative;overflow-y:auto}
+#page-frame.no-scroll{overflow:hidden}
 
 /* ── Voice overlay ── */
 #voice-overlay{position:fixed;bottom:16px;right:20px;display:none;align-items:center;gap:8px;padding:8px 14px;border-radius:10px;background:rgba(124,92,252,.12);border:1px solid rgba(124,92,252,.3);backdrop-filter:blur(12px);z-index:9998;font-size:12px;color:rgba(255,255,255,.7);transition:opacity .3s}
@@ -88,7 +89,8 @@ a:hover{text-decoration:underline}
   #shell-nav .links{gap:0.75rem;font-size:0.82rem}
 }
 @media(max-width:768px) and (pointer:coarse){
-  #page-frame{min-height:100vh;height:100vh}
+  #page-frame{min-height:100vh}
+  #page-frame.no-scroll{height:100vh}
   #voice-overlay{bottom:10px;right:10px;font-size:11px;padding:6px 10px}
 }
 </style>
@@ -314,6 +316,9 @@ async function injectPage(fullHtml, route) {
   document.querySelectorAll('link[data-page]').forEach(l => l.remove());
   document.querySelectorAll('body > .terminal-wrap').forEach(t => t.remove());
   frame.style.paddingBottom = '';
+
+  // Canvas needs overflow:hidden (game iframe); other pages need scroll
+  frame.classList.toggle('no-scroll', route === '/');
 
   const parser = new DOMParser();
   const doc = parser.parseFromString(fullHtml, 'text/html');
