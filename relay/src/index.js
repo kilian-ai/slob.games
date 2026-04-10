@@ -442,19 +442,23 @@ export class GameRoom {
         if (!Number.isFinite(incoming) || incoming < 0) return;
         const player = (typeof data.player === 'string' ? data.player : '').slice(0, 50);
 
-        // Only store if it's higher than existing
+        // Only store if it's higher than existing (or same score adding player info)
         const existing = this.sql.exec(
-          "SELECT score FROM scores WHERE game_hash = ?", data.game_hash
+          "SELECT score, player FROM scores WHERE game_hash = ?", data.game_hash
         ).toArray();
 
-        if (existing.length > 0 && existing[0].score >= incoming) {
-          // Not a new high score — just send back the current best
-          ws.send(JSON.stringify({
-            type: 'score-update',
-            game_hash: data.game_hash,
-            score: existing[0].score
-          }));
-          return;
+        if (existing.length > 0) {
+          const dominated = incoming < existing[0].score ||
+            (incoming === existing[0].score && (!player || existing[0].player));
+          if (dominated) {
+            ws.send(JSON.stringify({
+              type: 'score-update',
+              game_hash: data.game_hash,
+              score: existing[0].score,
+              player: existing[0].player || ''
+            }));
+            return;
+          }
         }
 
         const updated = new Date().toISOString();
