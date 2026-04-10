@@ -349,6 +349,63 @@ dep = "namespace.concrete_trait"
 
 ---
 
+## Canvas Bridge Script
+
+Every game loaded into the `#phone-viewport` iframe gets a **bridge `<script>`** injected into its `<head>`. This bridge runs inside the iframe's execution context and provides the game-to-parent communication layer.
+
+**Location:** `traits/www/canvas/canvas.rs` — the `const BRIDGE` template literal (~line 600).
+
+**Injection mechanism:** The `renderCanvas(content)` function prepends BRIDGE into the game HTML before setting `phoneViewport.srcdoc`:
+- If the content has `<head>`, BRIDGE is inserted after the opening `<head>` tag.
+- If the content has `<html>` but no `<head>`, a `<head>` wrapper is created for BRIDGE.
+- If the content is a bare fragment, a full HTML skeleton is generated with BRIDGE included.
+
+### What the bridge provides:
+
+1. **`window.traits` SDK** — Proxy object that delegates to `window.parent._traitsSDK`:
+   ```javascript
+   window.traits.call(path, args)    // call any trait
+   window.traits.list(namespace?)    // sys.list
+   window.traits.info(path)          // sys.info
+   window.traits.echo(text)          // sys.echo
+   window.traits.canvas(action, content?) // sys.canvas
+   window.traits.audio(action, ...rest)   // sys.audio
+   ```
+
+2. **`document.querySelector` patch** — Strips `#phone-viewport` and `#canvas-container` prefixes from selectors, so code written for the outer document works inside the iframe.
+
+3. **Console capture** — Wraps `console.log/warn/error` to forward messages to the parent via `postMessage`:
+   ```javascript
+   window.parent.postMessage({type:'canvas-console', level:'log'|'warn'|'error', message:string}, '*')
+   ```
+   The parent stores these in `window.__canvasGameLogs` for voice agent context.
+
+4. **Uncaught error capture** — Listens for `window.error` events and forwards them as `canvas-console` error messages.
+
+5. **Two-finger tap (mobile chrome toggle)** — Listens for `touchstart` with 2+ touches and posts:
+   ```javascript
+   window.parent.postMessage({type:'canvas-toggle-chrome'}, '*')
+   ```
+   The parent uses this to show/hide the shell-nav and FAB on mobile without intercepting single taps.
+
+### postMessage protocol (iframe → parent):
+
+| `type` | Fields | Purpose |
+|--------|--------|---------|
+| `canvas-console` | `level`, `message` | Forward game console output to parent |
+| `canvas-toggle-chrome` | — | Two-finger tap: toggle mobile UI chrome |
+
+### Extending the bridge:
+
+- Edit the `const BRIDGE` template literal in `canvas.rs`.
+- Use `window.parent.postMessage({type:'canvas-*', ...}, '*')` for new iframe→parent messages.
+- Add the corresponding `window.addEventListener('message', ...)` handler in the parent script section of `canvas.rs`.
+- Keep the bridge ES5-compatible (use `var`, `function`, no arrow functions) — some games may set strict CSP or run in older WebView contexts.
+- The bridge must be a **self-executing IIFE** wrapped in `<script>...</script>` tags.
+- The closing tag must be escaped as `<\/script>` since it lives inside a JS template literal.
+
+---
+
 ## Conventions
 
 - **All trait code is Rust.** Frontend JS is in `terminal.js`, `traits.js`, etc. served as static assets.

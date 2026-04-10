@@ -635,13 +635,33 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     window.parent.postMessage({type:'canvas-console', level:'error', message:msg}, '*');
                                 } catch(_){}
                             });
-                            // Two-finger tap → toggle parent chrome (mobile)
+                            // Two-finger gestures: tap = pause+chrome, swipe L/R = prev/next game
+                            var _twoStart = null;
                             document.addEventListener('touchstart', function(e){
                                 if (e.touches.length >= 2) {
                                     e.preventDefault();
-                                    window.parent.postMessage({type:'canvas-toggle-chrome'}, '*');
+                                    var t0 = e.touches[0], t1 = e.touches[1];
+                                    _twoStart = { x:(t0.clientX+t1.clientX)/2, y:(t0.clientY+t1.clientY)/2, t:Date.now() };
                                 }
                             }, {passive:false});
+                            document.addEventListener('touchend', function(e){
+                                if (!_twoStart) return;
+                                var s = _twoStart; _twoStart = null;
+                                if (e.touches.length > 0) return;
+                                var last = e.changedTouches;
+                                if (last.length < 1) return;
+                                var ex = 0, ey = 0;
+                                for (var i = 0; i < last.length; i++) { ex += last[i].clientX; ey += last[i].clientY; }
+                                ex /= last.length; ey /= last.length;
+                                var dx = ex - s.x, dy = ey - s.y;
+                                var dist = Math.sqrt(dx*dx + dy*dy);
+                                if (dist < 30) {
+                                    window.parent.postMessage({type:'canvas-toggle-chrome'}, '*');
+                                } else if (Math.abs(dx) > Math.abs(dy)) {
+                                    if (dx > 0) { window.parent.postMessage({type:'canvas-next-game'}, '*'); }
+                                    else { window.parent.postMessage({type:'canvas-prev-game'}, '*'); }
+                                }
+                            }, {passive:true});
                         })();<\/script>`;
 
                         function renderCanvas(content) {
@@ -1335,6 +1355,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             const fab = document.getElementById('canvas-fab');
                             let hideTimer = null;
                             let chromeVisible = true;
+                            let gamePaused = false;
                             const HIDE_DELAY = 3000;
 
                             function showChrome() {
@@ -1342,7 +1363,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 if (shellNav) { shellNav.style.transition = 'opacity 0.3s, transform 0.3s'; shellNav.style.opacity = '1'; shellNav.style.transform = 'translateY(0)'; shellNav.style.pointerEvents = ''; }
                                 if (fab) fab.classList.remove('mob-hidden');
                                 clearTimeout(hideTimer);
-                                hideTimer = setTimeout(hideChrome, HIDE_DELAY);
+                                if (!gamePaused) hideTimer = setTimeout(hideChrome, HIDE_DELAY);
                             }
 
                             function hideChrome() {
@@ -1358,20 +1379,74 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 if (fab) fab.classList.add('mob-hidden');
                             }
 
-                            // Two-finger tap inside iframe → toggle chrome (via bridge postMessage)
-                            window.addEventListener('message', (e) => {
-                                if (e.data?.type === 'canvas-toggle-chrome') {
-                                    if (chromeVisible) { hideChrome(); } else { showChrome(); }
+                            // Pause overlay
+                            const pauseOverlay = document.createElement('div');
+                            pauseOverlay.id = 'canvas-pause-overlay';
+                            pauseOverlay.style.cssText = 'display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;' +
+                                'background:rgba(0,0,0,0.6);z-index:8998;align-items:center;justify-content:center;' +
+                                'flex-direction:column;backdrop-filter:blur(4px);pointer-events:none;transition:opacity 0.2s;';
+                            pauseOverlay.innerHTML = '<div style="font-size:48px;margin-bottom:8px">⏸</div>' +
+                                '<div style="color:#b8a4fc;font-size:14px;font-weight:600;letter-spacing:0.05em">PAUSED</div>' +
+                                '<div style="color:#666;font-size:11px;margin-top:6px">two-finger tap to resume</div>';
+                            document.body.appendChild(pauseOverlay);
+
+                            function togglePause() {
+                                gamePaused = !gamePaused;
+                                const vp = document.getElementById('phone-viewport');
+                                if (gamePaused) {
+                                    pauseOverlay.style.display = 'flex';
+                                    showChrome();
+                                    clearTimeout(hideTimer); // keep chrome visible while paused
+                                    hideTimer = null;
+                                } else {
+                                    pauseOverlay.style.display = 'none';
+                                    hideChrome();
                                 }
+                            }
+
+                            function switchGame(direction) {
+                                const gs = document.getElementById('game-select');
+                                if (!gs || gs.options.length < 2) return;
+                                const idx = gs.selectedIndex;
+                                const next = direction === 'next'
+                                    ? (idx + 1) % gs.options.length
+                                    : (idx - 1 + gs.options.length) % gs.options.length;
+                                gs.selectedIndex = next;
+                                gs.dispatchEvent(new Event('change'));
+                            }
+
+                            // Bridge messages from iframe
+                            window.addEventListener('message', (e) => {
+                                if (e.data?.type === 'canvas-toggle-chrome') { togglePause(); }
+                                else if (e.data?.type === 'canvas-next-game') { switchGame('next'); }
+                                else if (e.data?.type === 'canvas-prev-game') { switchGame('prev'); }
                             });
 
-                            // Two-finger tap on parent document itself (outside iframe)
+                            // Two-finger gestures on parent document itself (outside iframe)
+                            let _twoStart = null;
                             document.addEventListener('touchstart', (e) => {
                                 if (e.touches.length >= 2) {
                                     e.preventDefault();
-                                    if (chromeVisible) { hideChrome(); } else { showChrome(); }
+                                    const t0 = e.touches[0], t1 = e.touches[1];
+                                    _twoStart = { x:(t0.clientX+t1.clientX)/2, y:(t0.clientY+t1.clientY)/2 };
                                 }
                             }, { passive: false });
+                            document.addEventListener('touchend', (e) => {
+                                if (!_twoStart) return;
+                                const s = _twoStart; _twoStart = null;
+                                if (e.touches.length > 0) return;
+                                const last = e.changedTouches;
+                                if (last.length < 1) return;
+                                let ex = 0, ey = 0;
+                                for (let i = 0; i < last.length; i++) { ex += last[i].clientX; ey += last[i].clientY; }
+                                ex /= last.length; ey /= last.length;
+                                const dx = ex - s.x, dy = ey - s.y;
+                                const dist = Math.sqrt(dx*dx + dy*dy);
+                                if (dist < 30) { togglePause(); }
+                                else if (Math.abs(dx) > Math.abs(dy)) {
+                                    if (dx > 0) switchGame('next'); else switchGame('prev');
+                                }
+                            });
 
                             // Taps on FAB/shell-nav/modals: reset hide timer
                             document.addEventListener('click', (e) => {
