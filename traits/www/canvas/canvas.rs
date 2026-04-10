@@ -1707,6 +1707,184 @@ pub fn canvas(_args: &[Value]) -> Value {
                             }
                         }
 
+                        // ── Game Sync: auto-share games via relay WebSocket ──
+                        (async function initGameSync() {
+                            const RELAY_WS = 'wss://relay.traits.build/sync';
+                            const MAX_PUSH_SIZE = 256 * 1024; // 256KB per game
+
+                            async function contentHash(str) {
+                                const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str || ''));
+                                const arr = new Uint8Array(buf);
+                                let hex = '';
+                                for (let i = 0; i < arr.length; i++) hex += arr[i].toString(16).padStart(2, '0');
+                                return hex.slice(0, 16);
+                            }
+
+                            // Read local games and compute their content hashes
+                            async function localGamesWithHashes() {
+                                const col = readGamesCollection();
+                                const result = [];
+                                for (const [id, g] of Object.entries(col.games || {})) {
+                                    if (!g.content) continue;
+                                    const hash = await contentHash(g.content);
+                                    result.push({ id, name: g.name || 'untitled', content: g.content, hash });
+                                }
+                                return result;
+                            }
+
+                            // Add synced games to local collection without disrupting active game
+                            function addSyncedGames(games, localHashes) {
+                                if (!games.length) return 0;
+                                try {
+                                    const raw = localStorage.getItem('traits.pvfs') || '{}';
+                                    const files = JSON.parse(raw);
+                                    const col = files['canvas/games.json']
+                                        ? JSON.parse(files['canvas/games.json'])
+                                        : { active: null, games: {} };
+
+                                    // Build set of existing content hashes
+                                    const existing = new Set(localHashes || []);
+                                    // Also check _sync_hash on stored games
+                                    for (const g of Object.values(col.games || {})) {
+                                        if (g._sync_hash) existing.add(g._sync_hash);
+                                    }
+
+                                    let added = 0;
+                                    for (const g of games) {
+                                        if (!g.content || !g.content_hash) continue;
+                                        if (existing.has(g.content_hash)) continue;
+
+                                        const gameId = 's' + g.content_hash.slice(0, 11);
+                                        // Skip if ID already taken (very unlikely collision)
+                                        if (col.games[gameId]) continue;
+
+                                        col.games[gameId] = {
+                                            name: g.name || 'untitled',
+                                            content: g.content,
+                                            created: g.updated || new Date().toISOString(),
+                                            updated: g.updated || new Date().toISOString(),
+                                            _sync_hash: g.content_hash
+                                        };
+                                        existing.add(g.content_hash);
+                                        added++;
+                                    }
+
+                                    if (added > 0) {
+                                        if (!col.active && Object.keys(col.games).length > 0) {
+                                            col.active = Object.keys(col.games)[0];
+                                        }
+                                        files['canvas/games.json'] = JSON.stringify(col);
+                                        localStorage.setItem('traits.pvfs', JSON.stringify(files));
+                                        renderProjectBar();
+                                    }
+                                    return added;
+                                } catch (e) {
+                                    console.warn('[sync] add failed:', e);
+                                    return 0;
+                                }
+                            }
+
+                            let ws = null;
+                            let reconnectDelay = 2000;
+                            let _syncing = false; // prevent re-entrant sync from storage events
+
+                            function connect() {
+                                if (ws) return;
+                                try { ws = new WebSocket(RELAY_WS); } catch (e) { scheduleReconnect(); return; }
+
+                                ws.onopen = () => {
+                                    reconnectDelay = 2000;
+                                    console.log('[sync] connected');
+                                };
+
+                                ws.onmessage = async (e) => {
+                                    let data;
+                                    try { data = JSON.parse(e.data); } catch (_) { return; }
+
+                                    if (data.type === 'catalog') {
+                                        // Server sent its hash catalog — compare with local
+                                        const serverHashes = new Set(data.hashes || []);
+                                        const local = await localGamesWithHashes();
+                                        const localHashSet = new Set(local.map(g => g.hash));
+
+                                        // Request games we don't have
+                                        const need = [...serverHashes].filter(h => !localHashSet.has(h));
+                                        if (need.length > 0) {
+                                            ws.send(JSON.stringify({ type: 'need', hashes: need }));
+                                        }
+
+                                        // Push games server doesn't have
+                                        const toPush = local.filter(g =>
+                                            !serverHashes.has(g.hash) &&
+                                            g.content.length > 0 &&
+                                            g.content.length <= MAX_PUSH_SIZE
+                                        );
+                                        if (toPush.length > 0) {
+                                            ws.send(JSON.stringify({
+                                                type: 'push',
+                                                games: toPush.map(g => ({
+                                                    name: g.name,
+                                                    content: g.content,
+                                                    content_hash: g.hash
+                                                }))
+                                            }));
+                                        }
+                                    }
+
+                                    if (data.type === 'games') {
+                                        // Full game content from server (response to 'need')
+                                        const localHashes = (await localGamesWithHashes()).map(g => g.hash);
+                                        _syncing = true;
+                                        addSyncedGames(data.games, localHashes);
+                                        _syncing = false;
+                                    }
+
+                                    if (data.type === 'sync') {
+                                        // Real-time broadcast from another client
+                                        const localHashes = (await localGamesWithHashes()).map(g => g.hash);
+                                        _syncing = true;
+                                        const added = addSyncedGames(data.games, localHashes);
+                                        _syncing = false;
+                                        if (added > 0) console.log('[sync] received', added, 'new game(s)');
+                                    }
+                                };
+
+                                ws.onclose = () => { ws = null; scheduleReconnect(); };
+                                ws.onerror = () => {};
+                            }
+
+                            function scheduleReconnect() {
+                                setTimeout(() => {
+                                    reconnectDelay = Math.min(reconnectDelay * 1.5, 30000);
+                                    connect();
+                                }, reconnectDelay);
+                            }
+
+                            // Push new games when local collection changes
+                            window.addEventListener('traits-canvas-projects-changed', async () => {
+                                if (_syncing) return; // don't echo sync-adds
+                                if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                                const local = await localGamesWithHashes();
+                                const toPush = local.filter(g =>
+                                    g.content.length > 0 &&
+                                    g.content.length <= MAX_PUSH_SIZE
+                                );
+                                if (toPush.length > 0) {
+                                    ws.send(JSON.stringify({
+                                        type: 'push',
+                                        games: toPush.map(g => ({
+                                            name: g.name,
+                                            content: g.content,
+                                            content_hash: g.hash
+                                        }))
+                                    }));
+                                }
+                            });
+
+                            // Start sync
+                            connect();
+                        })();
+
                         // ── Desktop: scale phone frame to fit viewport height ──
                         if (!isMobile) {
                             const phoneFrame = document.getElementById('phone-frame');

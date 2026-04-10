@@ -4,6 +4,9 @@
  * One RelaySession DO per pairing code. The DO holds all in-flight state
  * in memory, so long-poll coordination is instant and zero-latency.
  *
+ * One GameRoom DO (global) for automatic game sync between all clients.
+ * Games are stored in SQLite and synced via WebSocket.
+ *
  * Routes:
  *   GET  /health
  *   POST /relay/register      → { code }
@@ -13,6 +16,7 @@
  *   POST /relay/respond       { code, id, result }
  *   GET  /relay/status?code=  → { active, age_seconds, code }
  *   GET  /relay/status?token= → same, validated from signed token
+ *   GET  /sync                → WebSocket upgrade → GameRoom (automatic game sync)
  *
  * Signed tokens (requires RELAY_SECRET worker secret):
  *   After a client enters the 4-char pairing code, call /relay/connect to get a
@@ -223,6 +227,130 @@ export class RelaySession {
   }
 }
 
+// ── SHA-256 hash helper (first 16 hex chars) ──────────────────────────────────
+
+async function sha256hex16(str) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str || ''));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+}
+
+// ── Durable Object: GameRoom ──────────────────────────────────────────────────
+//
+// Single global instance for automatic game sync across all slob.games clients.
+// Games stored in SQLite, synced via WebSocket with hibernation.
+//
+// Protocol:
+//   connect     → server sends { type:"catalog", hashes:["abc...","def...",...] }
+//   client→srv  { type:"need", hashes:[...] }       → server sends { type:"games", games:[...] }
+//   client→srv  { type:"push", games:[{name,content,content_hash},...] }
+//                   → server stores, broadcasts { type:"sync", games:[...] } to others
+//                   → server sends { type:"ack", added:N } to sender
+
+const MAX_GAME_SIZE = 256 * 1024; // 256KB per game
+const MAX_TOTAL_GAMES = 500;
+
+export class GameRoom {
+  constructor(state, env) {
+    this.state = state;
+    this.sql = state.storage.sql;
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS games (
+      content_hash TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      content TEXT NOT NULL,
+      updated TEXT NOT NULL,
+      size INTEGER NOT NULL
+    )`);
+  }
+
+  async fetch(request) {
+    if (request.headers.get("Upgrade") !== "websocket") {
+      return new Response("WebSocket required", { status: 426, headers: cors() });
+    }
+    const pair = new WebSocketPair();
+    this.state.acceptWebSocket(pair[1]);
+
+    // Send catalog (hashes only) to the new client
+    const rows = this.sql.exec("SELECT content_hash FROM games").toArray();
+    const hashes = rows.map(r => r.content_hash);
+    pair[1].send(JSON.stringify({ type: 'catalog', hashes }));
+
+    return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  async webSocketMessage(ws, message) {
+    let data;
+    try { data = JSON.parse(message); } catch (_) { return; }
+
+    switch (data.type) {
+      case 'need': {
+        // Client wants full content for specific hashes
+        if (!Array.isArray(data.hashes) || data.hashes.length === 0) return;
+        // Limit to 50 at a time
+        const wanted = data.hashes.slice(0, 50);
+        const ph = wanted.map(() => '?').join(',');
+        const rows = this.sql.exec(
+          `SELECT content_hash, name, content, updated FROM games WHERE content_hash IN (${ph})`,
+          ...wanted
+        ).toArray();
+        if (rows.length > 0) {
+          ws.send(JSON.stringify({ type: 'games', games: rows }));
+        }
+        break;
+      }
+
+      case 'push': {
+        // Client pushes new games
+        if (!Array.isArray(data.games) || data.games.length === 0) return;
+        const countRow = this.sql.exec("SELECT COUNT(*) as c FROM games").toArray();
+        let count = countRow[0]?.c || 0;
+        const added = [];
+
+        for (const g of data.games.slice(0, 20)) { // max 20 per push
+          if (!g.content || typeof g.content !== 'string') continue;
+          if (!g.name || typeof g.name !== 'string') continue;
+          if (!g.content_hash || typeof g.content_hash !== 'string') continue;
+          if (g.content.length > MAX_GAME_SIZE) continue;
+          if (g.content.length === 0) continue;
+          if (count >= MAX_TOTAL_GAMES) break;
+
+          // Verify content hash matches (don't trust client blindly)
+          const verified = await sha256hex16(g.content);
+          if (verified !== g.content_hash) continue;
+
+          // Check if already stored
+          const exists = this.sql.exec(
+            "SELECT 1 FROM games WHERE content_hash = ?", g.content_hash
+          ).toArray();
+          if (exists.length > 0) continue;
+
+          const updated = new Date().toISOString();
+          this.sql.exec(
+            "INSERT INTO games (content_hash, name, content, updated, size) VALUES (?, ?, ?, ?, ?)",
+            g.content_hash, g.name.slice(0, 100), g.content, updated, g.content.length
+          );
+          added.push({ content_hash: g.content_hash, name: g.name.slice(0, 100), content: g.content, updated });
+          count++;
+        }
+
+        // Broadcast new games to all OTHER connected clients
+        if (added.length > 0) {
+          const msg = JSON.stringify({ type: 'sync', games: added });
+          for (const sock of this.state.getWebSockets()) {
+            if (sock !== ws) {
+              try { sock.send(msg); } catch (_) {}
+            }
+          }
+        }
+        ws.send(JSON.stringify({ type: 'ack', added: added.length }));
+        break;
+      }
+    }
+  }
+
+  webSocketClose(ws, code, reason) {}
+  webSocketError(ws, error) {}
+}
+
 // ── Main Worker ───────────────────────────────────────────────────────────────
 
 export default {
@@ -326,6 +454,15 @@ export default {
       const res  = await stub.fetch(new Request("http://do/status"));
       const data = await res.json();
       return json({ ...data, code }); // always include resolved code in response
+    }
+
+    // GET /sync → WebSocket upgrade to global GameRoom
+    if (url.pathname === "/sync") {
+      if (request.headers.get("Upgrade") !== "websocket") {
+        return json({ error: "WebSocket upgrade required" }, 426);
+      }
+      const room = env.GAME_ROOM.get(env.GAME_ROOM.idFromName("global"));
+      return room.fetch(request);
     }
 
     return json({ error: "not found" }, 404);
