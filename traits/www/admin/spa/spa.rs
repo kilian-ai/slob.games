@@ -231,13 +231,14 @@ pub fn spa(_args: &[Value]) -> Value {
 
 const CSS: &str = r##"
 :root {
-  --bg: #0b1115;
-  --panel: #121b21;
-  --panel-2: #17232c;
-  --line: #243744;
-  --text: #e7eef3;
-  --muted: #9ab0bf;
-  --accent: #59d5b0;
+  --bg: #0a0a0f;
+  --panel: #111118;
+  --panel-2: #16161f;
+  --line: #1e1e2e;
+  --text: #e8e6e3;
+  --muted: #5a6570;
+  --accent: #00e0ff;
+  --green: #00ff88;
   --warn: #f5b942;
   --danger: #ef6b73;
 }
@@ -246,10 +247,10 @@ const CSS: &str = r##"
 body {
   margin: 0;
   background:
-    radial-gradient(circle at top left, rgba(89, 213, 176, 0.08), transparent 28%),
-    linear-gradient(180deg, #081015 0%, var(--bg) 100%);
+    radial-gradient(circle at top left, rgba(0, 224, 255, 0.05), transparent 28%),
+    linear-gradient(180deg, #060610 0%, var(--bg) 100%);
   color: var(--text);
-  font-family: "Iosevka Aile", "IBM Plex Sans", "Segoe UI", sans-serif;
+  font-family: system-ui, -apple-system, sans-serif;
 }
 .page {
   max-width: 1120px;
@@ -263,11 +264,11 @@ body {
   margin-bottom: 18px;
 }
 .card {
-  background: linear-gradient(180deg, rgba(23, 35, 44, 0.96), rgba(18, 27, 33, 0.96));
-  border: 1px solid var(--line);
-  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(17, 17, 26, 0.97), rgba(12, 12, 18, 0.97));
+  border: 1px solid rgba(0, 224, 255, 0.07);
+  border-radius: 14px;
   padding: 20px;
-  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.22);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.3);
 }
 .hero {
   margin-bottom: 18px;
@@ -281,7 +282,7 @@ body {
   width: 180px;
   height: 180px;
   border-radius: 999px;
-  background: radial-gradient(circle, rgba(89, 213, 176, 0.18), transparent 70%);
+  background: radial-gradient(circle, rgba(0, 224, 255, 0.1), transparent 70%);
   pointer-events: none;
 }
 .eyebrow {
@@ -289,18 +290,24 @@ body {
   color: var(--accent);
   text-transform: uppercase;
   letter-spacing: 0.16em;
-  font-size: 12px;
+  font-size: 11px;
+  font-family: 'Courier New', Menlo, monospace;
 }
 h1 {
   margin: 0;
-  font-family: "Iosevka Etoile", "IBM Plex Mono", monospace;
+  font-family: 'Courier New', Menlo, monospace;
   font-size: clamp(34px, 5vw, 56px);
   line-height: 0.96;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 h2 {
   margin: 0 0 12px;
-  font-family: "Iosevka Etoile", "IBM Plex Mono", monospace;
-  font-size: 20px;
+  font-family: 'Courier New', Menlo, monospace;
+  font-size: 18px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
 }
 .subtitle {
   margin: 14px 0 0;
@@ -315,7 +322,7 @@ h2 {
   margin-top: 16px;
 }
 .badge {
-  border: 1px solid rgba(89, 213, 176, 0.24);
+  border: 1px solid rgba(0, 224, 255, 0.18);
   color: var(--accent);
   border-radius: 999px;
   padding: 6px 10px;
@@ -342,7 +349,7 @@ h2 {
   border-radius: 999px;
   background: #516570;
 }
-.dot.green { background: var(--accent); box-shadow: 0 0 14px rgba(89, 213, 176, 0.45); }
+.dot.green { background: var(--green); box-shadow: 0 0 14px rgba(0, 255, 136, 0.45); }
 .dot.yellow { background: var(--warn); box-shadow: 0 0 14px rgba(245, 185, 66, 0.35); }
 .dot.orange { background: #f58c42; box-shadow: 0 0 14px rgba(245, 140, 66, 0.45); }
 .dot.red { background: var(--danger); box-shadow: 0 0 14px rgba(239, 107, 115, 0.35); }
@@ -378,8 +385,8 @@ td:first-child {
 }
 .command-link:hover code {
   transform: translateY(-1px);
-  border-color: rgba(89, 213, 176, 0.28);
-  background: rgba(16, 32, 38, 0.96);
+  border-color: rgba(0, 224, 255, 0.2);
+  background: rgba(10, 10, 18, 0.95);
 }
 .form-row {
   display: flex;
@@ -390,9 +397,9 @@ td:first-child {
 input,
 select,
 button {
-  border-radius: 12px;
+  border-radius: 10px;
   border: 1px solid var(--line);
-  background: rgba(11, 17, 21, 0.92);
+  background: rgba(10, 10, 16, 0.92);
   color: var(--text);
   font: inherit;
 }
@@ -412,18 +419,20 @@ button {
 }
 button:hover { border-color: #3d5b6c; }
 button.primary {
-  background: linear-gradient(180deg, #1d7c63, #176551);
-  border-color: rgba(89, 213, 176, 0.26);
+  background: linear-gradient(180deg, rgba(0, 224, 255, 0.18), rgba(0, 180, 220, 0.12));
+  border-color: rgba(0, 224, 255, 0.25);
+  color: #00e0ff;
 }
 button.danger {
   background: linear-gradient(180deg, #6b2530, #531b24);
   border-color: rgba(239, 107, 115, 0.26);
+  color: #ef6b73;
 }
 code {
-  font-family: "Iosevka Etoile", "IBM Plex Mono", monospace;
+  font-family: 'Courier New', Menlo, monospace;
   font-size: 13px;
-  color: #bef4e4;
-  background: rgba(11, 17, 21, 0.9);
+  color: #66f0ff;
+  background: rgba(0, 224, 255, 0.05);
   padding: 3px 6px;
   border-radius: 8px;
 }
@@ -434,14 +443,14 @@ code {
   padding: 14px;
   border-radius: 14px;
   border: 1px solid var(--line);
-  background: rgba(8, 12, 15, 0.95);
-  font-family: "Iosevka Etoile", "IBM Plex Mono", monospace;
+  background: rgba(6, 6, 12, 0.95);
+  font-family: 'Courier New', Menlo, monospace;
   font-size: 13px;
   white-space: pre-wrap;
 }
 .entry { display: block; margin-bottom: 0; }
 .time { color: #5f7583; margin-right: 6px; }
-a { color: #8be3cb; }
+a { color: #00e0ff; }
 .preview { color: #c9d7e0; word-break: break-all; }
 .chip-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 .chip {
@@ -453,7 +462,7 @@ a { color: #8be3cb; }
   border-radius: 8px;
   transition: all 0.12s;
 }
-.chip:hover { color: var(--accent); border-color: rgba(89, 213, 176, 0.3); }
+.chip:hover { color: var(--accent); border-color: rgba(0, 224, 255, 0.25); }
 .platform-icon { font-size: 1.3rem; margin-right: 6px; vertical-align: middle; }
 .install-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
 .install-alt { color: var(--muted); font-size: 13px; margin-top: 12px; }
@@ -498,10 +507,12 @@ a { color: #8be3cb; }
   height: 12px;
 }
 .tier-label {
-  font-family: "Iosevka Etoile", "IBM Plex Mono", monospace;
+  font-family: 'Courier New', Menlo, monospace;
   font-size: 14px;
   font-weight: 600;
   white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 .tier-detail {
   font-size: 13px;
@@ -534,9 +545,9 @@ button.sm {
   margin-top: 14px;
   padding: 10px 14px;
   border-radius: 10px;
-  background: rgba(8, 12, 15, 0.6);
+  background: rgba(8, 10, 14, 0.6);
   border: 1px solid var(--line);
-  font-family: "Iosevka Etoile", "IBM Plex Mono", monospace;
+  font-family: 'Courier New', Menlo, monospace;
   font-size: 13px;
 }
 .tier-header .tier-url {

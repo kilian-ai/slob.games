@@ -11,40 +11,42 @@ pub fn canvas(_args: &[Value]) -> Value {
                 title { "slob.games — Canvas" }
                 style {
                     (PreEscaped(r#"
-                        :root { --bg: #0a0a0a; --fg: #e0e0e0; --accent: #00e0ff; --border: #222; }
-                        html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); font-family: system-ui, sans-serif; overflow: hidden; height: 100%; }
+                        :root { --bg: #0a0a0a; --fg: #e0e0e0; --accent: #00e0ff; --border: #1a1a2e; }
+                        html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); font-family: 'Courier New', Menlo, monospace; overflow: hidden; height: 100%; }
                         .canvas-header {
                             display: flex; align-items: center; justify-content: space-between;
-                            padding: 12px 20px; border-bottom: 1px solid var(--border);
-                            background: #111;
+                            padding: 10px 20px; border-bottom: 1px solid rgba(0,224,255,0.1);
+                            background: rgba(8,8,14,0.95);
                         }
-                        .canvas-header h1 { font-size: 16px; font-weight: 500; }
-                        .canvas-header h1 .accent { color: var(--accent); }
+                        .canvas-header h1 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #8899a6; }
+                        .canvas-header h1 .accent { color: var(--accent); text-shadow: 0 0 8px rgba(0,224,255,0.4); }
                         .canvas-header .actions { display: flex; gap: 8px; }
                         .canvas-header button {
-                            background: transparent; border: 1px solid var(--border);
-                            color: var(--fg); padding: 4px 12px; border-radius: 4px;
-                            cursor: pointer; font-size: 12px;
+                            background: transparent; border: 1px solid #1e1e2e;
+                            color: #8899a6; padding: 4px 12px; border-radius: 4px;
+                            cursor: pointer; font-size: 11px; font-family: 'Courier New', Menlo, monospace;
+                            text-transform: uppercase; letter-spacing: 0.04em; transition: all 0.2s;
                         }
-                        .canvas-header button:hover { border-color: var(--accent); color: var(--accent); }
-                        .canvas-header button.save-btn { border-color: #2a5; color: #2a5; }
-                        .canvas-header button.save-btn:hover { border-color: #3c8; color: #3c8; }
+                        .canvas-header button:hover { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 8px rgba(0,224,255,0.15); }
+                        .canvas-header button.save-btn { border-color: rgba(0,255,136,0.3); color: #00ff88; }
+                        .canvas-header button.save-btn:hover { border-color: rgba(0,255,136,0.5); color: #00ff88; box-shadow: 0 0 8px rgba(0,255,136,0.2); }
 
                         /* Game selector dropdown */
                         #game-select {
-                            background: #181818; color: var(--fg);
-                            border: 1px solid var(--border); border-radius: 4px;
-                            padding: 4px 8px; font-size: 12px;
+                            background: #0c0c16; color: #8899a6;
+                            border: 1px solid #1e1e2e; border-radius: 4px;
+                            padding: 4px 8px; font-size: 11px;
                             cursor: pointer; outline: none; max-width: 180px;
-                            font-family: system-ui, sans-serif;
+                            font-family: 'Courier New', Menlo, monospace;
+                            text-transform: uppercase; letter-spacing: 0.02em;
                             -webkit-appearance: none; appearance: none;
-                            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E");
+                            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23556'/%3E%3C/svg%3E");
                             background-repeat: no-repeat; background-position: right 8px center;
                             padding-right: 22px;
                         }
                         #game-select:hover { border-color: var(--accent); }
-                        #game-select:focus { border-color: var(--accent); }
-                        #game-select option { background: #181818; color: var(--fg); }
+                        #game-select:focus { border-color: var(--accent); box-shadow: 0 0 6px rgba(0,224,255,0.15); }
+                        #game-select option { background: #0c0c16; color: #8899a6; }
 
                         #canvas-container {
                             width: 100%; height: calc(100vh - 49px);
@@ -66,17 +68,17 @@ pub fn canvas(_args: &[Value]) -> Value {
                             display: none;
                             position: relative;
                             width: 430px;
-                            background: #1a1a1c;
+                            background: #111118;
                             border-radius: 50px;
-                            border: 2px solid #3a3a3c;
-                            box-shadow: 0 0 0 1px #111, 0 30px 80px rgba(0,0,0,0.8), inset 0 0 0 1px #2a2a2c;
+                            border: 2px solid #2a2a3c;
+                            box-shadow: 0 0 0 1px #0a0a0f, 0 0 40px rgba(0,224,255,0.06), 0 30px 80px rgba(0,0,0,0.8), inset 0 0 0 1px #1e1e2e;
                             padding: 18px 16px 22px;
                             flex-shrink: 0;
                         }
                         #phone-frame.visible { display: block; }
                         .phone-notch {
                             width: 120px; height: 34px;
-                            background: #1a1a1c;
+                            background: #111118;
                             border-radius: 0 0 22px 22px;
                             margin: 0 auto 10px;
                             position: relative; z-index: 2;
@@ -113,26 +115,30 @@ pub fn canvas(_args: &[Value]) -> Value {
                         }
                         #canvas-fab .fab-btn {
                             width: 44px; height: 44px; border-radius: 50%;
-                            background: rgba(124,92,252,0.15); border: 1px solid rgba(124,92,252,0.4);
-                            color: #b8a4fc; font-size: 20px; cursor: pointer;
+                            background: rgba(0,224,255,0.06); border: 1px solid rgba(0,224,255,0.25);
+                            color: #00e0ff; font-size: 22px; cursor: pointer;
                             display: flex; align-items: center; justify-content: center;
-                            backdrop-filter: blur(8px); transition: transform 0.2s, background 0.2s;
+                            backdrop-filter: blur(8px); transition: all 0.2s;
+                            box-shadow: 0 0 12px rgba(0,224,255,0.12);
+                            font-family: 'Courier New', monospace;
                         }
-                        #canvas-fab .fab-btn:hover { background: rgba(124,92,252,0.25); transform: scale(1.08); }
+                        #canvas-fab .fab-btn:hover { background: rgba(0,224,255,0.12); transform: scale(1.08); box-shadow: 0 0 20px rgba(0,224,255,0.25); }
                         #canvas-fab .fab-btn.open { transform: rotate(45deg); }
                         #canvas-fab .fab-menu {
                             display: none; position: absolute; bottom: 52px; right: 0;
-                            background: rgba(20,20,25,0.95); border: 1px solid #333;
-                            border-radius: 8px; padding: 4px 0; min-width: 160px;
-                            backdrop-filter: blur(12px); box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+                            background: rgba(10,10,18,0.97); border: 1px solid rgba(0,224,255,0.1);
+                            border-radius: 8px; padding: 4px 0; min-width: 170px;
+                            backdrop-filter: blur(12px); box-shadow: 0 4px 24px rgba(0,0,0,0.6);
+                            font-family: 'Courier New', Menlo, monospace;
                         }
                         #canvas-fab .fab-menu.show { display: block; }
                         #canvas-fab .fab-menu button {
                             display: flex; align-items: center; gap: 8px; width: 100%;
                             padding: 8px 14px; border: none; background: none;
-                            color: #ccc; font-size: 13px; cursor: pointer; text-align: left;
+                            color: #8899a6; font-size: 12px; cursor: pointer; text-align: left;
+                            text-transform: uppercase; letter-spacing: 0.02em;
                         }
-                        #canvas-fab .fab-menu button:hover { background: rgba(124,92,252,0.12); color: #fff; }
+                        #canvas-fab .fab-menu button:hover { background: rgba(0,224,255,0.06); color: #00e0ff; }
                         #canvas-fab .fab-menu button .fab-icon { width: 18px; text-align: center; flex-shrink: 0; }
 
                         /* Voice Chat Modal */
@@ -140,12 +146,13 @@ pub fn canvas(_args: &[Value]) -> Value {
                             display: none; position: fixed;
                             bottom: 74px; right: 20px;
                             width: 340px; height: 460px;
-                            background: rgba(14,14,18,0.97);
-                            border: 1px solid rgba(124,92,252,0.4);
+                            background: rgba(10,10,18,0.97);
+                            border: 1px solid rgba(0,224,255,0.2);
                             border-radius: 12px; z-index: 9995;
-                            box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+                            box-shadow: 0 8px 32px rgba(0,0,0,0.6), 0 0 20px rgba(0,224,255,0.05);
                             backdrop-filter: blur(16px);
                             flex-direction: column;
+                            font-family: 'Courier New', Menlo, monospace;
                         }
                         #voice-chat-modal.vcm-open { display: flex; }
                         .vcm-header {
@@ -153,7 +160,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,0.07);
                             cursor: move; flex-shrink: 0;
                         }
-                        .vcm-title { color: #b8a4fc; font-size: 13px; font-weight: 600; letter-spacing: 0.02em; }
+                        .vcm-title { color: #00e0ff; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
                         .vcm-close {
                             background: none; border: none; color: #555; font-size: 18px;
                             cursor: pointer; padding: 0 2px; line-height: 1; transition: color 0.15s;
@@ -169,7 +176,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             padding: 5px 10px; border-radius: 8px; font-size: 12px;
                             line-height: 1.5; max-width: 95%; word-break: break-word;
                         }
-                        .vcm-msg.user { background: rgba(124,92,252,0.2); color: #d4c8ff; align-self: flex-end; }
+                        .vcm-msg.user { background: rgba(0,224,255,0.1); color: #66f0ff; align-self: flex-end; }
                         .vcm-msg.assistant { background: rgba(30,30,38,0.9); color: #e0e0e0; align-self: flex-start; border: 1px solid rgba(255,255,255,0.06); }
                         .vcm-msg.tool { background: rgba(0,200,100,0.08); color: #4ade80; font-family: monospace; font-size: 11px; align-self: flex-start; }
                         .vcm-msg.tool-result { background: rgba(56,189,248,0.07); color: #7dd3fc; font-family: monospace; font-size: 11px; align-self: flex-start; }
@@ -182,25 +189,26 @@ pub fn canvas(_args: &[Value]) -> Value {
                             flex: 1; background: rgba(255,255,255,0.06); border: 1px solid #333;
                             border-radius: 6px; color: #eee; padding: 6px 10px; font-size: 13px; outline: none;
                         }
-                        #vcmInput:focus { border-color: rgba(124,92,252,0.55); }
+                        #vcmInput:focus { border-color: rgba(0,224,255,0.4); }
                         #vcmSend {
-                            background: rgba(124,92,252,0.25); border: 1px solid rgba(124,92,252,0.45);
-                            border-radius: 6px; color: #b8a4fc; padding: 6px 12px;
+                            background: rgba(0,224,255,0.12); border: 1px solid rgba(0,224,255,0.3);
+                            border-radius: 6px; color: #00e0ff; padding: 6px 12px;
                             cursor: pointer; font-size: 16px; transition: background 0.15s;
                         }
-                        #vcmSend:hover { background: rgba(124,92,252,0.45); }
+                        #vcmSend:hover { background: rgba(0,224,255,0.25); }
 
                         /* P2P Share Modal */
                         #share-modal {
                             display: none; position: fixed;
                             bottom: 74px; right: 20px;
                             width: 320px;
-                            background: rgba(14,14,18,0.97);
-                            border: 1px solid rgba(124,92,252,0.4);
+                            background: rgba(10,10,18,0.97);
+                            border: 1px solid rgba(0,224,255,0.2);
                             border-radius: 12px; z-index: 9996;
-                            box-shadow: 0 8px 40px rgba(0,0,0,0.7);
+                            box-shadow: 0 8px 40px rgba(0,0,0,0.7), 0 0 20px rgba(0,224,255,0.05);
                             backdrop-filter: blur(16px);
                             flex-direction: column;
+                            font-family: 'Courier New', Menlo, monospace;
                         }
                         #share-modal.sm-open { display: flex; }
                         .sm-header {
@@ -208,7 +216,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,0.07);
                             cursor: move; flex-shrink: 0;
                         }
-                        .sm-title { color: #b8a4fc; font-size: 13px; font-weight: 600; }
+                        .sm-title { color: #00e0ff; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
                         .sm-close {
                             background: none; border: none; color: #555; font-size: 18px;
                             cursor: pointer; padding: 0 2px; line-height: 1; transition: color 0.15s;
@@ -224,9 +232,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                         }
                         .sm-code-char {
                             width: 52px; height: 64px;
-                            background: rgba(124,92,252,0.1);
-                            border: 1px solid rgba(124,92,252,0.4);
-                            border-radius: 8px; color: #b8a4fc;
+                            background: rgba(0,224,255,0.06);
+                            border: 1px solid rgba(0,224,255,0.25);
+                            border-radius: 8px; color: #00e0ff;
                             font-size: 28px; font-weight: 700; font-family: monospace;
                             display: flex; align-items: center; justify-content: center;
                             letter-spacing: 0;
@@ -234,13 +242,13 @@ pub fn canvas(_args: &[Value]) -> Value {
                         .sm-code-inputs { display: flex; gap: 8px; }
                         .sm-ci {
                             width: 52px; height: 64px; text-align: center;
-                            background: rgba(255,255,255,0.06);
-                            border: 1px solid rgba(124,92,252,0.35);
-                            border-radius: 8px; color: #d4c8ff;
+                            background: rgba(255,255,255,0.04);
+                            border: 1px solid rgba(0,224,255,0.2);
+                            border-radius: 8px; color: #66f0ff;
                             font-size: 26px; font-weight: 700; font-family: monospace;
-                            outline: none; text-transform: uppercase; caret-color: #b8a4fc;
+                            outline: none; text-transform: uppercase; caret-color: #00e0ff;
                         }
-                        .sm-ci:focus { border-color: rgba(124,92,252,0.8); background: rgba(124,92,252,0.08); }
+                        .sm-ci:focus { border-color: rgba(0,224,255,0.6); background: rgba(0,224,255,0.04); }
                         .sm-link-row {
                             display: flex; gap: 6px; width: 100%; align-items: center;
                         }
@@ -249,17 +257,18 @@ pub fn canvas(_args: &[Value]) -> Value {
                             text-overflow: ellipsis; white-space: nowrap; user-select: text;
                         }
                         .sm-btn {
-                            background: rgba(124,92,252,0.2); border: 1px solid rgba(124,92,252,0.4);
-                            border-radius: 6px; color: #b8a4fc; padding: 5px 12px;
+                            background: rgba(0,224,255,0.1); border: 1px solid rgba(0,224,255,0.25);
+                            border-radius: 6px; color: #00e0ff; padding: 5px 12px;
                             font-size: 12px; cursor: pointer; flex-shrink: 0; transition: background 0.15s;
                         }
-                        .sm-btn:hover { background: rgba(124,92,252,0.4); }
+                        .sm-btn:hover { background: rgba(0,224,255,0.2); }
                         .sm-btn-primary {
-                            background: rgba(124,92,252,0.3); border: 1px solid rgba(124,92,252,0.6);
-                            border-radius: 8px; color: #d4c8ff; padding: 9px 28px;
+                            background: rgba(0,224,255,0.15); border: 1px solid rgba(0,224,255,0.35);
+                            border-radius: 8px; color: #66f0ff; padding: 9px 28px;
                             font-size: 14px; cursor: pointer; transition: background 0.15s; width: 100%;
+                            text-transform: uppercase; letter-spacing: 0.04em;
                         }
-                        .sm-btn-primary:hover { background: rgba(124,92,252,0.5); }
+                        .sm-btn-primary:hover { background: rgba(0,224,255,0.25); }
                         .sm-status {
                             font-size: 12px; color: #888; text-align: center; min-height: 16px;
                         }
