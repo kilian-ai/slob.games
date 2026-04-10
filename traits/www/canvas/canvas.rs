@@ -475,6 +475,47 @@ pub fn canvas(_args: &[Value]) -> Value {
                             } catch(_) { return { active: null, games: {} }; }
                         }
 
+                        function dedupeLocalGames() {
+                            try {
+                                const raw = localStorage.getItem('traits.pvfs') || '{}';
+                                const files = JSON.parse(raw);
+                                const col = files['canvas/games.json']
+                                    ? JSON.parse(files['canvas/games.json'])
+                                    : { active: null, games: {} };
+                                var byName = {};
+                                for (var id in col.games) {
+                                    var g = col.games[id];
+                                    var n = (g.name || 'untitled').trim().toLowerCase();
+                                    if (!byName[n]) byName[n] = [];
+                                    byName[n].push(id);
+                                }
+                                var removed = 0;
+                                for (var n in byName) {
+                                    var ids = byName[n];
+                                    if (ids.length <= 1) continue;
+                                    // Sort: most content first, then newest updated
+                                    ids.sort(function(a, b) {
+                                        var la = (col.games[a].content || '').length;
+                                        var lb = (col.games[b].content || '').length;
+                                        if (lb !== la) return lb - la;
+                                        return (col.games[b].updated || '').localeCompare(col.games[a].updated || '');
+                                    });
+                                    var keep = ids[0];
+                                    for (var i = 1; i < ids.length; i++) {
+                                        var del = ids[i];
+                                        if (col.active === del) col.active = keep;
+                                        delete col.games[del];
+                                        removed++;
+                                    }
+                                }
+                                if (removed > 0) {
+                                    files['canvas/games.json'] = JSON.stringify(col);
+                                    localStorage.setItem('traits.pvfs', JSON.stringify(files));
+                                }
+                                return removed;
+                            } catch(_) { return 0; }
+                        }
+
                         function getActiveGameContent() {
                             const col = readGamesCollection();
                             if (!col.active || !col.games[col.active]) return '';
@@ -549,6 +590,7 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                         document.getElementById('btnSave').addEventListener('click', saveProject);
                         window.addEventListener('traits-canvas-projects-changed', renderProjectBar);
+                        dedupeLocalGames();
                         renderProjectBar();
 
                         const phoneFrame    = document.getElementById('phone-frame');
@@ -1839,11 +1881,25 @@ pub fn canvas(_args: &[Value]) -> Value {
                                         const gid = g.game_id || slugify(g.name || g.content_hash);
                                         const gameId = ('s-' + slugify(owner + '-' + gid)).slice(0, 48);
 
-                                        if (existing.has(g.content_hash) && !col.games[gameId]) continue;
+                                        // Match by name: reuse existing entry if same name already present.
+                                        const nameKey = (g.name || '').trim().toLowerCase();
+                                        let matchedId = null;
+                                        if (nameKey) {
+                                            for (const [eid, eg] of Object.entries(col.games)) {
+                                                if ((eg.name || '').trim().toLowerCase() === nameKey) {
+                                                    matchedId = eid;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        const targetId = matchedId || gameId;
+
+                                        // Skip if we already have this exact content version
+                                        if (existing.has(g.content_hash) && !matchedId && !col.games[gameId]) continue;
 
                                         // Update in place if we already have this identity.
-                                        const prev = col.games[gameId] || {};
-                                        col.games[gameId] = {
+                                        const prev = col.games[targetId] || {};
+                                        col.games[targetId] = {
                                             name: g.name || prev.name || 'untitled',
                                             content: g.content,
                                             created: prev.created || g.updated || new Date().toISOString(),
@@ -1865,6 +1921,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                         }
                                         files['canvas/games.json'] = JSON.stringify(col);
                                         localStorage.setItem('traits.pvfs', JSON.stringify(files));
+                                        dedupeLocalGames();
                                         renderProjectBar();
                                     }
                                     return added;
