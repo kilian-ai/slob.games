@@ -274,16 +274,19 @@ pub fn canvas(_args: &[Value]) -> Value {
                             border-radius: 2px; transition: width 0.3s;
                         }
 
+                        /* ── Desktop: scale phone frame to fit viewport ── */
+                        #phone-frame {
+                            transform-origin: top center;
+                        }
+
+                        /* ── Mobile tap overlay ── */
+                        #mob-tap-overlay {
+                            display: none;
+                        }
+
                         /* ── Mobile fullscreen ── */
                         @media (max-width: 768px) and (pointer: coarse) {
-                            .canvas-header {
-                                position: fixed; top: 0; left: 0; right: 0; z-index: 9000;
-                                transition: opacity 0.3s, transform 0.3s;
-                                background: rgba(17,17,17,0.95); backdrop-filter: blur(12px);
-                            }
-                            .canvas-header h1 { display: none; }
-                            .canvas-header .actions { width: 100%; justify-content: space-between; }
-                            .canvas-header.mob-hidden { opacity: 0; transform: translateY(-100%); pointer-events: none; }
+                            .canvas-header { display: none !important; }
                             #canvas-container {
                                 height: 100vh !important; padding: 0 !important;
                                 align-items: stretch !important;
@@ -292,10 +295,11 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 width: 100% !important; border-radius: 0 !important;
                                 border: none !important; box-shadow: none !important;
                                 padding: 0 !important; background: #000 !important;
+                                transform: none !important;
                             }
                             .phone-notch, .phone-home-bar { display: none !important; }
                             #phone-viewport {
-                                width: 100% !important; height: 100vh !important;
+                                width: 100vw !important; height: 100vh !important;
                                 border-radius: 0 !important;
                             }
                             #canvas-fab {
@@ -303,6 +307,21 @@ pub fn canvas(_args: &[Value]) -> Value {
                             }
                             #canvas-fab.mob-hidden { opacity: 0; pointer-events: none; }
                             .canvas-empty { height: 100vh; }
+
+                            /* Tap overlay to catch taps on iframe */
+                            #mob-tap-overlay {
+                                display: block; position: fixed; top: 0; left: 0;
+                                width: 100vw; height: 100vh; z-index: 8999;
+                                background: transparent;
+                            }
+                            #mob-tap-overlay.mob-passthrough { display: none; }
+
+                            /* FAB mobile action items */
+                            .fab-menu .fab-mob-only { display: flex !important; }
+                            .fab-menu .fab-mob-divider {
+                                height: 1px; background: rgba(255,255,255,0.08);
+                                margin: 4px 0;
+                            }
 
                             /* Voice chat modal — full width on mobile */
                             #voice-chat-modal {
@@ -312,6 +331,12 @@ pub fn canvas(_args: &[Value]) -> Value {
                             #share-modal {
                                 left: 8px; right: 8px; bottom: 8px; width: auto;
                             }
+                        }
+
+                        /* Hide mobile-only FAB items on desktop */
+                        .fab-menu .fab-mob-only { display: none !important; }
+                        @media (max-width: 768px) and (pointer: coarse) {
+                            .fab-menu .fab-mob-only { display: flex !important; }
                         }
 
                     "#))
@@ -346,6 +371,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                     }
                 }
 
+                // Tap overlay for mobile (captures taps on iframe area)
+                div #mob-tap-overlay {}
+
                 // FAB menu
                 div #canvas-fab {
                     button .fab-btn #fabToggle { "+" }
@@ -369,6 +397,24 @@ pub fn canvas(_args: &[Value]) -> Value {
                         button #fabReceive {
                             span .fab-icon { "📥" }
                             span { "Receive Project" }
+                        }
+                        // Mobile-only: divider + header controls
+                        div .fab-mob-divider .fab-mob-only {}
+                        button #fabGameSelect .fab-mob-only {
+                            span .fab-icon { "🎮" }
+                            span { "Switch Game" }
+                        }
+                        button #fabSaveMob .fab-mob-only {
+                            span .fab-icon { "💾" }
+                            span { "Save" }
+                        }
+                        button #fabClearMob .fab-mob-only {
+                            span .fab-icon { "🗑" }
+                            span { "Clear" }
+                        }
+                        button #fabSourceMob .fab-mob-only {
+                            span .fab-icon { "📄" }
+                            span { "View Source" }
                         }
                     }
                 }
@@ -1288,19 +1334,21 @@ pub fn canvas(_args: &[Value]) -> Value {
                         vcmSendBtn.addEventListener('click', vcmSendText);
                         vcmInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') vcmSendText(); });
 
-                        // ── Mobile fullscreen: auto-hide chrome ──
+                        // ── Mobile fullscreen: auto-hide chrome + tap overlay ──
                         const isMobile = window.matchMedia('(max-width:768px) and (pointer:coarse)').matches;
                         if (isMobile) {
                             const shellNav = document.getElementById('shell-nav');
-                            const header = document.querySelector('.canvas-header');
                             const fab = document.getElementById('canvas-fab');
+                            const overlay = document.getElementById('mob-tap-overlay');
                             let hideTimer = null;
+                            let chromeVisible = true;
                             const HIDE_DELAY = 3000;
 
                             function showChrome() {
+                                chromeVisible = true;
                                 if (shellNav) { shellNav.style.transition = 'opacity 0.3s, transform 0.3s'; shellNav.style.opacity = '1'; shellNav.style.transform = 'translateY(0)'; shellNav.style.pointerEvents = ''; }
-                                if (header) header.classList.remove('mob-hidden');
                                 if (fab) fab.classList.remove('mob-hidden');
+                                if (overlay) overlay.classList.add('mob-passthrough');
                                 clearTimeout(hideTimer);
                                 hideTimer = setTimeout(hideChrome, HIDE_DELAY);
                             }
@@ -1314,33 +1362,81 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 if (vcm?.classList.contains('vcm-open')) return;
                                 if (sm?.classList.contains('sm-open')) return;
 
+                                chromeVisible = false;
                                 if (shellNav) { shellNav.style.opacity = '0'; shellNav.style.transform = 'translateY(-100%)'; shellNav.style.pointerEvents = 'none'; }
-                                if (header) header.classList.add('mob-hidden');
                                 if (fab) fab.classList.add('mob-hidden');
+                                // Show overlay so next tap is caught
+                                if (overlay) overlay.classList.remove('mob-passthrough');
                             }
 
-                            // Tap anywhere on the viewport to toggle chrome
+                            // Tap on the overlay → show chrome (overlay covers iframe when chrome is hidden)
+                            if (overlay) {
+                                overlay.addEventListener('touchstart', (e) => {
+                                    e.preventDefault();
+                                    showChrome();
+                                }, { passive: false });
+                            }
+
+                            // Taps on FAB/shell-nav/modals: reset hide timer
                             document.addEventListener('click', (e) => {
-                                // Don't toggle for clicks on controls themselves
-                                if (e.target.closest('.canvas-header, #canvas-fab, #voice-chat-modal, #share-modal, #shell-nav')) {
+                                if (e.target.closest('#canvas-fab, #voice-chat-modal, #share-modal, #shell-nav')) {
                                     clearTimeout(hideTimer);
                                     hideTimer = setTimeout(hideChrome, HIDE_DELAY);
-                                    return;
                                 }
-                                const isHidden = header?.classList.contains('mob-hidden');
-                                if (isHidden) { showChrome(); } else { hideChrome(); }
                             });
+
+                            // Mobile FAB items → trigger the real header buttons
+                            const fabGameSelect = document.getElementById('fabGameSelect');
+                            const fabSaveMob = document.getElementById('fabSaveMob');
+                            const fabClearMob = document.getElementById('fabClearMob');
+                            const fabSourceMob = document.getElementById('fabSourceMob');
+                            const gameSelect = document.getElementById('game-select');
+
+                            if (fabGameSelect && gameSelect) {
+                                fabGameSelect.addEventListener('click', () => {
+                                    // Cycle to the next game in the dropdown
+                                    const idx = gameSelect.selectedIndex;
+                                    const next = (idx + 1) % gameSelect.options.length;
+                                    gameSelect.selectedIndex = next;
+                                    gameSelect.dispatchEvent(new Event('change'));
+                                    // Update label to show current game
+                                    const name = gameSelect.options[next]?.text || 'Switch Game';
+                                    fabGameSelect.querySelector('span:last-child').textContent = name;
+                                });
+                            }
+                            if (fabSaveMob) fabSaveMob.addEventListener('click', () => document.getElementById('btnSave')?.click());
+                            if (fabClearMob) fabClearMob.addEventListener('click', () => document.getElementById('btnClear')?.click());
+                            if (fabSourceMob) fabSourceMob.addEventListener('click', () => document.getElementById('btnSource')?.click());
 
                             // Initial auto-hide after load
                             hideTimer = setTimeout(hideChrome, HIDE_DELAY);
 
-                            // Also hide shell nav on mobile for canvas page (override sticky)
+                            // Shell nav: fixed on mobile
                             if (shellNav) {
                                 shellNav.style.position = 'fixed';
                                 shellNav.style.left = '0';
                                 shellNav.style.right = '0';
                                 shellNav.style.transition = 'opacity 0.3s, transform 0.3s';
                             }
+                        }
+
+                        // ── Desktop: scale phone frame to fit viewport height ──
+                        if (!isMobile) {
+                            const phoneFrame = document.getElementById('phone-frame');
+                            const container = document.getElementById('canvas-container');
+                            function scaleFrame() {
+                                if (!phoneFrame || phoneFrame.style.display === 'none') return;
+                                const available = container.clientHeight - 40; // 20px padding each side
+                                const natural = phoneFrame.scrollHeight || 900;
+                                const scale = Math.min(1, available / natural);
+                                phoneFrame.style.transform = 'scale(' + scale + ')';
+                            }
+                            window.addEventListener('resize', scaleFrame);
+                            // Run after a short delay to ensure layout is settled
+                            setTimeout(scaleFrame, 100);
+                            // Also run when a game loads
+                            const vp = document.getElementById('phone-viewport');
+                            if (vp) vp.addEventListener('load', () => setTimeout(scaleFrame, 50));
                         }
                     })();
                 "#)) }
