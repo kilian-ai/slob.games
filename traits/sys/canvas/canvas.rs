@@ -256,6 +256,32 @@ pub fn canvas(args: &[Value]) -> Value {
                     "name": name, "content": content, "length": content.len()})
         }
 
+        // ── fork: if active is external, clone to internal and activate clone ──
+        "fork" => {
+            let mut col = read_games();
+            let before = col["active"].as_str().unwrap_or("").to_string();
+            let after = ensure_internal_active(&mut col)
+                .or_else(|| col["active"].as_str().map(|s| s.to_string()))
+                .unwrap_or_default();
+            if !after.is_empty() {
+                write_games(&col);
+            }
+            let forked = !before.is_empty() && before != after;
+            let name = if after.is_empty() {
+                "".to_string()
+            } else {
+                col["games"][&after]["name"].as_str().unwrap_or("untitled").to_string()
+            };
+            json!({
+                "ok": true,
+                "action": "fork",
+                "forked": forked,
+                "from": before,
+                "game_id": after,
+                "name": name
+            })
+        }
+
         // ── rename: rename active game or game by id ──
         "rename" => {
             let name = args.get(1).and_then(|v| v.as_str()).unwrap_or("");
@@ -344,6 +370,6 @@ pub fn canvas(args: &[Value]) -> Value {
             canvas(&[json!("delete"), json!(id)])
         }
 
-        _ => json!({"ok": false, "error": format!("Unknown action: {}. Use: set, append, get, clear, new, games, activate, rename, delete", action)}),
+        _ => json!({"ok": false, "error": format!("Unknown action: {}. Use: set, append, get, clear, new, games, activate, fork, rename, delete", action)}),
     }
 }

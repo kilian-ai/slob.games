@@ -62,10 +62,13 @@ pub fn spa(_args: &[Value]) -> Value {
 
                     // Games list
                     section.card {
-                        h2 { "Games" }
+                      div style="display:flex;align-items:center;justify-content:space-between;gap:10px;" {
+                        h2 style="margin:0;" { "Games" }
+                        button.primary onclick="cleanupGames()" style="font-size:11px;padding:6px 10px;" { "Clean Duplicates" }
+                      }
                         p.note { "Games synced to this device. Play or edit in Build mode, or delete." }
+                      p.note id="gamesSummary" { "—" }
                         div id="gamesList" { p.muted { "Loading games…" } }
-                        button.danger onclick="cleanupGames()" style="margin-top:8px;font-size:11px;opacity:0.7" { "Clean up duplicates" }
                     }
 
                     // Secrets & Environment
@@ -564,11 +567,22 @@ function formatSize(bytes) {
 function renderGames() {
   var col = readGamesCollection();
   var el = byId('gamesList');
+  var summary = byId('gamesSummary');
   if (!el) return;
   var games = [];
+  var internalCount = 0;
+  var externalCount = 0;
   var gObj = col.games || {};
   for (var id in gObj) {
-    if (gObj.hasOwnProperty(id)) games.push([id, gObj[id]]);
+    if (gObj.hasOwnProperty(id)) {
+      var gx = gObj[id] || {};
+      var scope = (gx.scope || gx._scope || 'internal');
+      if (scope === 'external') externalCount++; else internalCount++;
+      games.push([id, gx]);
+    }
+  }
+  if (summary) {
+    summary.textContent = 'Local library: ' + internalCount + ' internal, ' + externalCount + ' external copies.';
   }
   if (!games.length) {
     el.innerHTML = '<div class="no-games">No games stored yet. Play some games first.</div>';

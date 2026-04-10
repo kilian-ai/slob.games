@@ -305,6 +305,7 @@ async function sha256hex16(str) {
 
 const MAX_GAME_SIZE = 256 * 1024; // 256KB per game
 const MAX_TOTAL_GAMES = 500;
+const DEFAULT_EXTERNAL_POOL_SIZE = 64;
 
 export class GameRoom {
   constructor(state, env) {
@@ -380,6 +381,25 @@ export class GameRoom {
       version: row?.version || '',
       checksum: row?.checksum || row?.content_hash || '',
     };
+  }
+
+  getExternalPoolLimit() {
+    const raw = Number(this.env?.EXTERNAL_POOL_SIZE || DEFAULT_EXTERNAL_POOL_SIZE);
+    if (!Number.isFinite(raw) || raw < 1) return DEFAULT_EXTERNAL_POOL_SIZE;
+    return Math.floor(raw);
+  }
+
+  trimExternalPool() {
+    const keep = this.getExternalPoolLimit();
+    const rows = this.sql.exec(
+      "SELECT content_hash FROM games WHERE scope = 'external' ORDER BY updated DESC, rowid DESC"
+    ).toArray();
+    if (rows.length <= keep) return 0;
+    const toDelete = rows.slice(keep);
+    for (const row of toDelete) {
+      this.sql.exec("DELETE FROM games WHERE content_hash = ?", row.content_hash);
+    }
+    return toDelete.length;
   }
 
   async fetch(request) {
@@ -547,6 +567,7 @@ export class GameRoom {
           newHash, name.slice(0, 100), content, updated, content.length,
           owner, gameId, version, newHash
         );
+        this.trimExternalPool();
 
         // Broadcast updated game to all connected WebSocket clients
         const msg = JSON.stringify({
@@ -668,7 +689,15 @@ export class GameRoom {
           if (!g.content_hash || typeof g.content_hash !== 'string') continue;
           if (g.content.length > MAX_GAME_SIZE) continue;
           if (g.content.length === 0) continue;
-          if (count >= MAX_TOTAL_GAMES) break;
+          if (count >= MAX_TOTAL_GAMES) {
+            // Hard safety cap: evict the oldest external row to make room.
+            const oldest = this.sql.exec(
+              "SELECT content_hash FROM games WHERE scope = 'external' ORDER BY updated ASC, rowid ASC LIMIT 1"
+            ).toArray()[0];
+            if (!oldest) break;
+            this.sql.exec("DELETE FROM games WHERE content_hash = ?", oldest.content_hash);
+            count = Math.max(0, count - 1);
+          }
 
           // Verify content hash matches (don't trust client blindly)
           const verified = await sha256hex16(g.content);
@@ -703,6 +732,10 @@ export class GameRoom {
             g.content_hash, g.name.slice(0, 100), g.content, updated, g.content.length,
             owner, gameId, version, verified
           );
+          const trimmed = this.trimExternalPool();
+          if (trimmed > 0) {
+            count = Math.max(0, count - trimmed);
+          }
           added.push({
             content_hash: g.content_hash,
             checksum: verified,

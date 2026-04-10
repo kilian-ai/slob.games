@@ -390,6 +390,10 @@ pub fn canvas(_args: &[Value]) -> Value {
                             span .fab-icon { "📤" }
                             span { "Share Project" }
                         }
+                        button #fabFavorite {
+                            span .fab-icon { "❤" }
+                            span { "Like / Keep Internal" }
+                        }
                         button #fabReceive {
                             span .fab-icon { "📥" }
                             span { "Receive Project" }
@@ -1188,6 +1192,23 @@ pub fn canvas(_args: &[Value]) -> Value {
                         document.getElementById('fabShare').addEventListener('click', () => {
                             fabMenu.classList.remove('show'); fabToggle.classList.remove('open');
                             smOpen('send');
+                        });
+                        document.getElementById('fabFavorite').addEventListener('click', async () => {
+                            fabMenu.classList.remove('show'); fabToggle.classList.remove('open');
+                            try {
+                                const sdk = window._traitsSDK;
+                                if (!sdk) return;
+                                const res = await sdk.call('sys.canvas', ['fork']);
+                                const r = res?.result || res || {};
+                                if (r.forked) {
+                                    renderProjectBar();
+                                    alert('Saved to your internal games: ' + (r.name || 'untitled'));
+                                } else {
+                                    alert('Already internal. This game is already yours.');
+                                }
+                            } catch (e) {
+                                alert('Could not save internally: ' + (e?.message || e));
+                            }
                         });
                         document.getElementById('fabReceive').addEventListener('click', () => {
                             fabMenu.classList.remove('show'); fabToggle.classList.remove('open');
