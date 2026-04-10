@@ -80,7 +80,7 @@ async function verifyToken(token, secret) {
 function cors() {
   return {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type,Authorization",
   };
 }
@@ -334,6 +334,16 @@ export class GameRoom {
       if (url.pathname === "/scores" && request.method === "GET") {
         const rows = this.sql.exec("SELECT game_hash, score, player, updated FROM scores").toArray();
         return json(rows);
+      }
+
+      // DELETE /game/:hash — remove a game
+      if (url.pathname.startsWith("/game/") && request.method === "DELETE") {
+        const hash = url.pathname.slice(6);
+        if (!hash) return json({ error: "missing hash" }, 400);
+        const exists = this.sql.exec("SELECT 1 FROM games WHERE content_hash = ?", hash).toArray();
+        if (exists.length === 0) return json({ error: "not found" }, 404);
+        this.sql.exec("DELETE FROM games WHERE content_hash = ?", hash);
+        return json({ ok: true, deleted: hash });
       }
 
       return json({ error: "WebSocket upgrade required or use REST endpoints" }, 426);
