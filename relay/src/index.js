@@ -260,6 +260,12 @@ export class GameRoom {
       updated TEXT NOT NULL,
       size INTEGER NOT NULL
     )`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS scores (
+      game_hash TEXT PRIMARY KEY,
+      score INTEGER NOT NULL,
+      player TEXT NOT NULL DEFAULT '',
+      updated TEXT NOT NULL
+    )`);
   }
 
   async fetch(request) {
@@ -273,6 +279,12 @@ export class GameRoom {
     const rows = this.sql.exec("SELECT content_hash FROM games").toArray();
     const hashes = rows.map(r => r.content_hash);
     pair[1].send(JSON.stringify({ type: 'catalog', hashes }));
+
+    // Send all high scores to the new client
+    const scoreRows = this.sql.exec("SELECT game_hash, score, player FROM scores").toArray();
+    if (scoreRows.length > 0) {
+      pair[1].send(JSON.stringify({ type: 'scores', scores: scoreRows }));
+    }
 
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
@@ -342,6 +354,48 @@ export class GameRoom {
           }
         }
         ws.send(JSON.stringify({ type: 'ack', added: added.length }));
+        break;
+      }
+
+      case 'score': {
+        // Client reports a high score: { game_hash, score, player? }
+        if (!data.game_hash || typeof data.game_hash !== 'string') return;
+        const incoming = Math.floor(Number(data.score));
+        if (!Number.isFinite(incoming) || incoming < 0) return;
+        const player = (typeof data.player === 'string' ? data.player : '').slice(0, 50);
+
+        // Only store if it's higher than existing
+        const existing = this.sql.exec(
+          "SELECT score FROM scores WHERE game_hash = ?", data.game_hash
+        ).toArray();
+
+        if (existing.length > 0 && existing[0].score >= incoming) {
+          // Not a new high score — just send back the current best
+          ws.send(JSON.stringify({
+            type: 'score-update',
+            game_hash: data.game_hash,
+            score: existing[0].score
+          }));
+          return;
+        }
+
+        const updated = new Date().toISOString();
+        this.sql.exec(
+          `INSERT INTO scores (game_hash, score, player, updated) VALUES (?, ?, ?, ?)
+           ON CONFLICT(game_hash) DO UPDATE SET score=excluded.score, player=excluded.player, updated=excluded.updated`,
+          data.game_hash, incoming, player, updated
+        );
+
+        // Broadcast new high score to ALL clients (including sender)
+        const msg = JSON.stringify({
+          type: 'score-update',
+          game_hash: data.game_hash,
+          score: incoming,
+          player
+        });
+        for (const sock of this.state.getWebSockets()) {
+          try { sock.send(msg); } catch (_) {}
+        }
         break;
       }
     }
