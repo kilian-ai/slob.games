@@ -75,6 +75,63 @@ async function verifyToken(token, secret) {
   } catch(_) { return null; }
 }
 
+const USER_TOKEN_TTL_SECS = 86400 * 30; // 30 days
+
+async function signUserToken(username, relayOrigin, secret) {
+  const payload = {
+    sub: username,
+    relay: relayOrigin,
+    typ: 'user',
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + USER_TOKEN_TTL_SECS,
+  };
+  const payloadBytes = new TextEncoder().encode(JSON.stringify(payload));
+  const key = await _getHmacKey(secret);
+  const sig = await crypto.subtle.sign('HMAC', key, payloadBytes);
+  const payloadB64 = btoa(JSON.stringify(payload));
+  const sigB64 = btoa(String.fromCharCode(...new Uint8Array(sig)));
+  return `${payloadB64}.${sigB64}`;
+}
+
+async function verifyUserToken(token, secret) {
+  try {
+    const dot = token.lastIndexOf('.');
+    if (dot === -1) return null;
+    const payloadB64 = token.slice(0, dot);
+    const sigB64 = token.slice(dot + 1);
+    const payload = JSON.parse(atob(payloadB64));
+    if (payload.typ !== 'user' || !payload.sub) return null;
+    if (!payload.exp || Date.now() / 1000 > payload.exp) return null;
+    const key = await _getHmacKey(secret);
+    const sigBytes = Uint8Array.from(atob(sigB64), c => c.charCodeAt(0));
+    const dataBytes = new TextEncoder().encode(JSON.stringify(payload));
+    const valid = await crypto.subtle.verify('HMAC', key, sigBytes, dataBytes);
+    return valid ? payload : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function normalizeSlug(input, fallback = 'game') {
+  const s = String(input || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return s || fallback;
+}
+
+async function sha256hex(str) {
+  const data = new TextEncoder().encode(str);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  const bytes = new Uint8Array(hash);
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function passwordHash(username, password, secret) {
+  return sha256hex(`${username}:${password}:${secret || ''}`);
+}
+
 // ── CORS ─────────────────────────────────────────────────────────────────────
 
 function cors() {
@@ -252,6 +309,7 @@ const MAX_TOTAL_GAMES = 500;
 export class GameRoom {
   constructor(state, env) {
     this.state = state;
+    this.env = env;
     this.sql = state.storage.sql;
     this.sql.exec(`CREATE TABLE IF NOT EXISTS games (
       content_hash TEXT PRIMARY KEY,
@@ -259,6 +317,34 @@ export class GameRoom {
       content TEXT NOT NULL,
       updated TEXT NOT NULL,
       size INTEGER NOT NULL
+    )`);
+    const gameCols = this.sql.exec("PRAGMA table_info(games)").toArray().map(r => r.name);
+    if (!gameCols.includes('owner')) this.sql.exec("ALTER TABLE games ADD COLUMN owner TEXT NOT NULL DEFAULT 'public'");
+    if (!gameCols.includes('game_id')) this.sql.exec("ALTER TABLE games ADD COLUMN game_id TEXT NOT NULL DEFAULT ''");
+    if (!gameCols.includes('scope')) this.sql.exec("ALTER TABLE games ADD COLUMN scope TEXT NOT NULL DEFAULT 'external'");
+    if (!gameCols.includes('version')) this.sql.exec("ALTER TABLE games ADD COLUMN version TEXT NOT NULL DEFAULT ''");
+    if (!gameCols.includes('checksum')) this.sql.exec("ALTER TABLE games ADD COLUMN checksum TEXT NOT NULL DEFAULT ''");
+
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS internal_games (
+      owner TEXT NOT NULL,
+      game_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      content TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      checksum TEXT NOT NULL,
+      version TEXT NOT NULL,
+      forked_from_hash TEXT,
+      updated TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      PRIMARY KEY (owner, game_id)
+    )`);
+    this.sql.exec("CREATE INDEX IF NOT EXISTS idx_internal_games_owner ON internal_games(owner)");
+
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS users (
+      username TEXT PRIMARY KEY,
+      email TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      created TEXT NOT NULL
     )`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS scores (
       game_hash TEXT PRIMARY KEY,
@@ -268,17 +354,152 @@ export class GameRoom {
     )`);
   }
 
+  async authUser(request) {
+    const auth = request.headers.get('Authorization') || '';
+    const bearer = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
+    const headerToken = request.headers.get('X-Slob-Token') || '';
+    const url = new URL(request.url);
+    const token = bearer || headerToken || url.searchParams.get('token') || '';
+    if (!token || !this.env.RELAY_SECRET) return null;
+    const payload = await verifyUserToken(token, this.env.RELAY_SECRET);
+    return payload?.sub || null;
+  }
+
+  deriveGameId(name, explicit) {
+    return normalizeSlug(explicit || name, 'untitled');
+  }
+
+  normalizeExternalGameRow(row) {
+    const owner = normalizeSlug(row?.owner || 'public', 'public');
+    const gameId = this.deriveGameId(row?.name || row?.content_hash || 'untitled', row?.game_id || '');
+    return {
+      ...row,
+      owner,
+      game_id: gameId,
+      scope: row?.scope || 'external',
+      version: row?.version || '',
+      checksum: row?.checksum || row?.content_hash || '',
+    };
+  }
+
   async fetch(request) {
     const url = new URL(request.url);
 
     // ── REST API (non-WebSocket) ──
     if (request.headers.get("Upgrade") !== "websocket") {
-      // GET /games — list all games (name, hash, size, updated)
+      // POST /auth/register — create user + issue token
+      if (url.pathname === "/auth/register" && request.method === "POST") {
+        if (!this.env.RELAY_SECRET) return json({ error: "RELAY_SECRET not configured" }, 503);
+        const body = await request.json().catch(() => ({}));
+        const username = normalizeSlug(body.username || '', '');
+        const email = String(body.email || '').trim().toLowerCase();
+        const password = String(body.password || '');
+        if (!username || username.length < 3) return json({ error: "username must be at least 3 chars" }, 400);
+        if (!/^\S+@\S+\.\S+$/.test(email)) return json({ error: "invalid email" }, 400);
+        if (password.length < 6) return json({ error: "password must be at least 6 chars" }, 400);
+
+        const exists = this.sql.exec("SELECT 1 FROM users WHERE username = ? OR email = ?", username, email).toArray();
+        if (exists.length > 0) return json({ error: "username or email already exists" }, 409);
+
+        const created = new Date().toISOString();
+        const hashed = await passwordHash(username, password, this.env.RELAY_SECRET);
+        this.sql.exec(
+          "INSERT INTO users (username, email, password_hash, created) VALUES (?, ?, ?, ?)",
+          username, email, hashed, created
+        );
+        const token = await signUserToken(username, new URL(request.url).origin, this.env.RELAY_SECRET);
+        return json({ ok: true, username, token });
+      }
+
+      // POST /auth/login — verify creds + issue token
+      if (url.pathname === "/auth/login" && request.method === "POST") {
+        if (!this.env.RELAY_SECRET) return json({ error: "RELAY_SECRET not configured" }, 503);
+        const body = await request.json().catch(() => ({}));
+        const username = normalizeSlug(body.username || '', '');
+        const password = String(body.password || '');
+        if (!username || !password) return json({ error: "username and password required" }, 400);
+        const row = this.sql.exec(
+          "SELECT username, password_hash FROM users WHERE username = ?", username
+        ).toArray()[0];
+        if (!row) return json({ error: "invalid credentials" }, 401);
+
+        const hashed = await passwordHash(username, password, this.env.RELAY_SECRET);
+        if (hashed !== row.password_hash) return json({ error: "invalid credentials" }, 401);
+
+        const token = await signUserToken(username, new URL(request.url).origin, this.env.RELAY_SECRET);
+        return json({ ok: true, username, token });
+      }
+
+      // GET /games — list all external games
       if (url.pathname === "/games" && request.method === "GET") {
         const rows = this.sql.exec(
-          "SELECT content_hash, name, size, updated FROM games ORDER BY updated DESC"
+          "SELECT content_hash, name, size, updated, owner, game_id, scope, version, checksum FROM games WHERE scope = 'external' ORDER BY name ASC"
+        ).toArray().map((r) => this.normalizeExternalGameRow(r));
+        return json(rows);
+      }
+
+      // GET /games.toml — export external game manifests as TOML
+      if (url.pathname === '/games.toml' && request.method === 'GET') {
+        const rows = this.sql.exec(
+          "SELECT content_hash, name, size, updated, owner, game_id, version, checksum FROM games WHERE scope = 'external' ORDER BY owner ASC, game_id ASC"
+        ).toArray().map((r) => this.normalizeExternalGameRow(r));
+        const out = rows.map((g) => {
+          return [
+            '[[game]]',
+            `id = "${g.owner}/${g.game_id}"`,
+            `name = "${String(g.name || '').replace(/"/g, '\\"')}"`,
+            `owner = "${g.owner}"`,
+            `game_id = "${g.game_id}"`,
+            `version = "${g.version || ''}"`,
+            `checksum = "${g.checksum || g.content_hash}"`,
+            `content_hash = "${g.content_hash}"`,
+            `size = ${Number(g.size || 0)}`,
+            `updated = "${g.updated}"`,
+          ].join('\n');
+        }).join('\n\n');
+        return new Response(out, {
+          status: 200,
+          headers: { 'Content-Type': 'text/plain; charset=utf-8', ...cors() }
+        });
+      }
+
+      // GET /internal/games — list authenticated user's internal games
+      if (url.pathname === "/internal/games" && request.method === "GET") {
+        const user = await this.authUser(request);
+        if (!user) return json({ error: "auth required" }, 401);
+        const rows = this.sql.exec(
+          "SELECT owner, game_id, name, content_hash, checksum, version, size, updated, forked_from_hash FROM internal_games WHERE owner = ? ORDER BY updated DESC",
+          user
         ).toArray();
         return json(rows);
+      }
+
+      // POST /internal/fork — fork external game into authenticated user's internal room
+      if (url.pathname === "/internal/fork" && request.method === "POST") {
+        const user = await this.authUser(request);
+        if (!user) return json({ error: "auth required" }, 401);
+        const body = await request.json().catch(() => ({}));
+        const sourceHash = String(body.source_hash || '').trim();
+        if (!sourceHash) return json({ error: "source_hash required" }, 400);
+
+        const src = this.sql.exec(
+          "SELECT content_hash, name, content FROM games WHERE content_hash = ?", sourceHash
+        ).toArray()[0];
+        if (!src) return json({ error: "source game not found" }, 404);
+
+        const gameId = this.deriveGameId(src.name, body.game_id);
+        const version = String(body.version || 'v1');
+        const checksum = await sha256hex16(src.content);
+        const updated = new Date().toISOString();
+
+        this.sql.exec(
+          `INSERT OR REPLACE INTO internal_games
+           (owner, game_id, name, content, content_hash, checksum, version, forked_from_hash, updated, size)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          user, gameId, String(body.name || src.name).slice(0, 100), src.content,
+          sourceHash, checksum, version, sourceHash, updated, src.content.length
+        );
+        return json({ ok: true, owner: user, game_id: gameId, forked_from_hash: sourceHash, checksum, version });
       }
 
       // GET /game/:hash — full HTML content of one game
@@ -286,8 +507,8 @@ export class GameRoom {
         const hash = url.pathname.slice(6);
         if (!hash) return json({ error: "missing hash" }, 400);
         const rows = this.sql.exec(
-          "SELECT content_hash, name, content, updated FROM games WHERE content_hash = ?", hash
-        ).toArray();
+          "SELECT content_hash, name, content, updated, owner, game_id, scope, version, checksum FROM games WHERE content_hash = ?", hash
+        ).toArray().map((r) => this.normalizeExternalGameRow(r));
         if (rows.length === 0) return json({ error: "not found" }, 404);
         return json(rows[0]);
       }
@@ -309,19 +530,38 @@ export class GameRoom {
         // Compute new hash
         const newHash = await sha256hex16(content);
         const name = body.name || existing[0].name;
+        const owner = normalizeSlug(body.owner || 'public', 'public');
+        const gameId = this.deriveGameId(name, body.game_id);
+        const version = String(body.version || '');
         const updated = new Date().toISOString();
+
+        this.sql.exec("DELETE FROM games WHERE name = ? AND scope = 'external'", name.slice(0, 100));
+        this.sql.exec("DELETE FROM games WHERE owner = ? AND game_id = ? AND scope = 'external'", owner, gameId);
 
         // Delete old row, insert with new hash
         this.sql.exec("DELETE FROM games WHERE content_hash = ?", hash);
         this.sql.exec(
-          "INSERT INTO games (content_hash, name, content, updated, size) VALUES (?, ?, ?, ?, ?)",
-          newHash, name.slice(0, 100), content, updated, content.length
+          `INSERT INTO games
+           (content_hash, name, content, updated, size, owner, game_id, scope, version, checksum)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'external', ?, ?)` ,
+          newHash, name.slice(0, 100), content, updated, content.length,
+          owner, gameId, version, newHash
         );
 
         // Broadcast updated game to all connected WebSocket clients
         const msg = JSON.stringify({
           type: 'sync',
-          games: [{ content_hash: newHash, name: name.slice(0, 100), content, updated }]
+          games: [{
+            content_hash: newHash,
+            checksum: newHash,
+            owner,
+            game_id: gameId,
+            scope: 'external',
+            version,
+            name: name.slice(0, 100),
+            content,
+            updated
+          }]
         });
         for (const sock of this.state.getWebSockets()) {
           try { sock.send(msg); } catch (_) {}
@@ -346,6 +586,33 @@ export class GameRoom {
         return json({ ok: true, deleted: hash });
       }
 
+      // PUT /internal/game/:gameId — update authenticated user's internal game
+      if (url.pathname.startsWith('/internal/game/') && request.method === 'PUT') {
+        const user = await this.authUser(request);
+        if (!user) return json({ error: 'auth required' }, 401);
+        const gameId = normalizeSlug(url.pathname.slice('/internal/game/'.length), '');
+        if (!gameId) return json({ error: 'missing game id' }, 400);
+        const body = await request.json().catch(() => ({}));
+        const content = String(body.content || '');
+        if (!content) return json({ error: 'missing content' }, 400);
+        if (content.length > MAX_GAME_SIZE) return json({ error: 'too large' }, 413);
+
+        const name = String(body.name || gameId).slice(0, 100);
+        const checksum = await sha256hex16(content);
+        const version = String(body.version || 'v1');
+        const updated = new Date().toISOString();
+
+        this.sql.exec(
+          `INSERT OR REPLACE INTO internal_games
+           (owner, game_id, name, content, content_hash, checksum, version, forked_from_hash, updated, size)
+           VALUES (?, ?, ?, ?, ?, ?, ?,
+             COALESCE((SELECT forked_from_hash FROM internal_games WHERE owner = ? AND game_id = ?), NULL),
+             ?, ?)`,
+          user, gameId, name, content, checksum, checksum, version, user, gameId, updated, content.length
+        );
+        return json({ ok: true, owner: user, game_id: gameId, content_hash: checksum, checksum, version });
+      }
+
       return json({ error: "WebSocket upgrade required or use REST endpoints" }, 426);
     }
 
@@ -354,7 +621,7 @@ export class GameRoom {
     this.state.acceptWebSocket(pair[1]);
 
     // Send catalog (hashes only) to the new client
-    const rows = this.sql.exec("SELECT content_hash FROM games").toArray();
+    const rows = this.sql.exec("SELECT content_hash FROM games WHERE scope = 'external'").toArray();
     const hashes = rows.map(r => r.content_hash);
     pair[1].send(JSON.stringify({ type: 'catalog', hashes }));
 
@@ -379,9 +646,9 @@ export class GameRoom {
         const wanted = data.hashes.slice(0, 50);
         const ph = wanted.map(() => '?').join(',');
         const rows = this.sql.exec(
-          `SELECT content_hash, name, content, updated FROM games WHERE content_hash IN (${ph})`,
+          `SELECT content_hash, name, content, updated, owner, game_id, scope, version, checksum FROM games WHERE content_hash IN (${ph})`,
           ...wanted
-        ).toArray();
+        ).toArray().map((r) => this.normalizeExternalGameRow(r));
         if (rows.length > 0) {
           ws.send(JSON.stringify({ type: 'games', games: rows }));
         }
@@ -413,12 +680,40 @@ export class GameRoom {
           ).toArray();
           if (exists.length > 0) continue;
 
+          const owner = normalizeSlug(g.owner || 'public', 'public');
+          const gameId = this.deriveGameId(g.name, g.game_id);
+          const version = String(g.version || '');
+
+          this.sql.exec("DELETE FROM games WHERE name = ? AND scope = 'external'", g.name.slice(0, 100));
+          // Keep only one current version per identity (<owner>/<game_id>) in external pool.
+          const sameIdentity = this.sql.exec(
+            "SELECT content_hash FROM games WHERE owner = ? AND game_id = ? AND scope = 'external'",
+            owner, gameId
+          ).toArray();
+          for (const row of sameIdentity) {
+            this.sql.exec("DELETE FROM games WHERE content_hash = ?", row.content_hash);
+            count = Math.max(0, count - 1);
+          }
+
           const updated = new Date().toISOString();
           this.sql.exec(
-            "INSERT INTO games (content_hash, name, content, updated, size) VALUES (?, ?, ?, ?, ?)",
-            g.content_hash, g.name.slice(0, 100), g.content, updated, g.content.length
+            `INSERT INTO games
+             (content_hash, name, content, updated, size, owner, game_id, scope, version, checksum)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 'external', ?, ?)`,
+            g.content_hash, g.name.slice(0, 100), g.content, updated, g.content.length,
+            owner, gameId, version, verified
           );
-          added.push({ content_hash: g.content_hash, name: g.name.slice(0, 100), content: g.content, updated });
+          added.push({
+            content_hash: g.content_hash,
+            checksum: verified,
+            owner,
+            game_id: gameId,
+            scope: 'external',
+            version,
+            name: g.name.slice(0, 100),
+            content: g.content,
+            updated
+          });
           count++;
         }
 

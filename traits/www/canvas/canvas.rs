@@ -1769,6 +1769,23 @@ pub fn canvas(_args: &[Value]) -> Value {
                             const RELAY_WS = 'wss://relay.traits.build/sync';
                             const MAX_PUSH_SIZE = 256 * 1024; // 256KB per game
 
+                            function slugify(s) {
+                                return String(s || '')
+                                    .trim()
+                                    .toLowerCase()
+                                    .replace(/[^a-z0-9]+/g, '-')
+                                    .replace(/^-+|-+$/g, '') || 'untitled';
+                            }
+
+                            function localUsername() {
+                                try {
+                                    const u = (localStorage.getItem('traits.env.SLOB_USERNAME') || '').trim();
+                                    return u ? slugify(u) : 'public';
+                                } catch (_) {
+                                    return 'public';
+                                }
+                            }
+
                             async function contentHash(str) {
                                 const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str || ''));
                                 const arr = new Uint8Array(buf);
@@ -1784,7 +1801,16 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 for (const [id, g] of Object.entries(col.games || {})) {
                                     if (!g.content) continue;
                                     const hash = await contentHash(g.content);
-                                    result.push({ id, name: g.name || 'untitled', content: g.content, hash });
+                                    result.push({
+                                        id,
+                                        name: g.name || 'untitled',
+                                        content: g.content,
+                                        hash,
+                                        owner: g.owner || localUsername(),
+                                        game_id: g.game_id || slugify(g.name || id),
+                                        scope: g.scope || 'internal',
+                                        version: g.version || ''
+                                    });
                                 }
                                 return result;
                             }
@@ -1809,17 +1835,24 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     let added = 0;
                                     for (const g of games) {
                                         if (!g.content || !g.content_hash) continue;
-                                        if (existing.has(g.content_hash)) continue;
+                                        const owner = g.owner || 'public';
+                                        const gid = g.game_id || slugify(g.name || g.content_hash);
+                                        const gameId = ('s-' + slugify(owner + '-' + gid)).slice(0, 48);
 
-                                        const gameId = 's' + g.content_hash.slice(0, 11);
-                                        // Skip if ID already taken (very unlikely collision)
-                                        if (col.games[gameId]) continue;
+                                        if (existing.has(g.content_hash) && !col.games[gameId]) continue;
 
+                                        // Update in place if we already have this identity.
+                                        const prev = col.games[gameId] || {};
                                         col.games[gameId] = {
-                                            name: g.name || 'untitled',
+                                            name: g.name || prev.name || 'untitled',
                                             content: g.content,
-                                            created: g.updated || new Date().toISOString(),
+                                            created: prev.created || g.updated || new Date().toISOString(),
                                             updated: g.updated || new Date().toISOString(),
+                                            owner: owner,
+                                            game_id: gid,
+                                            scope: 'external',
+                                            version: g.version || prev.version || '',
+                                            checksum: g.checksum || g.content_hash,
                                             _sync_hash: g.content_hash
                                         };
                                         existing.add(g.content_hash);
@@ -1844,10 +1877,18 @@ pub fn canvas(_args: &[Value]) -> Value {
                             let ws = null;
                             let reconnectDelay = 2000;
                             let _syncing = false; // prevent re-entrant sync from storage events
+                            let serverHashSet = new Set(); // track what relay already has
 
                             function connect() {
                                 if (ws) return;
-                                try { ws = new WebSocket(RELAY_WS); } catch (e) { scheduleReconnect(); return; }
+                                try {
+                                    let wsUrl = RELAY_WS + '?user=' + encodeURIComponent(localUsername());
+                                    try {
+                                        const token = localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '';
+                                        if (token) wsUrl += '&token=' + encodeURIComponent(token);
+                                    } catch (_) {}
+                                    ws = new WebSocket(wsUrl);
+                                } catch (e) { scheduleReconnect(); return; }
                                 window.__syncWs = ws; // expose for score forwarding
 
                                 ws.onopen = () => {
@@ -1861,19 +1902,20 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                                     if (data.type === 'catalog') {
                                         // Server sent its hash catalog — compare with local
-                                        const serverHashes = new Set(data.hashes || []);
+                                        serverHashSet = new Set(data.hashes || []);
                                         const local = await localGamesWithHashes();
                                         const localHashSet = new Set(local.map(g => g.hash));
 
                                         // Request games we don't have
-                                        const need = [...serverHashes].filter(h => !localHashSet.has(h));
+                                        const need = [...serverHashSet].filter(h => !localHashSet.has(h));
                                         if (need.length > 0) {
                                             ws.send(JSON.stringify({ type: 'need', hashes: need }));
                                         }
 
                                         // Push games server doesn't have
                                         const toPush = local.filter(g =>
-                                            !serverHashes.has(g.hash) &&
+                                            g.scope !== 'internal' &&
+                                            !serverHashSet.has(g.hash) &&
                                             g.content.length > 0 &&
                                             g.content.length <= MAX_PUSH_SIZE
                                         );
@@ -1883,9 +1925,15 @@ pub fn canvas(_args: &[Value]) -> Value {
                                                 games: toPush.map(g => ({
                                                     name: g.name,
                                                     content: g.content,
-                                                    content_hash: g.hash
+                                                    content_hash: g.hash,
+                                                    checksum: g.hash,
+                                                    owner: g.owner,
+                                                    game_id: g.game_id,
+                                                    scope: g.scope || 'internal',
+                                                    version: g.version || ''
                                                 }))
                                             }));
+                                            toPush.forEach(g => serverHashSet.add(g.hash));
                                         }
                                     }
 
@@ -1951,6 +1999,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 if (!ws || ws.readyState !== WebSocket.OPEN) return;
                                 const local = await localGamesWithHashes();
                                 const toPush = local.filter(g =>
+                                    g.scope !== 'internal' &&
+                                    !serverHashSet.has(g.hash) &&
                                     g.content.length > 0 &&
                                     g.content.length <= MAX_PUSH_SIZE
                                 );
@@ -1960,9 +2010,15 @@ pub fn canvas(_args: &[Value]) -> Value {
                                         games: toPush.map(g => ({
                                             name: g.name,
                                             content: g.content,
-                                            content_hash: g.hash
+                                            content_hash: g.hash,
+                                            checksum: g.hash,
+                                            owner: g.owner,
+                                            game_id: g.game_id,
+                                            scope: g.scope || 'internal',
+                                            version: g.version || ''
                                         }))
                                     }));
+                                    toPush.forEach(g => serverHashSet.add(g.hash));
                                 }
                             });
 

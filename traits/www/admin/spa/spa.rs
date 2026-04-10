@@ -69,16 +69,31 @@ pub fn spa(_args: &[Value]) -> Value {
 
                     // Secrets & Environment
                     div.grid {
+                      section.card {
+                        h2 { "Account" }
+                        p.note { "Register/login for a user token used by relay sync and private internal rooms." }
+                        div.form-row {
+                          input id="authUsername" type="text" placeholder="Username";
+                          input id="authEmail" type="email" placeholder="Email (for register)";
+                        }
+                        div.form-row {
+                          input id="authPassword" type="password" placeholder="Password";
+                          button.primary onclick="registerUser()" { "Register" }
+                          button onclick="loginUser()" { "Login" }
+                        }
+                        p.inline-status id="authStatus" {}
+                      }
+
                         section.card {
                             h2 { "Secrets" }
                             p.note {
-                                "Stored in this browser under " code { "localStorage" } ". Never synced."
+                            "Stored in this browser under " code { "localStorage" } ". Never synced. Use " code { "SLOB_USER_TOKEN" } " for relay auth."
                             }
                             table id="secretTable" {
                                 tr { td colspan="3" { "Loading…" } }
                             }
                             div.form-row {
-                                input id="secretKey" type="text" placeholder="Secret ID";
+                            input id="secretKey" type="text" placeholder="Secret ID (e.g. SLOB_USER_TOKEN)";
                                 input id="secretValue" type="password" placeholder="Secret value";
                                 button.primary onclick="saveSecret()" { "Store" }
                             }
@@ -88,13 +103,13 @@ pub fn spa(_args: &[Value]) -> Value {
                         section.card {
                             h2 { "Environment" }
                             p.note {
-                                "Stored in this browser under " code { "localStorage" } ". Not encrypted."
+                            "Stored in this browser under " code { "localStorage" } ". Not encrypted. Set " code { "SLOB_USERNAME" } " for game identity."
                             }
                             table id="envTable" {
                                 tr { td colspan="4" { "Loading…" } }
                             }
                             div.form-row {
-                                input id="envKey" type="text" placeholder="Variable name";
+                            input id="envKey" type="text" placeholder="Variable name (e.g. SLOB_USERNAME)";
                                 input id="envValue" type="text" placeholder="Variable value";
                                 button.primary onclick="saveEnvVar()" { "Store" }
                             }
@@ -558,7 +573,17 @@ function renderGames() {
     el.innerHTML = '<div class="no-games">No games stored yet. Play some games first.</div>';
     return;
   }
-  games.sort(function(a, b) { return (b[1].updated || '').localeCompare(a[1].updated || ''); });
+  games.sort(function(a, b) { return (a[1].name || '').localeCompare(b[1].name || ''); });
+  var seen = {};
+  var unique = [];
+  for (var j = 0; j < games.length; j++) {
+    var gg = games[j][1] || {};
+    var key = gg.checksum || gg._sync_hash || '';
+    if (key && seen[key]) continue;
+    if (key) seen[key] = true;
+    unique.push(games[j]);
+  }
+  games = unique;
   var html = '';
   for (var i = 0; i < games.length; i++) {
     var id = games[i][0];
@@ -566,12 +591,14 @@ function renderGames() {
     var name = esc(g.name || 'untitled');
     var size = formatSize((g.content || '').length);
     var updated = g.updated ? new Date(g.updated).toLocaleDateString() : '—';
-    var hash = id.slice(0, 8);
+    var hash = (g._sync_hash || g.checksum || id).slice(0, 8);
+    var identity = esc((g.owner || 'local') + '/' + (g.game_id || id.slice(0, 8)));
     var active = id === col.active ? ' <span style="color:#00ff88;font-size:10px;">● ACTIVE</span>' : '';
     html += '<div class="game-row">';
     html += '<div class="game-info">';
     html += '<div class="game-name">' + name + active + '</div>';
     html += '<div class="game-meta">';
+    html += '<span>' + identity + '</span>';
     html += '<span>' + size + '</span>';
     html += '<span>' + updated + '</span>';
     html += '<span style="opacity:0.5">#' + hash + '</span>';
@@ -684,6 +711,67 @@ function deleteEnvVar(k) {
   setStatus('envStatus', 'Deleted ' + k + '.');
 }
 
+function relayApiBase() {
+  return 'https://relay.traits.build/sync';
+}
+
+async function registerUser() {
+  var username = (byId('authUsername').value || '').trim();
+  var email = (byId('authEmail').value || '').trim();
+  var password = byId('authPassword').value || '';
+  if (!username || !email || !password) {
+    setStatus('authStatus', 'Username, email, and password are required.', true);
+    return;
+  }
+  try {
+    var r = await fetch(relayApiBase() + '/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: username, email: email, password: password })
+    });
+    var data = await r.json();
+    if (!r.ok || !data.ok) {
+      setStatus('authStatus', data.error || 'Register failed.', true);
+      return;
+    }
+    storage.setItem(ENV_PFX + 'SLOB_USERNAME', data.username);
+    storage.setItem(SECRET_PFX + 'SLOB_USER_TOKEN', data.token);
+    renderEnvVars();
+    renderSecrets();
+    setStatus('authStatus', 'Registered as ' + data.username + '. Token stored.', false);
+  } catch (e) {
+    setStatus('authStatus', 'Register request failed.', true);
+  }
+}
+
+async function loginUser() {
+  var username = (byId('authUsername').value || '').trim();
+  var password = byId('authPassword').value || '';
+  if (!username || !password) {
+    setStatus('authStatus', 'Username and password are required.', true);
+    return;
+  }
+  try {
+    var r = await fetch(relayApiBase() + '/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: username, password: password })
+    });
+    var data = await r.json();
+    if (!r.ok || !data.ok) {
+      setStatus('authStatus', data.error || 'Login failed.', true);
+      return;
+    }
+    storage.setItem(ENV_PFX + 'SLOB_USERNAME', data.username);
+    storage.setItem(SECRET_PFX + 'SLOB_USER_TOKEN', data.token);
+    renderEnvVars();
+    renderSecrets();
+    setStatus('authStatus', 'Logged in as ' + data.username + '. Token stored.', false);
+  } catch (e) {
+    setStatus('authStatus', 'Login request failed.', true);
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Init
 // ═══════════════════════════════════════════════════════════════
@@ -697,6 +785,8 @@ window.saveSecret = saveSecret;
 window.deleteSecret = deleteSecret;
 window.saveEnvVar = saveEnvVar;
 window.deleteEnvVar = deleteEnvVar;
+window.registerUser = registerUser;
+window.loginUser = loginUser;
 window.playGame = playGame;
 window.buildGame = buildGame;
 window.deleteGame = deleteGame;

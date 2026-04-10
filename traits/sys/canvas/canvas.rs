@@ -31,6 +31,49 @@ fn gen_id() -> String {
             y % 100, mo, d, h, m, s)
 }
 
+fn now_ts() -> String {
+    let now = kernel_logic::platform::time::now_utc();
+    format!("{}-{:02}-{:02}T{:02}:{:02}:{:02}Z", now.0, now.1, now.2, now.3, now.4, now.5)
+}
+
+/// If the active game is external, fork it into an internal game before mutating.
+fn ensure_internal_active(col: &mut Value) -> Option<String> {
+    let active_id = col["active"].as_str().map(|s| s.to_string())?;
+    if !col["games"][&active_id].is_object() {
+        return Some(active_id);
+    }
+
+    let scope = col["games"][&active_id]["scope"]
+        .as_str()
+        .or_else(|| col["games"][&active_id]["_scope"].as_str())
+        .unwrap_or("internal");
+
+    if scope != "external" {
+        return Some(active_id);
+    }
+
+    let mut new_id = format!("{}f", gen_id());
+    let mut n = 1;
+    while col["games"][&new_id].is_object() {
+        n += 1;
+        new_id = format!("{}f{}", gen_id(), n);
+    }
+
+    let mut forked = col["games"][&active_id].clone();
+    let ts = now_ts();
+    forked["scope"] = json!("internal");
+    forked["_scope"] = json!("internal");
+    forked["forked_from"] = json!(active_id.clone());
+    if forked["created"].is_null() {
+        forked["created"] = json!(ts.clone());
+    }
+    forked["updated"] = json!(ts);
+
+    col["games"][&new_id] = forked;
+    col["active"] = json!(new_id.clone());
+    Some(new_id)
+}
+
 pub fn canvas(args: &[Value]) -> Value {
     let action = args.first().and_then(|v| v.as_str()).unwrap_or("get");
 
@@ -39,17 +82,18 @@ pub fn canvas(args: &[Value]) -> Value {
         "set" => {
             let content = args.get(1).and_then(|v| v.as_str()).unwrap_or("");
             let mut col = read_games();
-            let now = kernel_logic::platform::time::now_utc();
-            let ts = format!("{}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-                now.0, now.1, now.2, now.3, now.4, now.5);
+            let ts = now_ts();
 
-            let active_id = col["active"].as_str().map(|s| s.to_string());
+            let active_id = ensure_internal_active(&mut col)
+                .or_else(|| col["active"].as_str().map(|s| s.to_string()));
 
             match active_id {
                 Some(id) if col["games"][&id].is_object() => {
                     // Update existing active game
                     col["games"][&id]["content"] = json!(content);
                     col["games"][&id]["updated"] = json!(ts);
+                    col["games"][&id]["scope"] = json!("internal");
+                    col["games"][&id]["_scope"] = json!("internal");
                 }
                 _ => {
                     // No active game — create a new one
@@ -57,6 +101,9 @@ pub fn canvas(args: &[Value]) -> Value {
                     col["games"][&id] = json!({
                         "name": "untitled",
                         "content": content,
+                        "scope": "internal",
+                        "_scope": "internal",
+                        "owner": "local",
                         "created": ts,
                         "updated": ts
                     });
@@ -74,11 +121,10 @@ pub fn canvas(args: &[Value]) -> Value {
         "append" => {
             let content = args.get(1).and_then(|v| v.as_str()).unwrap_or("");
             let mut col = read_games();
-            let now = kernel_logic::platform::time::now_utc();
-            let ts = format!("{}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-                now.0, now.1, now.2, now.3, now.4, now.5);
+            let ts = now_ts();
 
-            let active_id = col["active"].as_str().map(|s| s.to_string());
+            let active_id = ensure_internal_active(&mut col)
+                .or_else(|| col["active"].as_str().map(|s| s.to_string()));
             let combined = match &active_id {
                 Some(id) if col["games"][id]["content"].is_string() => {
                     let existing = col["games"][id]["content"].as_str().unwrap_or("");
@@ -91,12 +137,17 @@ pub fn canvas(args: &[Value]) -> Value {
                 Some(id) if col["games"][&id].is_object() => {
                     col["games"][&id]["content"] = json!(combined);
                     col["games"][&id]["updated"] = json!(ts);
+                    col["games"][&id]["scope"] = json!("internal");
+                    col["games"][&id]["_scope"] = json!("internal");
                 }
                 _ => {
                     let id = gen_id();
                     col["games"][&id] = json!({
                         "name": "untitled",
                         "content": combined,
+                        "scope": "internal",
+                        "_scope": "internal",
+                        "owner": "local",
                         "created": ts,
                         "updated": ts
                     });
@@ -122,9 +173,12 @@ pub fn canvas(args: &[Value]) -> Value {
         // ── clear: clear active game content ──
         "clear" => {
             let mut col = read_games();
-            if let Some(id) = col["active"].as_str().map(|s| s.to_string()) {
+            let active_id = ensure_internal_active(&mut col)
+                .or_else(|| col["active"].as_str().map(|s| s.to_string()));
+            if let Some(id) = active_id {
                 if col["games"][&id].is_object() {
                     col["games"][&id]["content"] = json!("");
+                    col["games"][&id]["updated"] = json!(now_ts());
                     kernel_logic::platform::vfs_delete("canvas/app.html");
                 }
             }
@@ -136,13 +190,14 @@ pub fn canvas(args: &[Value]) -> Value {
         "new" => {
             let name = args.get(1).and_then(|v| v.as_str()).unwrap_or("untitled");
             let mut col = read_games();
-            let now = kernel_logic::platform::time::now_utc();
-            let ts = format!("{}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-                now.0, now.1, now.2, now.3, now.4, now.5);
+            let ts = now_ts();
             let id = gen_id();
             col["games"][&id] = json!({
                 "name": name,
                 "content": "",
+                "scope": "internal",
+                "_scope": "internal",
+                "owner": "local",
                 "created": ts,
                 "updated": ts
             });
@@ -162,6 +217,11 @@ pub fn canvas(args: &[Value]) -> Value {
                     list.push(json!({
                         "id": id,
                         "name": g["name"].as_str().unwrap_or("untitled"),
+                        "owner": g["owner"].as_str().unwrap_or("local"),
+                        "scope": g["scope"].as_str().or_else(|| g["_scope"].as_str()).unwrap_or("internal"),
+                        "game_id": g["game_id"].as_str().unwrap_or(""),
+                        "checksum": g["checksum"].as_str().unwrap_or(""),
+                        "version": g["version"].as_str().unwrap_or(""),
                         "length": g["content"].as_str().map(|s| s.len()).unwrap_or(0),
                         "active": id == active_id,
                         "created": g["created"],
@@ -207,6 +267,9 @@ pub fn canvas(args: &[Value]) -> Value {
                 .or_else(|| read_games()["active"].as_str().map(|_| ""))
                 .unwrap_or("");
             let mut col = read_games();
+            if target_id.is_empty() {
+                let _ = ensure_internal_active(&mut col);
+            }
             let id = if target_id.is_empty() {
                 col["active"].as_str().unwrap_or("").to_string()
             } else {
@@ -216,6 +279,7 @@ pub fn canvas(args: &[Value]) -> Value {
                 return json!({"ok": false, "error": "No active game to rename"});
             }
             col["games"][&id]["name"] = json!(name);
+            col["games"][&id]["updated"] = json!(now_ts());
             write_games(&col);
             json!({"ok": true, "action": "rename", "game_id": id, "name": name})
         }
@@ -256,11 +320,13 @@ pub fn canvas(args: &[Value]) -> Value {
                 return json!({"ok": false, "error": "Name required"});
             }
             let mut col = read_games();
+            let _ = ensure_internal_active(&mut col);
             let id = col["active"].as_str().unwrap_or("").to_string();
             if id.is_empty() || !col["games"][&id].is_object() {
                 return json!({"ok": false, "error": "No active game"});
             }
             col["games"][&id]["name"] = json!(name);
+            col["games"][&id]["updated"] = json!(now_ts());
             write_games(&col);
             json!({"ok": true, "action": "save", "game_id": id, "name": name})
         }
