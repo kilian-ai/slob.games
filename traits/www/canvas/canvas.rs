@@ -617,7 +617,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             document.querySelector = function(s) {
                                 return _qs(s.replace(/^#phone-viewport\s+/,'').replace(/^#canvas-container\s+/,''));
                             };
-                            // ── Pause engine: freeze rAF + timers ──
+                            // ── Pause engine: freeze rAF + timers + audio instantly ──
                             var _paused = false;
                             var _origRAF = window.requestAnimationFrame;
                             var _origCAF = window.cancelAnimationFrame;
@@ -627,53 +627,95 @@ pub fn canvas(_args: &[Value]) -> Value {
                             var _origCI = window.clearInterval;
                             var _rafQueue = [];
                             var _timerQueue = [];
-                            var _intervalStore = {};
+                            var _activeIntervals = {}; // id -> {cb, ms, realId}
                             var _nextFakeId = 900000;
+                            // Track AudioContext instances for suspension
+                            var _audioContexts = [];
+                            var _OrigAudioCtx = window.AudioContext || window.webkitAudioContext;
+                            if (_OrigAudioCtx) {
+                                var PatchedAudioCtx = function() {
+                                    var ctx = new _OrigAudioCtx();
+                                    _audioContexts.push(ctx);
+                                    return ctx;
+                                };
+                                PatchedAudioCtx.prototype = _OrigAudioCtx.prototype;
+                                window.AudioContext = PatchedAudioCtx;
+                                if (window.webkitAudioContext) window.webkitAudioContext = PatchedAudioCtx;
+                            }
+                            // rAF: wrap callback so already-scheduled frames freeze instantly
                             window.requestAnimationFrame = function(cb) {
                                 if (_paused) { var id = _nextFakeId++; _rafQueue.push({id:id,cb:cb}); return id; }
-                                return _origRAF.call(window, cb);
+                                return _origRAF.call(window, function(ts) {
+                                    if (_paused) { _rafQueue.push({id:0,cb:cb}); return; }
+                                    cb(ts);
+                                });
                             };
                             window.cancelAnimationFrame = function(id) {
                                 _rafQueue = _rafQueue.filter(function(e){ return e.id !== id; });
                                 _origCAF.call(window, id);
                             };
+                            // setTimeout: wrap callback
                             window.setTimeout = function(cb, ms) {
                                 if (_paused) { var id = _nextFakeId++; _timerQueue.push({id:id,cb:cb,ms:ms,type:'timeout'}); return id; }
-                                return _origST.call(window, cb, ms);
+                                return _origST.call(window, function() {
+                                    if (_paused) { _timerQueue.push({id:0,cb:cb,ms:ms,type:'timeout'}); return; }
+                                    if (typeof cb === 'function') cb();
+                                    else if (typeof cb === 'string') eval(cb);
+                                }, ms);
                             };
                             window.clearTimeout = function(id) {
                                 _timerQueue = _timerQueue.filter(function(e){ return e.id !== id; });
-                                if (_intervalStore[id]) { _origCI.call(window, _intervalStore[id]); delete _intervalStore[id]; }
                                 _origCT.call(window, id);
                             };
+                            // setInterval: track all active intervals so we can clear them on pause
                             window.setInterval = function(cb, ms) {
                                 if (_paused) { var id = _nextFakeId++; _timerQueue.push({id:id,cb:cb,ms:ms,type:'interval'}); return id; }
-                                var realId = _origSI.call(window, cb, ms);
-                                _intervalStore[realId] = realId;
+                                var realId = _origSI.call(window, function() {
+                                    if (_paused) return; // skip silently; interval stays alive to be cleared in _doPause
+                                    if (typeof cb === 'function') cb();
+                                }, ms);
+                                _activeIntervals[realId] = {cb:cb, ms:ms, realId:realId};
                                 return realId;
                             };
                             window.clearInterval = function(id) {
                                 _timerQueue = _timerQueue.filter(function(e){ return e.id !== id; });
-                                if (_intervalStore[id]) { _origCI.call(window, _intervalStore[id]); delete _intervalStore[id]; }
+                                delete _activeIntervals[id];
                                 _origCI.call(window, id);
                             };
                             function _doPause() {
                                 if (_paused) return;
                                 _paused = true;
-                                // Freeze running intervals by clearing them; store info to restart
+                                // Clear all active intervals and stash them for resume
+                                var keys = Object.keys(_activeIntervals);
+                                for (var i = 0; i < keys.length; i++) {
+                                    var info = _activeIntervals[keys[i]];
+                                    _origCI.call(window, info.realId);
+                                    _timerQueue.push({id:0, cb:info.cb, ms:info.ms, type:'interval'});
+                                }
+                                _activeIntervals = {};
+                                // Suspend all AudioContexts
+                                _audioContexts.forEach(function(ctx){ try { ctx.suspend(); } catch(_){} });
                                 try { if (typeof window.traits.onPause === 'function') window.traits.onPause(); } catch(_e){}
                             }
                             function _doResume() {
                                 if (!_paused) return;
                                 _paused = false;
                                 try { if (typeof window.traits.onResume === 'function') window.traits.onResume(); } catch(_e){}
+                                // Resume AudioContexts
+                                _audioContexts.forEach(function(ctx){ try { ctx.resume(); } catch(_){} });
                                 // Flush queued rAFs
                                 var rafs = _rafQueue.slice(); _rafQueue = [];
                                 rafs.forEach(function(e){ _origRAF.call(window, e.cb); });
                                 // Flush queued timers
                                 var timers = _timerQueue.slice(); _timerQueue = [];
                                 timers.forEach(function(e){
-                                    if (e.type === 'interval') { _origSI.call(window, e.cb, e.ms); }
+                                    if (e.type === 'interval') {
+                                        var rid = _origSI.call(window, function(){
+                                            if (_paused) return;
+                                            if (typeof e.cb === 'function') e.cb();
+                                        }, e.ms);
+                                        _activeIntervals[rid] = {cb:e.cb, ms:e.ms, realId:rid};
+                                    }
                                     else { _origST.call(window, e.cb, e.ms); }
                                 });
                             }
@@ -1475,7 +1517,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             }
 
                             // ── Carousel gesture state ──
-                            const SWIPE_THRESHOLD = 0.3; // fraction of screen width
+                            const SWIPE_THRESHOLD = 0.15; // fraction of screen width
                             let _gesture = null; // { startX, startY, tracking, swiping }
                             let _carouselPrevLabel = null;
                             let _carouselNextLabel = null;
