@@ -279,10 +279,6 @@ pub fn canvas(_args: &[Value]) -> Value {
                             transform-origin: top center;
                         }
 
-                        /* ── Mobile tap overlay ── */
-                        #mob-tap-overlay {
-                            display: none;
-                        }
 
                         /* ── Mobile fullscreen ── */
                         @media (max-width: 768px) and (pointer: coarse) {
@@ -308,13 +304,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             #canvas-fab.mob-hidden { opacity: 0; pointer-events: none; }
                             .canvas-empty { height: 100vh; }
 
-                            /* Tap overlay to catch taps on iframe */
-                            #mob-tap-overlay {
-                                display: block; position: fixed; top: 0; left: 0;
-                                width: 100vw; height: 100vh; z-index: 8999;
-                                background: transparent;
-                            }
-                            #mob-tap-overlay.mob-passthrough { display: none; }
+
 
                             /* FAB mobile action items */
                             .fab-menu .fab-mob-only { display: flex !important; }
@@ -370,9 +360,6 @@ pub fn canvas(_args: &[Value]) -> Value {
                         div style="color:#00ff88;font:bold 14px monospace" { "Updating game..." }
                     }
                 }
-
-                // Tap overlay for mobile (captures taps on iframe area)
-                div #mob-tap-overlay {}
 
                 // FAB menu
                 div #canvas-fab {
@@ -648,6 +635,13 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     window.parent.postMessage({type:'canvas-console', level:'error', message:msg}, '*');
                                 } catch(_){}
                             });
+                            // Two-finger tap → toggle parent chrome (mobile)
+                            document.addEventListener('touchstart', function(e){
+                                if (e.touches.length >= 2) {
+                                    e.preventDefault();
+                                    window.parent.postMessage({type:'canvas-toggle-chrome'}, '*');
+                                }
+                            }, {passive:false});
                         })();<\/script>`;
 
                         function renderCanvas(content) {
@@ -1334,12 +1328,11 @@ pub fn canvas(_args: &[Value]) -> Value {
                         vcmSendBtn.addEventListener('click', vcmSendText);
                         vcmInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') vcmSendText(); });
 
-                        // ── Mobile fullscreen: auto-hide chrome + tap overlay ──
+                        // ── Mobile fullscreen: auto-hide chrome, two-finger tap to toggle ──
                         const isMobile = window.matchMedia('(max-width:768px) and (pointer:coarse)').matches;
                         if (isMobile) {
                             const shellNav = document.getElementById('shell-nav');
                             const fab = document.getElementById('canvas-fab');
-                            const overlay = document.getElementById('mob-tap-overlay');
                             let hideTimer = null;
                             let chromeVisible = true;
                             const HIDE_DELAY = 3000;
@@ -1348,13 +1341,11 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 chromeVisible = true;
                                 if (shellNav) { shellNav.style.transition = 'opacity 0.3s, transform 0.3s'; shellNav.style.opacity = '1'; shellNav.style.transform = 'translateY(0)'; shellNav.style.pointerEvents = ''; }
                                 if (fab) fab.classList.remove('mob-hidden');
-                                if (overlay) overlay.classList.add('mob-passthrough');
                                 clearTimeout(hideTimer);
                                 hideTimer = setTimeout(hideChrome, HIDE_DELAY);
                             }
 
                             function hideChrome() {
-                                // Don't hide if FAB menu or voice modal is open
                                 const fabMenu = document.getElementById('fabMenu');
                                 const vcm = document.getElementById('voice-chat-modal');
                                 const sm = document.getElementById('share-modal');
@@ -1365,17 +1356,22 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 chromeVisible = false;
                                 if (shellNav) { shellNav.style.opacity = '0'; shellNav.style.transform = 'translateY(-100%)'; shellNav.style.pointerEvents = 'none'; }
                                 if (fab) fab.classList.add('mob-hidden');
-                                // Show overlay so next tap is caught
-                                if (overlay) overlay.classList.remove('mob-passthrough');
                             }
 
-                            // Tap on the overlay → show chrome (overlay covers iframe when chrome is hidden)
-                            if (overlay) {
-                                overlay.addEventListener('touchstart', (e) => {
+                            // Two-finger tap inside iframe → toggle chrome (via bridge postMessage)
+                            window.addEventListener('message', (e) => {
+                                if (e.data?.type === 'canvas-toggle-chrome') {
+                                    if (chromeVisible) { hideChrome(); } else { showChrome(); }
+                                }
+                            });
+
+                            // Two-finger tap on parent document itself (outside iframe)
+                            document.addEventListener('touchstart', (e) => {
+                                if (e.touches.length >= 2) {
                                     e.preventDefault();
-                                    showChrome();
-                                }, { passive: false });
-                            }
+                                    if (chromeVisible) { hideChrome(); } else { showChrome(); }
+                                }
+                            }, { passive: false });
 
                             // Taps on FAB/shell-nav/modals: reset hide timer
                             document.addEventListener('click', (e) => {
