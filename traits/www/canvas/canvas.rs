@@ -1538,7 +1538,7 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                             function beginGesture(x, y) {
                                 if (_gesture) return; // already tracking
-                                _gesture = { startX: x, startY: y, tracking: true, swiping: false };
+                                _gesture = { startX: x, startY: y, tracking: true, swiping: false, wasPaused: gamePaused };
                                 pauseGame();
                                 showChrome();
                                 clearTimeout(hideTimer);
@@ -1583,9 +1583,14 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 if (_carouselNextLabel) { _carouselNextLabel.style.transform = 'translateY(-50%) translateX(100%)'; _carouselNextLabel.style.opacity = 0; }
 
                                 if (!g.swiping) {
-                                    // It was a tap (no significant horizontal movement)
-                                    // Game stays paused, chrome stays visible — tap again to unpause
+                                    // It was a two-finger tap (no significant drag)
                                     if (vp) { vp.style.transition = ''; vp.style.transform = ''; }
+                                    if (g.wasPaused) {
+                                        // Was already paused → unpause + hide chrome
+                                        resumeGame();
+                                        hideTimer = setTimeout(hideChrome, HIDE_DELAY);
+                                    }
+                                    // If wasn't paused, beginGesture already paused it — stay paused
                                     return;
                                 }
 
@@ -1646,10 +1651,6 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     e.preventDefault();
                                     const t0 = e.touches[0], t1 = e.touches[1];
                                     beginGesture((t0.clientX+t1.clientX)/2, (t0.clientY+t1.clientY)/2);
-                                } else if (e.touches.length === 1 && gamePaused) {
-                                    // Single tap while paused -> unpause
-                                    resumeGame();
-                                    hideChrome();
                                 }
                             }, { passive: false });
                             document.addEventListener('touchmove', (e) => {
