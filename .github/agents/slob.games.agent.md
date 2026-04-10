@@ -393,7 +393,9 @@ Every game loaded into the `#phone-viewport` iframe gets a **bridge `<script>`**
 | `type` | Fields | Purpose |
 |--------|--------|---------|
 | `canvas-console` | `level`, `message` | Forward game console output to parent |
-| `canvas-toggle-chrome` | — | Two-finger tap: toggle mobile UI chrome |
+| `canvas-toggle-chrome` | — | Two-finger tap: toggle pause + mobile UI chrome |
+| `canvas-next-game` | — | Two-finger swipe right: switch to next game |
+| `canvas-prev-game` | — | Two-finger swipe left: switch to previous game |
 
 ### Extending the bridge:
 
