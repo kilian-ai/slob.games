@@ -370,32 +370,47 @@ Every game loaded into the `#phone-viewport` iframe gets a **bridge `<script>`**
    window.traits.echo(text)          // sys.echo
    window.traits.canvas(action, content?) // sys.canvas
    window.traits.audio(action, ...rest)   // sys.audio
+   window.traits.onPause = function() {}  // called when game is paused (optional)
+   window.traits.onResume = function() {} // called when game is resumed (optional)
    ```
 
 2. **`document.querySelector` patch** — Strips `#phone-viewport` and `#canvas-container` prefixes from selectors, so code written for the outer document works inside the iframe.
 
-3. **Console capture** — Wraps `console.log/warn/error` to forward messages to the parent via `postMessage`:
+3. **Pause engine** — Monkey-patches `requestAnimationFrame`, `setTimeout`, `setInterval` and their cancel counterparts. On `canvas-pause` message from parent, queues all new rAF/timer callbacks instead of scheduling them. On `canvas-resume`, flushes the queues. Games are generically frozen without cooperation, but can optionally implement `window.traits.onPause` / `window.traits.onResume` for custom pause behavior (e.g., save state, show pause screen).
+
+4. **Console capture** — Wraps `console.log/warn/error` to forward messages to the parent via `postMessage`:
    ```javascript
    window.parent.postMessage({type:'canvas-console', level:'log'|'warn'|'error', message:string}, '*')
    ```
    The parent stores these in `window.__canvasGameLogs` for voice agent context.
 
-4. **Uncaught error capture** — Listens for `window.error` events and forwards them as `canvas-console` error messages.
+5. **Uncaught error capture** — Listens for `window.error` events and forwards them as `canvas-console` error messages.
 
-5. **Two-finger tap (mobile chrome toggle)** — Listens for `touchstart` with 2+ touches and posts:
-   ```javascript
-   window.parent.postMessage({type:'canvas-toggle-chrome'}, '*')
-   ```
-   The parent uses this to show/hide the shell-nav and FAB on mobile without intercepting single taps.
+6. **Two-finger gesture forwarding** — Detects two-finger `touchstart`, `touchmove`, and `touchend` and forwards raw coordinates to the parent via `postMessage`. The parent handles all gesture logic (tap vs swipe, carousel animation). This keeps the bridge thin and ensures the game never receives two-finger events.
 
 ### postMessage protocol (iframe → parent):
 
 | `type` | Fields | Purpose |
 |--------|--------|---------|
 | `canvas-console` | `level`, `message` | Forward game console output to parent |
-| `canvas-toggle-chrome` | — | Two-finger tap: toggle pause + mobile UI chrome |
-| `canvas-next-game` | — | Two-finger swipe right: switch to next game |
-| `canvas-prev-game` | — | Two-finger swipe left: switch to previous game |
+| `canvas-two-finger-start` | `x`, `y` | Two-finger touchstart: midpoint coordinates |
+| `canvas-two-finger-move` | `x`, `y` | Two-finger touchmove: midpoint coordinates |
+| `canvas-two-finger-end` | — | All fingers lifted after two-finger gesture |
+
+### postMessage protocol (parent → iframe):
+
+| `type` | Fields | Purpose |
+|--------|--------|---------|
+| `canvas-pause` | — | Freeze game execution (rAF + timers) |
+| `canvas-resume` | — | Resume game execution, flush queued callbacks |
+
+### Mobile carousel gestures (parent-side):
+
+- **Two-finger contact** → immediately pauses game (sends `canvas-pause` to iframe), shows chrome
+- **Two-finger drag** → physically translates `#phone-viewport` via CSS `translateX`, shows peeking game labels on edges
+- **Release after drag >30% screen width** → animate off-screen, switch game, animate new game in from opposite side, auto-resume
+- **Release after small drag** → snap back, game stays paused, chrome stays visible
+- **Two-finger tap (no drag)** → pause game, show chrome. Single tap while paused → resume + hide chrome
 
 ### Extending the bridge:
 

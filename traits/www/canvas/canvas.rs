@@ -610,11 +610,78 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     var r = Array.prototype.slice.call(arguments, 1);
                                     return sdk() && sdk().call('sys.audio', [a].concat(r));
                                 },
+                                onPause: null,
+                                onResume: null,
                             };
                             var _qs = document.querySelector.bind(document);
                             document.querySelector = function(s) {
                                 return _qs(s.replace(/^#phone-viewport\s+/,'').replace(/^#canvas-container\s+/,''));
                             };
+                            // ── Pause engine: freeze rAF + timers ──
+                            var _paused = false;
+                            var _origRAF = window.requestAnimationFrame;
+                            var _origCAF = window.cancelAnimationFrame;
+                            var _origST = window.setTimeout;
+                            var _origCT = window.clearTimeout;
+                            var _origSI = window.setInterval;
+                            var _origCI = window.clearInterval;
+                            var _rafQueue = [];
+                            var _timerQueue = [];
+                            var _intervalStore = {};
+                            var _nextFakeId = 900000;
+                            window.requestAnimationFrame = function(cb) {
+                                if (_paused) { var id = _nextFakeId++; _rafQueue.push({id:id,cb:cb}); return id; }
+                                return _origRAF.call(window, cb);
+                            };
+                            window.cancelAnimationFrame = function(id) {
+                                _rafQueue = _rafQueue.filter(function(e){ return e.id !== id; });
+                                _origCAF.call(window, id);
+                            };
+                            window.setTimeout = function(cb, ms) {
+                                if (_paused) { var id = _nextFakeId++; _timerQueue.push({id:id,cb:cb,ms:ms,type:'timeout'}); return id; }
+                                return _origST.call(window, cb, ms);
+                            };
+                            window.clearTimeout = function(id) {
+                                _timerQueue = _timerQueue.filter(function(e){ return e.id !== id; });
+                                if (_intervalStore[id]) { _origCI.call(window, _intervalStore[id]); delete _intervalStore[id]; }
+                                _origCT.call(window, id);
+                            };
+                            window.setInterval = function(cb, ms) {
+                                if (_paused) { var id = _nextFakeId++; _timerQueue.push({id:id,cb:cb,ms:ms,type:'interval'}); return id; }
+                                var realId = _origSI.call(window, cb, ms);
+                                _intervalStore[realId] = realId;
+                                return realId;
+                            };
+                            window.clearInterval = function(id) {
+                                _timerQueue = _timerQueue.filter(function(e){ return e.id !== id; });
+                                if (_intervalStore[id]) { _origCI.call(window, _intervalStore[id]); delete _intervalStore[id]; }
+                                _origCI.call(window, id);
+                            };
+                            function _doPause() {
+                                if (_paused) return;
+                                _paused = true;
+                                // Freeze running intervals by clearing them; store info to restart
+                                try { if (typeof window.traits.onPause === 'function') window.traits.onPause(); } catch(_e){}
+                            }
+                            function _doResume() {
+                                if (!_paused) return;
+                                _paused = false;
+                                try { if (typeof window.traits.onResume === 'function') window.traits.onResume(); } catch(_e){}
+                                // Flush queued rAFs
+                                var rafs = _rafQueue.slice(); _rafQueue = [];
+                                rafs.forEach(function(e){ _origRAF.call(window, e.cb); });
+                                // Flush queued timers
+                                var timers = _timerQueue.slice(); _timerQueue = [];
+                                timers.forEach(function(e){
+                                    if (e.type === 'interval') { _origSI.call(window, e.cb, e.ms); }
+                                    else { _origST.call(window, e.cb, e.ms); }
+                                });
+                            }
+                            window.addEventListener('message', function(evt) {
+                                if (!evt.data) return;
+                                if (evt.data.type === 'canvas-pause') _doPause();
+                                else if (evt.data.type === 'canvas-resume') _doResume();
+                            });
                             // Capture console output and forward to parent for voice agent context
                             ['log','warn','error'].forEach(function(level){
                                 var orig = console[level].bind(console);
@@ -635,31 +702,24 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     window.parent.postMessage({type:'canvas-console', level:'error', message:msg}, '*');
                                 } catch(_){}
                             });
-                            // Two-finger gestures: tap = pause+chrome, swipe L/R = prev/next game
-                            var _twoStart = null;
+                            // Two-finger contact: notify parent immediately (parent handles gestures)
                             document.addEventListener('touchstart', function(e){
                                 if (e.touches.length >= 2) {
                                     e.preventDefault();
                                     var t0 = e.touches[0], t1 = e.touches[1];
-                                    _twoStart = { x:(t0.clientX+t1.clientX)/2, y:(t0.clientY+t1.clientY)/2, t:Date.now() };
+                                    window.parent.postMessage({type:'canvas-two-finger-start', x:(t0.clientX+t1.clientX)/2, y:(t0.clientY+t1.clientY)/2}, '*');
+                                }
+                            }, {passive:false});
+                            document.addEventListener('touchmove', function(e){
+                                if (e.touches.length >= 2) {
+                                    e.preventDefault();
+                                    var t0 = e.touches[0], t1 = e.touches[1];
+                                    window.parent.postMessage({type:'canvas-two-finger-move', x:(t0.clientX+t1.clientX)/2, y:(t0.clientY+t1.clientY)/2}, '*');
                                 }
                             }, {passive:false});
                             document.addEventListener('touchend', function(e){
-                                if (!_twoStart) return;
-                                var s = _twoStart; _twoStart = null;
-                                if (e.touches.length > 0) return;
-                                var last = e.changedTouches;
-                                if (last.length < 1) return;
-                                var ex = 0, ey = 0;
-                                for (var i = 0; i < last.length; i++) { ex += last[i].clientX; ey += last[i].clientY; }
-                                ex /= last.length; ey /= last.length;
-                                var dx = ex - s.x, dy = ey - s.y;
-                                var dist = Math.sqrt(dx*dx + dy*dy);
-                                if (dist < 30) {
-                                    window.parent.postMessage({type:'canvas-toggle-chrome'}, '*');
-                                } else if (Math.abs(dx) > Math.abs(dy)) {
-                                    if (dx > 0) { window.parent.postMessage({type:'canvas-next-game'}, '*'); }
-                                    else { window.parent.postMessage({type:'canvas-prev-game'}, '*'); }
+                                if (e.touches.length === 0) {
+                                    window.parent.postMessage({type:'canvas-two-finger-end'}, '*');
                                 }
                             }, {passive:true});
                         })();<\/script>`;
@@ -1348,7 +1408,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                         vcmSendBtn.addEventListener('click', vcmSendText);
                         vcmInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') vcmSendText(); });
 
-                        // ── Mobile fullscreen: auto-hide chrome, two-finger tap to toggle ──
+                        // ── Mobile fullscreen: auto-hide chrome, two-finger carousel ──
                         const isMobile = window.matchMedia('(max-width:768px) and (pointer:coarse)').matches;
                         if (isMobile) {
                             const shellNav = document.getElementById('shell-nav');
@@ -1379,29 +1439,18 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 if (fab) fab.classList.add('mob-hidden');
                             }
 
-                            // Pause overlay
-                            const pauseOverlay = document.createElement('div');
-                            pauseOverlay.id = 'canvas-pause-overlay';
-                            pauseOverlay.style.cssText = 'display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;' +
-                                'background:rgba(0,0,0,0.6);z-index:8998;align-items:center;justify-content:center;' +
-                                'flex-direction:column;backdrop-filter:blur(4px);pointer-events:none;transition:opacity 0.2s;';
-                            pauseOverlay.innerHTML = '<div style="font-size:48px;margin-bottom:8px">⏸</div>' +
-                                '<div style="color:#b8a4fc;font-size:14px;font-weight:600;letter-spacing:0.05em">PAUSED</div>' +
-                                '<div style="color:#666;font-size:11px;margin-top:6px">two-finger tap to resume</div>';
-                            document.body.appendChild(pauseOverlay);
-
-                            function togglePause() {
-                                gamePaused = !gamePaused;
+                            function pauseGame() {
+                                if (gamePaused) return;
+                                gamePaused = true;
                                 const vp = document.getElementById('phone-viewport');
-                                if (gamePaused) {
-                                    pauseOverlay.style.display = 'flex';
-                                    showChrome();
-                                    clearTimeout(hideTimer); // keep chrome visible while paused
-                                    hideTimer = null;
-                                } else {
-                                    pauseOverlay.style.display = 'none';
-                                    hideChrome();
-                                }
+                                if (vp) vp.contentWindow?.postMessage({type:'canvas-pause'}, '*');
+                            }
+
+                            function resumeGame() {
+                                if (!gamePaused) return;
+                                gamePaused = false;
+                                const vp = document.getElementById('phone-viewport');
+                                if (vp) vp.contentWindow?.postMessage({type:'canvas-resume'}, '*');
                             }
 
                             function switchGame(direction) {
@@ -1415,37 +1464,161 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 gs.dispatchEvent(new Event('change'));
                             }
 
-                            // Bridge messages from iframe
+                            function getGameLabel(direction) {
+                                const gs = document.getElementById('game-select');
+                                if (!gs || gs.options.length < 2) return '';
+                                const idx = gs.selectedIndex;
+                                const target = direction === 'next'
+                                    ? (idx + 1) % gs.options.length
+                                    : (idx - 1 + gs.options.length) % gs.options.length;
+                                return gs.options[target]?.text || '';
+                            }
+
+                            // ── Carousel gesture state ──
+                            const SWIPE_THRESHOLD = 0.3; // fraction of screen width
+                            let _gesture = null; // { startX, startY, tracking, swiping }
+                            let _carouselPrevLabel = null;
+                            let _carouselNextLabel = null;
+
+                            function createCarouselLabels() {
+                                if (_carouselPrevLabel) return;
+                                _carouselPrevLabel = document.createElement('div');
+                                _carouselPrevLabel.style.cssText = 'position:fixed;top:50%;left:0;transform:translateY(-50%) translateX(-100%);' +
+                                    'color:#fff;font-size:16px;font-weight:600;padding:12px 20px;background:rgba(0,0,0,0.7);' +
+                                    'border-radius:0 12px 12px 0;z-index:9999;pointer-events:none;transition:none;white-space:nowrap;';
+                                document.body.appendChild(_carouselPrevLabel);
+                                _carouselNextLabel = document.createElement('div');
+                                _carouselNextLabel.style.cssText = 'position:fixed;top:50%;right:0;transform:translateY(-50%) translateX(100%);' +
+                                    'color:#fff;font-size:16px;font-weight:600;padding:12px 20px;background:rgba(0,0,0,0.7);' +
+                                    'border-radius:12px 0 0 12px;z-index:9999;pointer-events:none;transition:none;white-space:nowrap;';
+                                document.body.appendChild(_carouselNextLabel);
+                            }
+
+                            function beginGesture(x, y) {
+                                if (_gesture) return; // already tracking
+                                _gesture = { startX: x, startY: y, tracking: true, swiping: false };
+                                pauseGame();
+                                showChrome();
+                                clearTimeout(hideTimer);
+                                hideTimer = null;
+                                // Prepare carousel labels
+                                createCarouselLabels();
+                                _carouselPrevLabel.textContent = '\u25C0 ' + (getGameLabel('prev') || 'prev');
+                                _carouselNextLabel.textContent = (getGameLabel('next') || 'next') + ' \u25B6';
+                                const vp = document.getElementById('phone-viewport');
+                                if (vp) vp.style.transition = 'none';
+                            }
+
+                            function moveGesture(x) {
+                                if (!_gesture || !_gesture.tracking) return;
+                                const dx = x - _gesture.startX;
+                                const sw = window.innerWidth;
+                                const pct = dx / sw;
+                                if (!_gesture.swiping && Math.abs(dx) > 10) _gesture.swiping = true;
+                                const vp = document.getElementById('phone-viewport');
+                                if (vp) vp.style.transform = 'translateX(' + dx + 'px)';
+                                // Show peeking labels
+                                if (_carouselPrevLabel) {
+                                    const show = pct > 0.05;
+                                    _carouselPrevLabel.style.transform = 'translateY(-50%) translateX(' + (show ? '0' : '-100%') + ')';
+                                    _carouselPrevLabel.style.opacity = show ? Math.min(1, pct * 3) : 0;
+                                }
+                                if (_carouselNextLabel) {
+                                    const show = pct < -0.05;
+                                    _carouselNextLabel.style.transform = 'translateY(-50%) translateX(' + (show ? '0' : '100%') + ')';
+                                    _carouselNextLabel.style.opacity = show ? Math.min(1, Math.abs(pct) * 3) : 0;
+                                }
+                            }
+
+                            function endGesture() {
+                                if (!_gesture) return;
+                                const g = _gesture;
+                                _gesture = null;
+                                const vp = document.getElementById('phone-viewport');
+
+                                // Hide labels
+                                if (_carouselPrevLabel) { _carouselPrevLabel.style.transform = 'translateY(-50%) translateX(-100%)'; _carouselPrevLabel.style.opacity = 0; }
+                                if (_carouselNextLabel) { _carouselNextLabel.style.transform = 'translateY(-50%) translateX(100%)'; _carouselNextLabel.style.opacity = 0; }
+
+                                if (!g.swiping) {
+                                    // It was a tap (no significant horizontal movement)
+                                    // Game stays paused, chrome stays visible — tap again to unpause
+                                    if (vp) { vp.style.transition = ''; vp.style.transform = ''; }
+                                    return;
+                                }
+
+                                // Calculate final displacement
+                                const currentX = parseFloat(vp?.style.transform?.match(/translateX\(([\-\d.]+)px\)/)?.[1] || 0);
+                                const sw = window.innerWidth;
+                                const pct = currentX / sw;
+
+                                if (Math.abs(pct) >= SWIPE_THRESHOLD) {
+                                    // Animate off-screen then switch
+                                    const direction = pct > 0 ? 'prev' : 'next';
+                                    if (vp) {
+                                        vp.style.transition = 'transform 0.2s ease-out';
+                                        vp.style.transform = 'translateX(' + (pct > 0 ? sw : -sw) + 'px)';
+                                    }
+                                    setTimeout(() => {
+                                        switchGame(direction);
+                                        // Snap to other side then animate in
+                                        if (vp) {
+                                            vp.style.transition = 'none';
+                                            vp.style.transform = 'translateX(' + (pct > 0 ? -sw : sw) + 'px)';
+                                            requestAnimationFrame(() => {
+                                                if (vp) {
+                                                    vp.style.transition = 'transform 0.25s ease-out';
+                                                    vp.style.transform = '';
+                                                }
+                                            });
+                                        }
+                                        // New game loads resumed
+                                        gamePaused = false;
+                                        hideTimer = setTimeout(hideChrome, HIDE_DELAY);
+                                    }, 200);
+                                } else {
+                                    // Snap back — stay paused
+                                    if (vp) { vp.style.transition = 'transform 0.25s ease-out'; vp.style.transform = ''; }
+                                }
+                            }
+
+                            // Listen for bridge messages from iframe
                             window.addEventListener('message', (e) => {
-                                if (e.data?.type === 'canvas-toggle-chrome') { togglePause(); }
-                                else if (e.data?.type === 'canvas-next-game') { switchGame('next'); }
-                                else if (e.data?.type === 'canvas-prev-game') { switchGame('prev'); }
+                                if (!e.data?.type) return;
+                                switch (e.data.type) {
+                                    case 'canvas-two-finger-start':
+                                        beginGesture(e.data.x, e.data.y);
+                                        break;
+                                    case 'canvas-two-finger-move':
+                                        moveGesture(e.data.x);
+                                        break;
+                                    case 'canvas-two-finger-end':
+                                        endGesture();
+                                        break;
+                                }
                             });
 
                             // Two-finger gestures on parent document itself (outside iframe)
-                            let _twoStart = null;
                             document.addEventListener('touchstart', (e) => {
                                 if (e.touches.length >= 2) {
                                     e.preventDefault();
                                     const t0 = e.touches[0], t1 = e.touches[1];
-                                    _twoStart = { x:(t0.clientX+t1.clientX)/2, y:(t0.clientY+t1.clientY)/2 };
+                                    beginGesture((t0.clientX+t1.clientX)/2, (t0.clientY+t1.clientY)/2);
+                                } else if (e.touches.length === 1 && gamePaused) {
+                                    // Single tap while paused -> unpause
+                                    resumeGame();
+                                    hideChrome();
+                                }
+                            }, { passive: false });
+                            document.addEventListener('touchmove', (e) => {
+                                if (_gesture && _gesture.tracking && e.touches.length >= 2) {
+                                    e.preventDefault();
+                                    const t0 = e.touches[0], t1 = e.touches[1];
+                                    moveGesture((t0.clientX+t1.clientX)/2);
                                 }
                             }, { passive: false });
                             document.addEventListener('touchend', (e) => {
-                                if (!_twoStart) return;
-                                const s = _twoStart; _twoStart = null;
-                                if (e.touches.length > 0) return;
-                                const last = e.changedTouches;
-                                if (last.length < 1) return;
-                                let ex = 0, ey = 0;
-                                for (let i = 0; i < last.length; i++) { ex += last[i].clientX; ey += last[i].clientY; }
-                                ex /= last.length; ey /= last.length;
-                                const dx = ex - s.x, dy = ey - s.y;
-                                const dist = Math.sqrt(dx*dx + dy*dy);
-                                if (dist < 30) { togglePause(); }
-                                else if (Math.abs(dx) > Math.abs(dy)) {
-                                    if (dx > 0) switchGame('next'); else switchGame('prev');
-                                }
+                                if (_gesture && e.touches.length === 0) endGesture();
                             });
 
                             // Taps on FAB/shell-nav/modals: reset hide timer
