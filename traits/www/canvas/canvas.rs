@@ -274,6 +274,46 @@ pub fn canvas(_args: &[Value]) -> Value {
                             border-radius: 2px; transition: width 0.3s;
                         }
 
+                        /* ── Mobile fullscreen ── */
+                        @media (max-width: 768px) and (pointer: coarse) {
+                            .canvas-header {
+                                position: fixed; top: 0; left: 0; right: 0; z-index: 9000;
+                                transition: opacity 0.3s, transform 0.3s;
+                                background: rgba(17,17,17,0.95); backdrop-filter: blur(12px);
+                            }
+                            .canvas-header h1 { display: none; }
+                            .canvas-header .actions { width: 100%; justify-content: space-between; }
+                            .canvas-header.mob-hidden { opacity: 0; transform: translateY(-100%); pointer-events: none; }
+                            #canvas-container {
+                                height: 100vh !important; padding: 0 !important;
+                                align-items: stretch !important;
+                            }
+                            #phone-frame {
+                                width: 100% !important; border-radius: 0 !important;
+                                border: none !important; box-shadow: none !important;
+                                padding: 0 !important; background: #000 !important;
+                            }
+                            .phone-notch, .phone-home-bar { display: none !important; }
+                            #phone-viewport {
+                                width: 100% !important; height: 100vh !important;
+                                border-radius: 0 !important;
+                            }
+                            #canvas-fab {
+                                transition: opacity 0.3s;
+                            }
+                            #canvas-fab.mob-hidden { opacity: 0; pointer-events: none; }
+                            .canvas-empty { height: 100vh; }
+
+                            /* Voice chat modal — full width on mobile */
+                            #voice-chat-modal {
+                                left: 8px; right: 8px; bottom: 8px; width: auto;
+                                max-height: 70vh;
+                            }
+                            #share-modal {
+                                left: 8px; right: 8px; bottom: 8px; width: auto;
+                            }
+                        }
+
                     "#))
                 }
             }
@@ -1247,6 +1287,61 @@ pub fn canvas(_args: &[Value]) -> Value {
                         }
                         vcmSendBtn.addEventListener('click', vcmSendText);
                         vcmInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') vcmSendText(); });
+
+                        // ── Mobile fullscreen: auto-hide chrome ──
+                        const isMobile = window.matchMedia('(max-width:768px) and (pointer:coarse)').matches;
+                        if (isMobile) {
+                            const shellNav = document.getElementById('shell-nav');
+                            const header = document.querySelector('.canvas-header');
+                            const fab = document.getElementById('canvas-fab');
+                            let hideTimer = null;
+                            const HIDE_DELAY = 3000;
+
+                            function showChrome() {
+                                if (shellNav) { shellNav.style.transition = 'opacity 0.3s, transform 0.3s'; shellNav.style.opacity = '1'; shellNav.style.transform = 'translateY(0)'; shellNav.style.pointerEvents = ''; }
+                                if (header) header.classList.remove('mob-hidden');
+                                if (fab) fab.classList.remove('mob-hidden');
+                                clearTimeout(hideTimer);
+                                hideTimer = setTimeout(hideChrome, HIDE_DELAY);
+                            }
+
+                            function hideChrome() {
+                                // Don't hide if FAB menu or voice modal is open
+                                const fabMenu = document.getElementById('fabMenu');
+                                const vcm = document.getElementById('voice-chat-modal');
+                                const sm = document.getElementById('share-modal');
+                                if (fabMenu?.classList.contains('show')) return;
+                                if (vcm?.classList.contains('vcm-open')) return;
+                                if (sm?.classList.contains('sm-open')) return;
+
+                                if (shellNav) { shellNav.style.opacity = '0'; shellNav.style.transform = 'translateY(-100%)'; shellNav.style.pointerEvents = 'none'; }
+                                if (header) header.classList.add('mob-hidden');
+                                if (fab) fab.classList.add('mob-hidden');
+                            }
+
+                            // Tap anywhere on the viewport to toggle chrome
+                            document.addEventListener('click', (e) => {
+                                // Don't toggle for clicks on controls themselves
+                                if (e.target.closest('.canvas-header, #canvas-fab, #voice-chat-modal, #share-modal, #shell-nav')) {
+                                    clearTimeout(hideTimer);
+                                    hideTimer = setTimeout(hideChrome, HIDE_DELAY);
+                                    return;
+                                }
+                                const isHidden = header?.classList.contains('mob-hidden');
+                                if (isHidden) { showChrome(); } else { hideChrome(); }
+                            });
+
+                            // Initial auto-hide after load
+                            hideTimer = setTimeout(hideChrome, HIDE_DELAY);
+
+                            // Also hide shell nav on mobile for canvas page (override sticky)
+                            if (shellNav) {
+                                shellNav.style.position = 'fixed';
+                                shellNav.style.left = '0';
+                                shellNav.style.right = '0';
+                                shellNav.style.transition = 'opacity 0.3s, transform 0.3s';
+                            }
+                        }
                     })();
                 "#)) }
             }
