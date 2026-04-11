@@ -1488,6 +1488,7 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                         function vcmAppend(role, text) {
                             if (!text) return;
+                            if (!vcModal.classList.contains('vcm-open')) vcmOpen();
                             const el = document.createElement('div');
                             el.className = 'vcm-msg ' + role;
                             el.textContent = text;
