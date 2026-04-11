@@ -159,6 +159,7 @@ let _sttLoading = null;
 let _ttsModel = null;
 let _ttsLoading = null;
 let _transformersLib = null;
+let _voiceLastUserTranscript = '';
 
 // ── Voxtral (local-realtime) voice state ──
 let _voxtralVoiceActive = false;
@@ -276,7 +277,7 @@ async function _runCanvasAgent(sdk, request) {
     console.log('[Canvas/Agent] ▶ Starting — existing:', _existing.length, 'chars | request:', request, '| logs:', _gameLogs.length, 'chars');
 
     // Resolve canvas LLM model preference from localStorage
-    const _canvasModel = (typeof localStorage !== 'undefined' && localStorage.getItem('traits.env.SLOB_CANVAS_MODEL')) || 'gpt-4.1';
+    const _canvasModel = ((typeof localStorage !== 'undefined' && localStorage.getItem('traits.env.SLOB_CANVAS_MODEL')) || 'gpt-4.1').trim() || 'gpt-4.1';
 
     // ── Browser-native path: direct OpenAI fetch — works without helper or server ──
     const apiKey = _voiceApiKey || await _ensureVoiceApiKey(sdk).catch(() => null);
@@ -357,6 +358,7 @@ async function _runCanvasAgent(sdk, request) {
 async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canvasModel) {
     gameLogs = gameLogs || '';
     canvasModel = canvasModel || 'gpt-4.1';
+    let fallbackModelUsed = false;
     const SYS_VFS_TOOL = {
         type: 'function',
         function: {
@@ -393,6 +395,14 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
             });
             if (!resp.ok) {
                 const err = await resp.text().catch(() => String(resp.status));
+                const lowerErr = String(err || '').toLowerCase();
+                const modelErr = lowerErr.includes('model') || lowerErr.includes('unsupported') || lowerErr.includes('not found') || lowerErr.includes('does not exist');
+                if (!fallbackModelUsed && modelErr && canvasModel !== 'gpt-4.1') {
+                    console.warn('[Canvas/Agent/Browser] Model failed (' + canvasModel + '), retrying with gpt-4.1');
+                    canvasModel = 'gpt-4.1';
+                    fallbackModelUsed = true;
+                    continue;
+                }
                 console.error('[Canvas/Agent/Browser] OpenAI error:', err);
                 return JSON.stringify({ error: 'OpenAI error: ' + err });
             }
@@ -2150,6 +2160,7 @@ class Traits {
                         if (opts.onTranscript && msg.transcript) {
                             opts.onTranscript(msg.transcript.trim());
                         }
+                        _voiceLastUserTranscript = (msg.transcript || '').trim();
                     }
 
                     // ── Model response transcript ──
@@ -2196,9 +2207,15 @@ class Traits {
                             }
 
                             _runCanvasAgent(_self, request).then(truncated => {
-                                console.log('[Voice/Canvas] ✓ Agent finished, injecting completion message');
+                                let parsed = null;
+                                try { parsed = JSON.parse(truncated); } catch(_) { parsed = null; }
+                                const ok = !!(parsed && parsed.ok && !parsed.error);
+                                console.log('[Voice/Canvas] ✓ Agent finished:', ok ? 'ok' : 'error');
                                 if (_voiceDc && _voiceDc.readyState === 'open') {
-                                    _voiceDc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Canvas update is ready.' }] } }));
+                                    const completionText = ok
+                                        ? 'Canvas update is ready.'
+                                        : 'Canvas update failed. Explain the error and ask whether to retry with a simpler request.';
+                                    _voiceDc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: completionText }] } }));
                                     _voiceDc.send(JSON.stringify({ type: 'response.create' }));
                                 }
                                 if (opts.onToolResult) opts.onToolResult(funcName, truncated);
@@ -2211,6 +2228,13 @@ class Traits {
 
                         // Handle sys_voice_quit — stop the session
                         if (funcName === 'sys_voice_quit') {
+                            const t = (_voiceLastUserTranscript || '').toLowerCase();
+                            const explicitQuit = /\b(quit|stop|goodbye|bye|end( the)? session|hang up|that'?s all|we'?re done)\b/.test(t);
+                            if (!explicitQuit) {
+                                console.warn('[Voice] Ignoring sys_voice_quit without explicit user quit intent. Transcript:', _voiceLastUserTranscript);
+                                _sendOutput('{"ok":false,"error":"quit ignored: no explicit user intent"}');
+                                return true;
+                            }
                             _sendOutput('{"ok":true,"action":"quit"}');
                             _self.stopVoice();
                             return false; // no response needed
