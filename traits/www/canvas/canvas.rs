@@ -535,6 +535,40 @@ pub fn canvas(_args: &[Value]) -> Value {
                             } catch(_) { return { active: null, games: {} }; }
                         }
 
+                        function nowIso() {
+                            return new Date().toISOString();
+                        }
+
+                        function makeLocalId() {
+                            return String(Date.now()) + Math.random().toString(36).slice(2, 6);
+                        }
+
+                        function createLocalGameFallback(name) {
+                            try {
+                                const raw = localStorage.getItem('traits.pvfs') || '{}';
+                                const files = JSON.parse(raw);
+                                const col = files['canvas/games.json']
+                                    ? JSON.parse(files['canvas/games.json'])
+                                    : { active: null, games: {} };
+                                const id = makeLocalId();
+                                const ts = nowIso();
+                                col.games[id] = {
+                                    name: name || 'untitled',
+                                    content: '',
+                                    scope: 'internal',
+                                    _scope: 'internal',
+                                    owner: 'local',
+                                    created: ts,
+                                    updated: ts
+                                };
+                                col.active = id;
+                                files['canvas/games.json'] = JSON.stringify(col);
+                                files['canvas/app.html'] = '';
+                                localStorage.setItem('traits.pvfs', JSON.stringify(files));
+                                return id;
+                            } catch(_) { return ''; }
+                        }
+
                         function dedupeLocalGames() {
                             try {
                                 const raw = localStorage.getItem('traits.pvfs') || '{}';
@@ -542,7 +576,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 const col = files['canvas/games.json']
                                     ? JSON.parse(files['canvas/games.json'])
                                     : { active: null, games: {} };
-                                var byName = {};
+                                var byIdentity = {};
                                 for (var id in col.games) {
                                     var g = col.games[id];
                                     var scope = (g.scope || g._scope || 'internal');
@@ -552,15 +586,16 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     } else if (scope === 'external' && g.owner && g.game_id) {
                                         identity = 'external|' + String(g.owner).trim().toLowerCase() + '|' + String(g.game_id).trim().toLowerCase();
                                     } else {
-                                        identity = scope + '|' + (g.name || 'untitled').trim().toLowerCase();
+                                        // Keep local/internal games distinct even when names match.
+                                        // Multiple "untitled" or "received" projects are valid.
+                                        identity = 'local-id|' + id;
                                     }
-                                    var n = identity;
-                                    if (!byName[n]) byName[n] = [];
-                                    byName[n].push(id);
+                                    if (!byIdentity[identity]) byIdentity[identity] = [];
+                                    byIdentity[identity].push(id);
                                 }
                                 var removed = 0;
-                                for (var n in byName) {
-                                    var ids = byName[n];
+                                for (var n in byIdentity) {
+                                    var ids = byIdentity[n];
                                     if (ids.length <= 1) continue;
                                     // Sort: most content first, then newest updated
                                     ids.sort(function(a, b) {
@@ -601,7 +636,18 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 for (var id in games) {
                                     if (!games.hasOwnProperty(id)) continue;
                                     var g = games[id] || {};
-                                    var nk = String(g.name || 'untitled').trim().toLowerCase();
+                                    // Historical cleanup should only merge relay/external duplicates,
+                                    // never local/internal projects that merely share a display name.
+                                    var nk = '';
+                                    if ((g._sync_owner || g.owner) && (g._sync_game_id || g.game_id)) {
+                                        nk = 'relay|' + String(g._sync_owner || g.owner).trim().toLowerCase() + '|' + String(g._sync_game_id || g.game_id).trim().toLowerCase();
+                                    } else if ((g.scope || g._scope) === 'external' && g.owner && g.game_id) {
+                                        nk = 'external|' + String(g.owner).trim().toLowerCase() + '|' + String(g.game_id).trim().toLowerCase();
+                                    } else if (g._sync_hash || g.checksum) {
+                                        nk = 'hash|' + String(g._sync_hash || g.checksum).trim().toLowerCase();
+                                    } else {
+                                        nk = 'local-id|' + id;
+                                    }
                                     if (!byName[nk]) byName[nk] = [];
                                     byName[nk].push(id);
                                 }
@@ -1024,6 +1070,19 @@ pub fn canvas(_args: &[Value]) -> Value {
                             } catch(_) { return ''; }
                         }
 
+                        let __lastPersistedContent = '';
+
+                        async function persistActiveContent(content) {
+                            const text = String(content || '');
+                            if (!text || text === __lastPersistedContent) return;
+                            try {
+                                const sdk = window._traitsSDK;
+                                if (!sdk) return;
+                                __lastPersistedContent = text;
+                                await sdk.call('sys.canvas', ['set', text]);
+                            } catch(_) {}
+                        }
+
                         // Listen for live updates from voice/SDK
                         window.addEventListener('traits-canvas-update', (e) => {
                             const content = e.detail?.content;
@@ -1031,6 +1090,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 __lastContent = content;
                                 renderCanvas(content);
                                 renderProjectBar();
+                                // Safety net: ensure updates are persisted continuously.
+                                persistActiveContent(content);
                             } else {
                                 // Re-read from games.json via VFS
                                 const active = getActiveGameContent();
@@ -1278,8 +1339,14 @@ pub fn canvas(_args: &[Value]) -> Value {
                             fabMenu.classList.remove('show');
                             fabToggle.classList.remove('open');
                             const sdk = window._traitsSDK;
-                            if (sdk) await sdk.call('sys.canvas', ['new']);
+                            if (sdk) {
+                                await sdk.call('sys.canvas', ['new']);
+                            } else {
+                                // Early-click fallback before SDK init: still create/store a new game.
+                                createLocalGameFallback('untitled');
+                            }
                             __lastContent = '';
+                            __lastPersistedContent = '';
                             _currentContent = '';
                             renderCanvas('');
                             renderProjectBar();
@@ -1575,8 +1642,12 @@ pub fn canvas(_args: &[Value]) -> Value {
                             try {
                                 const sdk = window._traitsSDK;
                                 if (sdk) {
+                                    const _title = (String(content).match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1];
+                                    const _name = (_title && _title.trim())
+                                        ? _title.trim().slice(0, 80)
+                                        : ('received ' + new Date().toLocaleTimeString());
                                     // Create a new game for the received project
-                                    await sdk.call('sys.canvas', ['new', 'received']);
+                                    await sdk.call('sys.canvas', ['new', _name]);
                                     await sdk.call('sys.canvas', ['set', content]);
                                 }
                             } catch(_) {}
