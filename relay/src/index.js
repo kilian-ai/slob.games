@@ -571,6 +571,77 @@ export class GameRoom {
         return json({ external, internal });
       }
 
+      // DELETE /admin/users/:username — delete a user (admin only, cannot delete self)
+      const adminUserDelete = url.pathname.match(/^\/admin\/users\/([^/]+)$/);
+      if (adminUserDelete && request.method === "DELETE") {
+        const user = await this.authUser(request);
+        if (!user) return json({ error: "auth required" }, 401);
+        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
+        if (role !== 'admin') return json({ error: "admin required" }, 403);
+        const target = decodeURIComponent(adminUserDelete[1]);
+        if (target === user) return json({ error: "cannot delete yourself" }, 400);
+        const exists = this.sql.exec("SELECT username FROM users WHERE username = ?", target).toArray()[0];
+        if (!exists) return json({ error: "user not found" }, 404);
+        this.sql.exec("DELETE FROM users WHERE username = ?", target);
+        return json({ ok: true, deleted: target });
+      }
+
+      // PUT /admin/users/:username — edit user role/email (admin only)
+      const adminUserEdit = url.pathname.match(/^\/admin\/users\/([^/]+)$/);
+      if (adminUserEdit && request.method === "PUT") {
+        const user = await this.authUser(request);
+        if (!user) return json({ error: "auth required" }, 401);
+        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
+        if (role !== 'admin') return json({ error: "admin required" }, 403);
+        const target = decodeURIComponent(adminUserEdit[1]);
+        const body = await request.json().catch(() => ({}));
+        const exists = this.sql.exec("SELECT username FROM users WHERE username = ?", target).toArray()[0];
+        if (!exists) return json({ error: "user not found" }, 404);
+        if (body.role && ['user', 'admin'].includes(body.role)) {
+          this.sql.exec("UPDATE users SET role = ? WHERE username = ?", body.role, target);
+        }
+        if (body.email && typeof body.email === 'string' && body.email.includes('@')) {
+          this.sql.exec("UPDATE users SET email = ? WHERE username = ?", body.email, target);
+        }
+        return json({ ok: true, updated: target });
+      }
+
+      // DELETE /admin/games/:hash — delete a game (external or internal by content_hash)
+      const adminGameDelete = url.pathname.match(/^\/admin\/games\/([^/]+)$/);
+      if (adminGameDelete && request.method === "DELETE") {
+        const user = await this.authUser(request);
+        if (!user) return json({ error: "auth required" }, 401);
+        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
+        if (role !== 'admin') return json({ error: "admin required" }, 403);
+        const hash = decodeURIComponent(adminGameDelete[1]);
+        const ext = this.sql.exec("SELECT content_hash FROM games WHERE content_hash = ?", hash).toArray()[0];
+        const intl = this.sql.exec("SELECT content_hash FROM internal_games WHERE content_hash = ?", hash).toArray()[0];
+        if (!ext && !intl) return json({ error: "game not found" }, 404);
+        if (ext) this.sql.exec("DELETE FROM games WHERE content_hash = ?", hash);
+        if (intl) this.sql.exec("DELETE FROM internal_games WHERE content_hash = ?", hash);
+        this.broadcast(JSON.stringify({ type: 'game-deleted', content_hash: hash }));
+        return json({ ok: true, deleted: hash });
+      }
+
+      // PUT /admin/games/:hash/assign — change game owner (admin only)
+      const adminGameAssign = url.pathname.match(/^\/admin\/games\/([^/]+)\/assign$/);
+      if (adminGameAssign && request.method === "PUT") {
+        const user = await this.authUser(request);
+        if (!user) return json({ error: "auth required" }, 401);
+        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
+        if (role !== 'admin') return json({ error: "admin required" }, 403);
+        const hash = decodeURIComponent(adminGameAssign[1]);
+        const body = await request.json().catch(() => ({}));
+        const newOwner = (body.owner || '').trim();
+        if (!newOwner) return json({ error: "owner required" }, 400);
+        const ext = this.sql.exec("SELECT content_hash FROM games WHERE content_hash = ?", hash).toArray()[0];
+        const intl = this.sql.exec("SELECT owner, game_id FROM internal_games WHERE content_hash = ?", hash).toArray()[0];
+        if (!ext && !intl) return json({ error: "game not found" }, 404);
+        if (ext) this.sql.exec("UPDATE games SET owner = ? WHERE content_hash = ?", newOwner, hash);
+        if (intl) this.sql.exec("UPDATE internal_games SET owner = ? WHERE owner = ? AND game_id = ?", newOwner, intl.owner, intl.game_id);
+        return json({ ok: true, hash, owner: newOwner });
+      }
+
       // GET /games — list all external games
       if (url.pathname === "/games" && request.method === "GET") {
         const rows = this.sql.exec(
