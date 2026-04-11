@@ -621,19 +621,27 @@ function upsertInternalRelayGameToLocal(owner, gameId, data) {
     var targetId = 'ri-' + slugify(o + '-' + gid).slice(0, 44);
 
     // Reuse an existing entry for this relay internal identity if present.
+    var existingGame = null;
     for (var id in (col.games || {})) {
       if (!col.games.hasOwnProperty(id)) continue;
       var g = col.games[id] || {};
       var k = ((g._sync_owner || g.owner || '') + '|' + (g._sync_game_id || g.game_id || '')).toLowerCase();
       if (k && k === identityKey) {
         targetId = id;
+        existingGame = g;
         break;
       }
     }
 
+    // CRITICAL: If local game exists with content that differs from relay version,
+    // preserve the local content (user may have edited it locally).
+    // Only sync name/metadata from relay, not content.
+    var localContent = (existingGame && existingGame.content) || '';
+    var contentToUse = localContent && localContent !== data.content ? localContent : (data.content || '');
+
     col.games[targetId] = {
       name: data.name || gid,
-      content: data.content || '',
+      content: contentToUse,
       scope: 'internal',
       _scope: 'internal',
       owner: o,
@@ -643,8 +651,8 @@ function upsertInternalRelayGameToLocal(owner, gameId, data) {
       _sync_hash: data.content_hash || data.checksum || '',
       version: data.version || 'v1',
       checksum: data.checksum || data.content_hash || '',
-      created: (col.games[targetId] && col.games[targetId].created) || data.updated || new Date().toISOString(),
-      updated: data.updated || new Date().toISOString()
+      created: (existingGame && existingGame.created) || data.updated || new Date().toISOString(),
+      updated: (existingGame && contentToUse === localContent) ? (existingGame.updated || data.updated) : (data.updated || new Date().toISOString())
     };
 
     // Remove stale duplicates for this same identity.
@@ -857,11 +865,17 @@ function playRelayGame(owner, gameId) {
   }).then(function(r) { return r.json(); }).then(function(data) {
     if (!data.content) { alert('Could not load game'); return; }
     var localId = upsertInternalRelayGameToLocal(owner, gameId, data);
+    var isNewGame = !localId;
     var activate = localId
       ? callTrait('sys.canvas', ['activate', localId])
       : callTrait('sys.canvas', ['new', data.name || gameId]);
     activate.then(function() {
-      callTrait('sys.canvas', ['set', data.content]).then(function() {
+      // CRITICAL: Only call 'set' for NEW games. Existing games already have their content
+      // from activate or upsert. Calling 'set' would overwrite locally-edited content.
+      var finish = isNewGame
+        ? callTrait('sys.canvas', ['set', data.content])
+        : Promise.resolve();
+      finish.then(function() {
         window.dispatchEvent(new CustomEvent('traits-canvas-projects-changed'));
         if (location.protocol === 'file:') {
           sessionStorage.setItem('traits.shell.route', '/');
