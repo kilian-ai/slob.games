@@ -687,6 +687,12 @@ function _traitTypeToSchema(typeStr) {
 const CANVAS_PAGE_TOOLS = new Set(['canvas', 'sys_echo', 'sys_audio', 'sys_voice_quit',
     'game_screenshot', 'game_eval', 'game_console', 'game_click', 'game_press_key', 'game_source', 'game_restart']);
 
+function _normalizeVoicePageFromHash(hash) {
+    const page = (hash || '').replace(/^#\/?/, '').split('/')[0] || '';
+    // In slob.games, '#/' is the default canvas page.
+    return page || 'canvas';
+}
+
 async function _buildVoiceTools(sdk, page) {
     let traits = [];
     try { traits = await sdk.list(); } catch(e) { return []; }
@@ -1903,7 +1909,7 @@ export class Traits {
 
         try {
             const LS_VOICE_INSTRUCTIONS = 'traits.voice.instructions';
-            const currentPage = (typeof location !== 'undefined' && location.hash || '').replace(/^#\/?/, '').split('/')[0] || '';
+            const currentPage = _normalizeVoicePageFromHash((typeof location !== 'undefined' && location.hash) || '');
 
             // ── If caller passed custom instructions, inject them so sys.voice.instruct build picks them up ──
             if (opts.instructions) {
@@ -2588,7 +2594,7 @@ export class Traits {
             let tools = [];
             if (enableTools) {
                 _localVoiceProgress('Loading tools…');
-                const _localPage = (typeof location !== 'undefined' && location.hash || '').replace(/^#\/?/, '').split('/')[0] || '';
+                const _localPage = _normalizeVoicePageFromHash((typeof location !== 'undefined' && location.hash) || '');
                 try {
                     const toolsResult = await this.call('sys.voice.tools', [_localPage]);
                     tools = toolsResult?.tools || toolsResult?.result?.tools || [];
