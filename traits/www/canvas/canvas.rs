@@ -1112,6 +1112,47 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                         let __lastPersistedContent = '';
 
+                        function _extractTitleFromContent(content) {
+                            const m = String(content || '').match(/<title[^>]*>([^<]+)<\/title>/i);
+                            return (m && m[1] ? m[1].trim() : '');
+                        }
+
+                        function _isGenericGameName(name) {
+                            const n = String(name || '').trim().toLowerCase();
+                            return !n || n === 'untitled' || n === 'received';
+                        }
+
+                        function _uniqueGameName(base, col, activeId) {
+                            const root = String(base || 'new game').trim() || 'new game';
+                            const taken = new Set();
+                            for (const [id, g] of Object.entries((col && col.games) || {})) {
+                                if (id === activeId) continue;
+                                taken.add(String((g && g.name) || '').trim().toLowerCase());
+                            }
+                            if (!taken.has(root.toLowerCase())) return root;
+                            for (let i = 2; i <= 9999; i++) {
+                                const candidate = root + ' ' + i;
+                                if (!taken.has(candidate.toLowerCase())) return candidate;
+                            }
+                            return root + ' ' + Date.now();
+                        }
+
+                        async function _autoNameActiveGame(content) {
+                            try {
+                                const sdk = window._traitsSDK;
+                                if (!sdk) return;
+                                const col = readGamesCollection();
+                                const activeId = col.active;
+                                const active = activeId ? (col.games || {})[activeId] : null;
+                                if (!active) return;
+                                if (!_isGenericGameName(active.name)) return;
+                                const title = _extractTitleFromContent(content);
+                                const base = title || 'new game ' + new Date().toLocaleTimeString();
+                                const nextName = _uniqueGameName(base, col, activeId);
+                                await sdk.call('sys.canvas', ['rename', nextName]);
+                            } catch (_) {}
+                        }
+
                         async function persistActiveContent(content) {
                             const text = String(content || '');
                             if (!text || text === __lastPersistedContent) return;
@@ -1120,7 +1161,31 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 if (!sdk) return;
                                 __lastPersistedContent = text;
                                 await sdk.call('sys.canvas', ['set', text]);
+                                await _autoNameActiveGame(text);
                             } catch(_) {}
+                        }
+
+                        async function autosaveAfterRefresh() {
+                            try {
+                                const sdk = window._traitsSDK;
+                                if (!sdk) return;
+                                const col = readGamesCollection();
+                                const activeId = col.active;
+                                const activeGame = activeId ? (col.games || {})[activeId] : null;
+                                const activeContent = (activeGame && activeGame.content) ? String(activeGame.content) : '';
+                                const fallbackContent = String(readCanvasFromStorage() || '');
+                                const content = activeContent || fallbackContent;
+                                if (!content) return;
+
+                                // If refresh recovered orphaned content with no active game, create a new one first.
+                                if (!activeGame) {
+                                    const title = _extractTitleFromContent(content) || ('new game ' + new Date().toLocaleTimeString());
+                                    const name = _uniqueGameName(title, col, null);
+                                    await sdk.call('sys.canvas', ['new', name]);
+                                }
+
+                                await persistActiveContent(content);
+                            } catch (_) {}
                         }
 
                         // Listen for live updates from voice/SDK
@@ -1259,6 +1324,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     __lastContent = content;
                                     renderCanvas(content);
                                 }
+                                renderProjectBar();
+                                await autosaveAfterRefresh();
                                 renderProjectBar();
                             } catch(_) {}
                         })();
