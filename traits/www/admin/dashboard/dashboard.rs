@@ -286,6 +286,7 @@ function renderUsers() {
     h += '<td title="' + esc(u.created) + '">' + ago(u.created) + '</td>';
     h += '<td title="' + esc(u.last_login) + '">' + (u.last_login ? ago(u.last_login) : '—') + '</td>';
     h += '<td class="actions">';
+    h += '<button class="btn-sm" onclick="manageSecrets(\'' + uEnc + '\')">Secrets</button>';
     h += '<button class="btn-sm accent" onclick="editUser(\'' + uEnc + '\')">Edit</button>';
     h += '<button class="btn-sm danger" onclick="deleteUser(\'' + uEnc + '\')">Del</button>';
     h += '</td>';
@@ -504,6 +505,59 @@ async function submitAssignGame(hashEnc) {
   }
 }
 
+async function manageSecrets(usernameEnc) {
+  var username = decodeURIComponent(usernameEnc);
+  var r = await apiFetch('/admin/users/' + usernameEnc + '/secrets');
+  var secrets = Array.isArray(r) ? r : [];
+  var h = '<h3>Secrets \u2014 ' + esc(username) + '</h3>';
+  if (secrets.length) {
+    h += '<table><tr><th>Key</th><th>Updated</th><th></th></tr>';
+    for (var i = 0; i < secrets.length; i++) {
+      var s = secrets[i];
+      var kEnc = encodeURIComponent(s.key);
+      h += '<tr><td><code>' + esc(s.key) + '</code></td>';
+      h += '<td>' + ago(s.updated) + '</td>';
+      h += '<td class="actions"><button class="btn-sm danger" onclick="deleteUserSecret(\'' + usernameEnc + '\',\'' + kEnc + '\')">Del</button></td>';
+      h += '</tr>';
+    }
+    h += '</table>';
+  } else {
+    h += '<p class="note">No secrets stored for this user.</p>';
+  }
+  h += '<label>Key</label><input id="modalSecretKey" placeholder="e.g. OPENAI_API_KEY">';
+  h += '<label>Value</label><input id="modalSecretValue" type="password" placeholder="secret value">';
+  h += '<div class="modal-actions">';
+  h += '<button onclick="closeModal()">Close</button>';
+  h += '<button class="primary" onclick="addUserSecret(\'' + usernameEnc + '\')">Add Secret</button>';
+  h += '</div>';
+  showModal(h);
+}
+
+async function addUserSecret(usernameEnc) {
+  var key = (document.getElementById('modalSecretKey').value || '').trim();
+  var value = document.getElementById('modalSecretValue').value || '';
+  if (!key || !value) { alert('Key and value required'); return; }
+  var r = await apiPut('/admin/users/' + usernameEnc + '/secrets/' + encodeURIComponent(key), { value: value });
+  if (r.ok) {
+    closeModal();
+    manageSecrets(usernameEnc);
+  } else {
+    alert(r.error || 'Failed to add secret');
+  }
+}
+
+async function deleteUserSecret(usernameEnc, keyEnc) {
+  var key = decodeURIComponent(keyEnc);
+  if (!confirm('Delete secret "' + key + '"?')) return;
+  var r = await apiDelete('/admin/users/' + usernameEnc + '/secrets/' + keyEnc);
+  if (r.ok) {
+    closeModal();
+    manageSecrets(usernameEnc);
+  } else {
+    alert(r.error || 'Failed to delete secret');
+  }
+}
+
 window.switchTab = switchTab;
 window.deleteUser = deleteUser;
 window.editUser = editUser;
@@ -511,6 +565,9 @@ window.submitEditUser = submitEditUser;
 window.deleteGame = deleteGame;
 window.assignGame = assignGame;
 window.submitAssignGame = submitAssignGame;
+window.manageSecrets = manageSecrets;
+window.addUserSecret = addUserSecret;
+window.deleteUserSecret = deleteUserSecret;
 window.closeModal = closeModal;
 load();
 })();

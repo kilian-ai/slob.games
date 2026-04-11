@@ -123,7 +123,7 @@ pub fn spa(_args: &[Value]) -> Value {
                         section.card {
                             h2 { "Secrets" }
                             p.note {
-                            "Stored in this browser under " code { "localStorage" } ". Never synced. Use " code { "SLOB_USER_TOKEN" } " for relay auth."
+                            "Local secrets in " code { "localStorage" } ". Account secrets sync from relay on login."
                             }
                             table id="secretTable" {
                                 tr { td colspan="3" { "Loading…" } }
@@ -840,6 +840,29 @@ async function deleteRelayGame(owner, gameId, name) {
 // ═══════════════════════════════════════════════════════════════
 // Secrets & Environment
 // ═══════════════════════════════════════════════════════════════
+async function syncRelaySecrets() {
+  var token = getAuthToken();
+  if (!token) return;
+  try {
+    var r = await fetch(relayApiBase() + '/auth/secrets', {
+      headers: authHeaders()
+    });
+    if (!r.ok) return;
+    var secrets = await r.json();
+    if (!Array.isArray(secrets)) return;
+    var count = 0;
+    for (var i = 0; i < secrets.length; i++) {
+      var s = secrets[i];
+      if (s.key && s.value) {
+        storage.setItem(SECRET_PFX + s.key, s.value);
+        count++;
+      }
+    }
+    renderSecrets();
+    if (count > 0) setStatus('secretStatus', 'Synced ' + count + ' secret(s) from relay.');
+  } catch(_) {}
+}
+
 function setStatus(elId, msg, isErr) {
   var el = byId(elId);
   if (!el) return;
@@ -932,6 +955,7 @@ async function registerUser() {
     if (data.role) storage.setItem(ENV_PFX + 'SLOB_USER_ROLE', data.role);
     renderEnvVars();
     renderSecrets();
+    syncRelaySecrets();
     setStatus('authStatus', 'Registered as ' + data.username + '. Token stored.', false);
   } catch (e) {
     setStatus('authStatus', 'Register request failed.', true);
@@ -961,6 +985,7 @@ async function loginUser() {
     if (data.role) storage.setItem(ENV_PFX + 'SLOB_USER_ROLE', data.role);
     renderEnvVars();
     renderSecrets();
+    syncRelaySecrets();
     setStatus('authStatus', 'Logged in as ' + data.username + '. Token stored.', false);
   } catch (e) {
     setStatus('authStatus', 'Login request failed.', true);
@@ -998,6 +1023,7 @@ function initModelDropdowns() {
 try { renderSecrets(); renderEnvVars(); } catch(_) {}
 renderGames();
 initModelDropdowns();
+syncRelaySecrets();
 window.addEventListener('traits-canvas-projects-changed', function() { _relayGames = null; renderGames(); });
 
 // Expose to onclick handlers

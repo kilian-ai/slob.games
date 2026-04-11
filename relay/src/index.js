@@ -152,6 +152,34 @@ function generateSalt() {
   return Array.from(buf).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+// ── AES-256-GCM encryption for user secrets ──────────────────────────────────
+
+async function deriveSecretKey(secret, username) {
+  const key = await _getHmacKey(secret);
+  const data = new TextEncoder().encode('user_secrets:' + username);
+  const derived = await crypto.subtle.sign('HMAC', key, data);
+  return crypto.subtle.importKey('raw', derived, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+}
+
+async function encryptSecret(value, secret, username) {
+  const key = await deriveSecretKey(secret, username);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(value));
+  const combined = new Uint8Array(iv.length + ct.byteLength);
+  combined.set(iv);
+  combined.set(new Uint8Array(ct), iv.length);
+  return btoa(String.fromCharCode(...combined));
+}
+
+async function decryptSecret(encrypted, secret, username) {
+  const key = await deriveSecretKey(secret, username);
+  const raw = Uint8Array.from(atob(encrypted), c => c.charCodeAt(0));
+  const iv = raw.slice(0, 12);
+  const ct = raw.slice(12);
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+  return new TextDecoder().decode(pt);
+}
+
 // Rate limiting constants for auth endpoints
 const MAX_AUTH_ATTEMPTS = 5;
 const AUTH_COOLDOWN_MS = 60_000; // 60 seconds
@@ -387,6 +415,13 @@ export class GameRoom {
       player TEXT NOT NULL DEFAULT '',
       updated TEXT NOT NULL
     )`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS user_secrets (
+      username TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      updated TEXT NOT NULL,
+      PRIMARY KEY (username, key)
+    )`);
   }
 
   _trackFailedAuth(username) {
@@ -542,6 +577,56 @@ export class GameRoom {
         return json({ ok: true, ...row });
       }
 
+      // GET /auth/secrets — get all secrets for authenticated user (decrypted)
+      if (url.pathname === "/auth/secrets" && request.method === "GET") {
+        const user = await this.authUser(request);
+        if (!user) return json({ error: "auth required" }, 401);
+        if (!this.env.RELAY_SECRET) return json({ error: "encryption not configured" }, 503);
+        const rows = this.sql.exec(
+          "SELECT key, value, updated FROM user_secrets WHERE username = ?", user
+        ).toArray();
+        const secrets = [];
+        for (const row of rows) {
+          try {
+            const val = await decryptSecret(row.value, this.env.RELAY_SECRET, user);
+            secrets.push({ key: row.key, value: val, updated: row.updated });
+          } catch (_) {
+            secrets.push({ key: row.key, value: null, updated: row.updated, error: 'decrypt failed' });
+          }
+        }
+        return json(secrets);
+      }
+
+      // PUT /auth/secrets/:key — store a secret (encrypted)
+      const authSecretPut = url.pathname.match(/^\/auth\/secrets\/([^/]+)$/);
+      if (authSecretPut && request.method === "PUT") {
+        const user = await this.authUser(request);
+        if (!user) return json({ error: "auth required" }, 401);
+        if (!this.env.RELAY_SECRET) return json({ error: "encryption not configured" }, 503);
+        const key = decodeURIComponent(authSecretPut[1]);
+        if (!key || key.length > 100) return json({ error: "invalid key" }, 400);
+        const body = await request.json().catch(() => ({}));
+        const value = String(body.value || '');
+        if (!value) return json({ error: "value required" }, 400);
+        const encrypted = await encryptSecret(value, this.env.RELAY_SECRET, user);
+        const updated = new Date().toISOString();
+        this.sql.exec(
+          "INSERT OR REPLACE INTO user_secrets (username, key, value, updated) VALUES (?, ?, ?, ?)",
+          user, key, encrypted, updated
+        );
+        return json({ ok: true, key });
+      }
+
+      // DELETE /auth/secrets/:key — delete a secret
+      const authSecretDel = url.pathname.match(/^\/auth\/secrets\/([^/]+)$/);
+      if (authSecretDel && request.method === "DELETE") {
+        const user = await this.authUser(request);
+        if (!user) return json({ error: "auth required" }, 401);
+        const key = decodeURIComponent(authSecretDel[1]);
+        this.sql.exec("DELETE FROM user_secrets WHERE username = ? AND key = ?", user, key);
+        return json({ ok: true, deleted: key });
+      }
+
       // ── Admin endpoints (require admin role) ──
 
       // GET /admin/users — list all registered users
@@ -645,6 +730,56 @@ export class GameRoom {
         if (ext) this.sql.exec("UPDATE games SET owner = ? WHERE content_hash = ?", newOwner, hash);
         if (intl) this.sql.exec("UPDATE internal_games SET owner = ? WHERE owner = ? AND game_id = ?", newOwner, intl.owner, intl.game_id);
         return json({ ok: true, hash, owner: newOwner });
+      }
+
+      // GET /admin/users/:username/secrets — list user's secret keys (admin only, no values)
+      const adminUserSecrets = url.pathname.match(/^\/admin\/users\/([^/]+)\/secrets$/);
+      if (adminUserSecrets && request.method === "GET") {
+        const user = await this.authUser(request);
+        if (!user) return json({ error: "auth required" }, 401);
+        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
+        if (role !== 'admin') return json({ error: "admin required" }, 403);
+        const target = decodeURIComponent(adminUserSecrets[1]);
+        const rows = this.sql.exec(
+          "SELECT key, updated FROM user_secrets WHERE username = ?", target
+        ).toArray();
+        return json(rows);
+      }
+
+      // PUT /admin/users/:username/secrets/:key — set a secret for any user (admin only)
+      const adminUserSecretPut = url.pathname.match(/^\/admin\/users\/([^/]+)\/secrets\/([^/]+)$/);
+      if (adminUserSecretPut && request.method === "PUT") {
+        const user = await this.authUser(request);
+        if (!user) return json({ error: "auth required" }, 401);
+        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
+        if (role !== 'admin') return json({ error: "admin required" }, 403);
+        if (!this.env.RELAY_SECRET) return json({ error: "encryption not configured" }, 503);
+        const target = decodeURIComponent(adminUserSecretPut[1]);
+        const key = decodeURIComponent(adminUserSecretPut[2]);
+        if (!key || key.length > 100) return json({ error: "invalid key" }, 400);
+        const body = await request.json().catch(() => ({}));
+        const value = String(body.value || '');
+        if (!value) return json({ error: "value required" }, 400);
+        const encrypted = await encryptSecret(value, this.env.RELAY_SECRET, target);
+        const updated = new Date().toISOString();
+        this.sql.exec(
+          "INSERT OR REPLACE INTO user_secrets (username, key, value, updated) VALUES (?, ?, ?, ?)",
+          target, key, encrypted, updated
+        );
+        return json({ ok: true, username: target, key });
+      }
+
+      // DELETE /admin/users/:username/secrets/:key — delete a user's secret (admin only)
+      const adminUserSecretDel = url.pathname.match(/^\/admin\/users\/([^/]+)\/secrets\/([^/]+)$/);
+      if (adminUserSecretDel && request.method === "DELETE") {
+        const user = await this.authUser(request);
+        if (!user) return json({ error: "auth required" }, 401);
+        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
+        if (role !== 'admin') return json({ error: "admin required" }, 403);
+        const target = decodeURIComponent(adminUserSecretDel[1]);
+        const key = decodeURIComponent(adminUserSecretDel[2]);
+        this.sql.exec("DELETE FROM user_secrets WHERE username = ? AND key = ?", target, key);
+        return json({ ok: true, username: target, deleted: key });
       }
 
       // GET /games — list all external games
