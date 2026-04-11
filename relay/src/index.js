@@ -603,6 +603,11 @@ export class GameRoom {
         if (body.email && typeof body.email === 'string' && body.email.includes('@')) {
           this.sql.exec("UPDATE users SET email = ? WHERE username = ?", body.email, target);
         }
+        if (body.password && typeof body.password === 'string' && body.password.length >= 4) {
+          const newSalt = crypto.randomUUID();
+          const newHash = await pbkdf2Hash(body.password, newSalt);
+          this.sql.exec("UPDATE users SET password_hash = ?, salt = ? WHERE username = ?", newHash, newSalt, target);
+        }
         return json({ ok: true, updated: target });
       }
 

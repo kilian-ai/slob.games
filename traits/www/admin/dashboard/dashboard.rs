@@ -434,6 +434,8 @@ function editUser(usernameEnc) {
   h += '<option value="user"' + (user.role === 'user' ? ' selected' : '') + '>user</option>';
   h += '<option value="admin"' + (user.role === 'admin' ? ' selected' : '') + '>admin</option>';
   h += '</select>';
+  h += '<label>New Password <small>(leave blank to keep current)</small></label>';
+  h += '<input id="modalPassword" type="password" placeholder="new password">';
   h += '<div class="modal-actions"><button onclick="closeModal()">Cancel</button>';
   h += '<button class="primary" onclick="submitEditUser(\'' + usernameEnc + '\')">Save</button></div>';
   showModal(h);
@@ -442,7 +444,10 @@ function editUser(usernameEnc) {
 async function submitEditUser(usernameEnc) {
   var email = document.getElementById('modalEmail').value.trim();
   var role = document.getElementById('modalRole').value;
-  var r = await apiPut('/admin/users/' + usernameEnc, { email: email, role: role });
+  var pw = document.getElementById('modalPassword').value;
+  var body = { email: email, role: role };
+  if (pw) body.password = pw;
+  var r = await apiPut('/admin/users/' + usernameEnc, body);
   closeModal();
   if (r.ok) {
     var username = decodeURIComponent(usernameEnc);
