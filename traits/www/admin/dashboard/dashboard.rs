@@ -471,8 +471,9 @@ async function deleteGame(hashEnc) {
   if (!confirm('Delete game #' + hash.slice(0,8) + '? This cannot be undone.')) return;
   var r = await apiDelete('/admin/games/' + hashEnc);
   if (r.ok) {
-    gamesData.external = gamesData.external.filter(function(g) { return g.content_hash !== hash; });
-    gamesData.internal = gamesData.internal.filter(function(g) { return g.content_hash !== hash; });
+    // Re-fetch authoritative state so grouped views update immediately.
+    var gp = await apiFetch('/admin/games');
+    gamesData = gp && gp.external ? gp : { external: [], internal: [] };
     renderGames();
   } else {
     alert(r.error || 'Delete failed');
