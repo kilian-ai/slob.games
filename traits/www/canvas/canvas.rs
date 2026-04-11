@@ -751,6 +751,39 @@ pub fn canvas(_args: &[Value]) -> Value {
                         }
 
                         async function saveProject() {
+                            function _slugify(s) {
+                                return String(s || '')
+                                    .trim()
+                                    .toLowerCase()
+                                    .replace(/[^a-z0-9]+/g, '-')
+                                    .replace(/^-+|-+$/g, '') || 'untitled';
+                            }
+
+                            async function _pushActiveToRelayInternal() {
+                                try {
+                                    const token = (localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '').trim();
+                                    if (!token) return false;
+                                    const colNow = readGamesCollection();
+                                    const activeId = colNow.active;
+                                    const g = activeId ? colNow.games[activeId] : null;
+                                    if (!g || !g.content) return false;
+                                    const gameId = g.game_id || g._sync_game_id || _slugify(g.name || activeId);
+                                    const resp = await fetch('https://relay.traits.build/sync/internal/game/' + encodeURIComponent(gameId), {
+                                        method: 'PUT',
+                                        headers: {
+                                            'Content-Type': 'application/json',
+                                            'Authorization': 'Bearer ' + token,
+                                        },
+                                        body: JSON.stringify({
+                                            name: g.name || 'untitled',
+                                            content: g.content,
+                                            version: g.version || 'v1'
+                                        })
+                                    });
+                                    return !!resp.ok;
+                                } catch (_) { return false; }
+                            }
+
                             const col = readGamesCollection();
                             if (!col.active || !col.games[col.active]) {
                                 alert('Canvas is empty — nothing to save.');
@@ -763,6 +796,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                             if (sdk) {
                                 await sdk.call('sys.canvas', ['rename', name.trim()]);
                                 renderProjectBar();
+                                // Make saved games visible in Settings/Admin (relay-backed views).
+                                // If not logged in, save still succeeds locally.
+                                await _pushActiveToRelayInternal();
                             }
                         }
 
@@ -1671,6 +1707,25 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     // Create a new game for the received project
                                     await sdk.call('sys.canvas', ['new', _name]);
                                     await sdk.call('sys.canvas', ['set', content]);
+                                    // Best effort: also store in relay internal so it appears in Settings/Admin.
+                                    try {
+                                        const token = (localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '').trim();
+                                        if (token) {
+                                            const gameId = _name
+                                                .trim()
+                                                .toLowerCase()
+                                                .replace(/[^a-z0-9]+/g, '-')
+                                                .replace(/^-+|-+$/g, '') || 'received';
+                                            await fetch('https://relay.traits.build/sync/internal/game/' + encodeURIComponent(gameId), {
+                                                method: 'PUT',
+                                                headers: {
+                                                    'Content-Type': 'application/json',
+                                                    'Authorization': 'Bearer ' + token,
+                                                },
+                                                body: JSON.stringify({ name: _name, content: content, version: 'v1' })
+                                            });
+                                        }
+                                    } catch (_) {}
                                 }
                             } catch(_) {}
                             __lastContent = content;
