@@ -336,6 +336,13 @@ async function _runCanvasAgent(sdk, request) {
                     await sdk.call('sys.canvas', ['new', title.trim()]);
                 }
                 await sdk.call('sys.canvas', ['set', content]);
+                // CRITICAL: Refresh WASM VFS state back to localStorage after sys.canvas 'set'
+                if (wasmReady && wasm?.pvfs_refresh) {
+                    try {
+                        wasm.pvfs_refresh();
+                        console.log('[Canvas/Agent] PVFS refreshed after sys.canvas set');
+                    } catch(e) { console.warn('[Canvas/Agent] PVFS refresh failed:', e); }
+                }
                 if (!needsNew) {
                     const title = (content.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '';
                     if (title) await sdk.call('sys.canvas', ['rename', title.trim()]).catch(() => {});
@@ -452,7 +459,16 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                                         await _sdk.call('sys.canvas', ['new', title.trim()]);
                                         console.log('[Canvas/Agent/Browser] New game created:', title.trim());
                                     }
-                                    await _sdk.call('sys.canvas', ['set', lastContent]);
+                                    const setRes = await _sdk.call('sys.canvas', ['set', lastContent]);
+                                    console.log('[Canvas/Agent/Browser] sys.canvas set result:', setRes?.ok);
+                                    // CRITICAL: After sys.canvas 'set', refresh WASM VFS state back to localStorage
+                                    // so games.json updates are synced to main thread storage
+                                    if (wasmReady && wasm?.pvfs_refresh) {
+                                        try {
+                                            wasm.pvfs_refresh();
+                                            console.log('[Canvas/Agent/Browser] PVFS refreshed after sys.canvas set');
+                                        } catch(e) { console.warn('[Canvas/Agent/Browser] PVFS refresh failed:', e); }
+                                    }
                                     // Auto-name from <title> if untitled
                                     if (!needsNew) {
                                         const title = (lastContent.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '';
