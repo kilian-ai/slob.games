@@ -57,7 +57,7 @@ pub fn spa(_args: &[Value]) -> Value {
                     // Games list
                     section.card {
                         h2 { "Games" }
-                        p.note { "Internal games only. External games appear on the Play page." }
+                        p.note { "Your games from the relay. Log in to see your collection." }
                       p.note id="gamesSummary" { "—" }
                         div id="gamesList" { p.muted { "Loading games…" } }
                     }
@@ -554,8 +554,40 @@ TC.on('refreshStats', function(el, traits, meta) {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// Games list
+// Games list — relay-backed with local fallback
 // ═══════════════════════════════════════════════════════════════
+function getAuthToken() {
+  try { return localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || ''; } catch(_) { return ''; }
+}
+function authHeaders() {
+  var h = { 'Content-Type': 'application/json' };
+  var t = getAuthToken();
+  if (t) h['Authorization'] = 'Bearer ' + t;
+  return h;
+}
+
+var _relayGames = null; // cached relay response
+
+async function fetchRelayGames() {
+  var token = getAuthToken();
+  var internal = [];
+  var external = [];
+  try {
+    var r1 = await fetch(relayApiBase() + '/games');
+    if (r1.ok) external = await r1.json();
+  } catch(_) {}
+  if (token) {
+    try {
+      var r2 = await fetch('https://relay.traits.build/sync/internal/games', {
+        headers: authHeaders()
+      });
+      if (r2.ok) internal = await r2.json();
+    } catch(_) {}
+  }
+  _relayGames = { internal: internal, external: external };
+  return _relayGames;
+}
+
 function readGamesCollection() {
   try {
     var raw = localStorage.getItem('traits.pvfs');
@@ -573,31 +605,113 @@ function formatSize(bytes) {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
-function renderGames() {
-  var col = readGamesCollection();
+function ago(ts) {
+  if (!ts) return '—';
+  var d = new Date(ts);
+  var now = Date.now();
+  var s = Math.floor((now - d.getTime()) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  if (s < 86400) return Math.floor(s/3600) + 'h ago';
+  if (s < 2592000) return Math.floor(s/86400) + 'd ago';
+  return d.toLocaleDateString();
+}
+
+async function renderGames() {
   var el = byId('gamesList');
   var summary = byId('gamesSummary');
   if (!el) return;
+
+  // Try relay first
+  var data = _relayGames;
+  if (!data) {
+    try { data = await fetchRelayGames(); } catch(_) {}
+  }
+
+  var hasRelay = data && (data.internal.length > 0 || data.external.length > 0);
+
+  if (hasRelay) {
+    renderRelayGames(data, el, summary);
+  } else {
+    renderLocalGames(el, summary);
+  }
+}
+
+function renderRelayGames(data, el, summary) {
+  var internal = data.internal || [];
+  var external = data.external || [];
+  if (summary) {
+    summary.textContent = 'Internal: ' + internal.length + ' · External: ' + external.length + ' (relay)';
+  }
+  if (!internal.length && !external.length) {
+    el.innerHTML = '<div class="no-games">No games on relay yet.</div>';
+    return;
+  }
+  var html = '';
+  if (internal.length) {
+    html += '<div style="margin-bottom:6px;color:var(--accent);font-size:11px;text-transform:uppercase;letter-spacing:.1em">Internal</div>';
+    for (var i = 0; i < internal.length; i++) {
+      var g = internal[i];
+      var name = esc(g.name || 'untitled');
+      var size = formatSize(g.size || 0);
+      var identity = esc((g.owner || '?') + '/' + (g.game_id || '?'));
+      var hash = (g.content_hash || '').slice(0, 8);
+      html += '<div class="game-row">';
+      html += '<div class="game-info">';
+      html += '<div class="game-name">' + name + '</div>';
+      html += '<div class="game-meta">';
+      html += '<span>' + identity + '</span>';
+      html += '<span>' + size + '</span>';
+      html += '<span>' + ago(g.updated) + '</span>';
+      html += '<span style="opacity:0.5">#' + hash + '</span>';
+      html += '</div></div>';
+      html += '<div class="game-actions">';
+      html += '<button class="btn-play" onclick="playRelayGame(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\')">Play</button>';
+      html += '<button class="danger" onclick="deleteRelayGame(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\',\'' + name.replace(/'/g, "\\'") + '\')">Del</button>';
+      html += '</div></div>';
+    }
+  }
+  if (external.length) {
+    html += '<div style="margin:12px 0 6px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.1em">External (public)</div>';
+    for (var j = 0; j < external.length; j++) {
+      var ge = external[j];
+      var ename = esc(ge.name || 'untitled');
+      var esize = formatSize(ge.size || 0);
+      var ehash = (ge.content_hash || '').slice(0, 8);
+      html += '<div class="game-row">';
+      html += '<div class="game-info">';
+      html += '<div class="game-name">' + ename + '</div>';
+      html += '<div class="game-meta">';
+      html += '<span>' + esize + '</span>';
+      html += '<span>' + ago(ge.updated) + '</span>';
+      html += '<span style="opacity:0.5">#' + ehash + '</span>';
+      html += '</div></div>';
+      html += '<div class="game-actions">';
+      html += '<button class="btn-play" onclick="playExternalGame(\'' + esc(ge.content_hash) + '\')">Play</button>';
+      html += '</div></div>';
+    }
+  }
+  el.innerHTML = html;
+}
+
+function renderLocalGames(el, summary) {
+  var col = readGamesCollection();
   var games = [];
-  var internalCount = 0;
-  var externalCount = 0;
   var gObj = col.games || {};
+  var total = 0;
   for (var id in gObj) {
     if (gObj.hasOwnProperty(id)) {
-      var gx = gObj[id] || {};
-      var scope = (gx.scope || gx._scope || 'internal');
-      if (scope === 'external') externalCount++; else internalCount++;
-      if (scope !== 'external') games.push([id, gx]);
+      total++;
+      games.push([id, gObj[id] || {}]);
     }
   }
   if (summary) {
-    summary.textContent = 'Internal: ' + internalCount + '. External hidden here: ' + externalCount + '.';
+    summary.textContent = total + ' game(s) in local cache (offline mode)';
   }
   if (!games.length) {
-    el.innerHTML = '<div class="no-games">No games stored yet. Play some games first.</div>';
+    el.innerHTML = '<div class="no-games">No games cached locally. Connect to relay and log in.</div>';
     return;
   }
-  // Dedupe by name: keep largest/newest per name
   var byName = {};
   for (var j = 0; j < games.length; j++) {
     var gg = games[j][1] || {};
@@ -610,32 +724,27 @@ function renderGames() {
     }
   }
   var unique = [];
-  for (var nk in byName) { if (byName.hasOwnProperty(nk)) unique.push(byName[nk]); }
+  for (var nk2 in byName) { if (byName.hasOwnProperty(nk2)) unique.push(byName[nk2]); }
   unique.sort(function(a, b) { return (a[1].name || '').localeCompare(b[1].name || ''); });
-  games = unique;
   var html = '';
-  for (var i = 0; i < games.length; i++) {
-    var id = games[i][0];
-    var g = games[i][1];
+  for (var i = 0; i < unique.length; i++) {
+    var gid = unique[i][0];
+    var g = unique[i][1];
     var name = esc(g.name || 'untitled');
     var size = formatSize((g.content || '').length);
-    var updated = g.updated ? new Date(g.updated).toLocaleDateString() : '—';
-    var hash = (g._sync_hash || g.checksum || id).slice(0, 8);
-    var identity = esc((g.owner || 'local') + '/' + (g.game_id || id.slice(0, 8)));
-    var active = id === col.active ? ' <span style="color:#00ff88;font-size:10px;">● ACTIVE</span>' : '';
+    var scope = g.scope || 'local';
+    var active = gid === col.active ? ' <span style="color:#00ff88;font-size:10px;">● ACTIVE</span>' : '';
     html += '<div class="game-row">';
     html += '<div class="game-info">';
     html += '<div class="game-name">' + name + active + '</div>';
     html += '<div class="game-meta">';
-    html += '<span>' + identity + '</span>';
+    html += '<span>' + scope + '</span>';
     html += '<span>' + size + '</span>';
-    html += '<span>' + updated + '</span>';
-    html += '<span style="opacity:0.5">#' + hash + '</span>';
+    html += '<span>' + ago(g.updated) + '</span>';
     html += '</div></div>';
     html += '<div class="game-actions">';
-    html += '<button class="btn-play" onclick="playGame(\'' + esc(id) + '\')">Play</button>';
-    html += '<button class="btn-build" onclick="buildGame(\'' + esc(id) + '\')">Build</button>';
-    html += '<button class="danger" onclick="deleteGame(\'' + esc(id) + '\',\'' + name.replace(/'/g, "\\'") + '\')">Del</button>';
+    html += '<button class="btn-play" onclick="playGame(\'' + esc(gid) + '\')">Play</button>';
+    html += '<button class="danger" onclick="deleteGame(\'' + esc(gid) + '\',\'' + name.replace(/'/g, "\\'") + '\')">Del</button>';
     html += '</div></div>';
   }
   el.innerHTML = html;
@@ -651,6 +760,44 @@ function playGame(id) {
     }
     window.dispatchEvent(new PopStateEvent('popstate', { state: { route: '/' } }));
   });
+}
+
+function playRelayGame(owner, gameId) {
+  fetch('https://relay.traits.build/sync/internal/game/' + encodeURIComponent(gameId) + '?owner=' + encodeURIComponent(owner), {
+    headers: authHeaders()
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (!data.content) { alert('Could not load game'); return; }
+    callTrait('sys.canvas', ['new', data.name || gameId]).then(function() {
+      callTrait('sys.canvas', ['set', data.content]).then(function() {
+        if (location.protocol === 'file:') {
+          sessionStorage.setItem('traits.shell.route', '/');
+          location.hash = '#/';
+        } else {
+          history.pushState({ route: '/' }, '', '/');
+        }
+        window.dispatchEvent(new PopStateEvent('popstate', { state: { route: '/' } }));
+      });
+    });
+  }).catch(function() { alert('Failed to load game from relay'); });
+}
+
+function playExternalGame(hash) {
+  fetch(relayApiBase() + '/game/' + encodeURIComponent(hash)).then(function(r) {
+    return r.json();
+  }).then(function(data) {
+    if (!data.content) { alert('Could not load game'); return; }
+    callTrait('sys.canvas', ['new', data.name || 'Game']).then(function() {
+      callTrait('sys.canvas', ['set', data.content]).then(function() {
+        if (location.protocol === 'file:') {
+          sessionStorage.setItem('traits.shell.route', '/');
+          location.hash = '#/';
+        } else {
+          history.pushState({ route: '/' }, '', '/');
+        }
+        window.dispatchEvent(new PopStateEvent('popstate', { state: { route: '/' } }));
+      });
+    });
+  }).catch(function() { alert('Failed to load game from relay'); });
 }
 
 function buildGame(id) {
@@ -671,6 +818,23 @@ function deleteGame(id, name) {
   callTrait('sys.canvas', ['delete', id]).then(function() {
     renderGames();
   });
+}
+
+async function deleteRelayGame(owner, gameId, name) {
+  if (!confirm('Delete "' + name + '" from relay? This cannot be undone.')) return;
+  try {
+    var r = await fetch('https://relay.traits.build/sync/internal/game/' + encodeURIComponent(gameId) + '?owner=' + encodeURIComponent(owner), {
+      method: 'DELETE',
+      headers: authHeaders()
+    });
+    var data = await r.json();
+    if (data.ok) {
+      _relayGames = null;
+      await renderGames();
+    } else {
+      alert(data.error || 'Delete failed');
+    }
+  } catch(e) { alert('Delete request failed'); }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -834,7 +998,7 @@ function initModelDropdowns() {
 try { renderSecrets(); renderEnvVars(); } catch(_) {}
 renderGames();
 initModelDropdowns();
-window.addEventListener('traits-canvas-projects-changed', renderGames);
+window.addEventListener('traits-canvas-projects-changed', function() { _relayGames = null; renderGames(); });
 
 // Expose to onclick handlers
 window.saveSecret = saveSecret;
@@ -843,6 +1007,12 @@ window.saveEnvVar = saveEnvVar;
 window.deleteEnvVar = deleteEnvVar;
 window.registerUser = registerUser;
 window.loginUser = loginUser;
+window.playGame = playGame;
+window.playRelayGame = playRelayGame;
+window.playExternalGame = playExternalGame;
+window.buildGame = buildGame;
+window.deleteGame = deleteGame;
+window.deleteRelayGame = deleteRelayGame;
 window.playGame = playGame;
 window.buildGame = buildGame;
 window.deleteGame = deleteGame;

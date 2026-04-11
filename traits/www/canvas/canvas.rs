@@ -2121,8 +2121,80 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 }
                             });
 
+                            // ── One-time migration: push local internal games to relay ──
+                            async function migrateLocalToRelay() {
+                                try {
+                                    if (localStorage.getItem('traits.env.GAMES_MIGRATED')) return;
+                                    const token = localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '';
+                                    if (!token) return; // need auth to push internal games
+
+                                    const col = readGamesCollection();
+                                    const games = col.games || {};
+                                    const internalGames = [];
+                                    for (const [id, g] of Object.entries(games)) {
+                                        const scope = g.scope || g._scope || 'internal';
+                                        if (scope !== 'external' && g.content && g.content.length > 0 && g.content.length <= MAX_PUSH_SIZE) {
+                                            internalGames.push({ id, g });
+                                        }
+                                    }
+                                    if (!internalGames.length) {
+                                        localStorage.setItem('traits.env.GAMES_MIGRATED', '1');
+                                        return;
+                                    }
+
+                                    console.log('[migration] pushing', internalGames.length, 'internal game(s) to relay');
+                                    const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token };
+                                    let pushed = 0;
+                                    for (const { id, g } of internalGames) {
+                                        const gameId = g.game_id || slugify(g.name || id);
+                                        try {
+                                            const resp = await fetch('https://relay.traits.build/sync/internal/game/' + encodeURIComponent(gameId), {
+                                                method: 'PUT',
+                                                headers,
+                                                body: JSON.stringify({
+                                                    name: g.name || 'untitled',
+                                                    content: g.content,
+                                                    version: g.version || 'v1'
+                                                })
+                                            });
+                                            if (resp.ok) pushed++;
+                                        } catch (_) {}
+                                    }
+                                    console.log('[migration] pushed', pushed, '/', internalGames.length, 'games');
+
+                                    // Remove migrated internal games from local pvfs (keep external ones)
+                                    if (pushed > 0) {
+                                        try {
+                                            const raw = localStorage.getItem('traits.pvfs') || '{}';
+                                            const files = JSON.parse(raw);
+                                            const c = files['canvas/games.json'] ? JSON.parse(files['canvas/games.json']) : { active: null, games: {} };
+                                            for (const { id } of internalGames) {
+                                                if (c.games[id]) {
+                                                    if (c.active === id) {
+                                                        // Find an external game to activate instead
+                                                        const ext = Object.entries(c.games).find(([eid, eg]) => eid !== id && (eg.scope === 'external'));
+                                                        c.active = ext ? ext[0] : null;
+                                                    }
+                                                    delete c.games[id];
+                                                }
+                                            }
+                                            files['canvas/games.json'] = JSON.stringify(c);
+                                            localStorage.setItem('traits.pvfs', JSON.stringify(files));
+                                        } catch (_) {}
+                                    }
+
+                                    localStorage.setItem('traits.env.GAMES_MIGRATED', '1');
+                                    console.log('[migration] done — internal games moved to relay');
+                                } catch (e) {
+                                    console.warn('[migration] failed:', e);
+                                }
+                            }
+
                             // Start sync
                             connect();
+
+                            // Run migration after a short delay to ensure WS/auth are ready
+                            setTimeout(migrateLocalToRelay, 3000);
                         })();
 
                         // ── Desktop: scale phone frame to fit viewport height ──

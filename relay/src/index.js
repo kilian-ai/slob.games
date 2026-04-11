@@ -831,6 +831,37 @@ export class GameRoom {
         return json({ ok: true, owner: user, game_id: gameId, content_hash: checksum, checksum, version });
       }
 
+      // GET /internal/game/:gameId — get full content of authenticated user's internal game
+      if (url.pathname.startsWith('/internal/game/') && request.method === 'GET') {
+        const user = await this.authUser(request);
+        if (!user) return json({ error: 'auth required' }, 401);
+        const gameId = normalizeSlug(url.pathname.slice('/internal/game/'.length), '');
+        if (!gameId) return json({ error: 'missing game id' }, 400);
+        const owner = url.searchParams.get('owner') || user;
+        const row = this.sql.exec(
+          "SELECT owner, game_id, name, content, content_hash, checksum, version, size, updated, forked_from_hash FROM internal_games WHERE owner = ? AND game_id = ?",
+          owner, gameId
+        ).toArray()[0];
+        if (!row) return json({ error: 'not found' }, 404);
+        return json(row);
+      }
+
+      // DELETE /internal/game/:gameId — delete authenticated user's internal game
+      if (url.pathname.startsWith('/internal/game/') && request.method === 'DELETE') {
+        const user = await this.authUser(request);
+        if (!user) return json({ error: 'auth required' }, 401);
+        const gameId = normalizeSlug(url.pathname.slice('/internal/game/'.length), '');
+        if (!gameId) return json({ error: 'missing game id' }, 400);
+        const owner = url.searchParams.get('owner') || user;
+        // Only allow deleting own games (or admin can delete any)
+        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
+        if (owner !== user && role !== 'admin') return json({ error: 'forbidden' }, 403);
+        const exists = this.sql.exec("SELECT 1 FROM internal_games WHERE owner = ? AND game_id = ?", owner, gameId).toArray()[0];
+        if (!exists) return json({ error: 'not found' }, 404);
+        this.sql.exec("DELETE FROM internal_games WHERE owner = ? AND game_id = ?", owner, gameId);
+        return json({ ok: true, deleted: gameId });
+      }
+
       return json({ error: "WebSocket upgrade required or use REST endpoints" }, 426);
     }
 
