@@ -2078,7 +2078,11 @@ export class Traits {
                     'ALWAYS DO THIS:\n' +
                     '- Interpret ALL requests as game modifications or new game creation\n' +
                     '- Call the `canvas` tool immediately with the user\'s request\n' +
-                    '- After the tool runs, briefly confirm what was done (e.g. "Done, added a shield power-up")\n' +
+                    '- IMPORTANT: Canvas changes are auto-saved. Never ask the user to save manually.\n' +
+                    '- For implementation requests, do NOT claim it is already done when the task was only dispatched.\n' +
+                    '- Immediately after dispatching canvas work, say: "I just kicked off the tasks..." then briefly describe the tasks and ask for a little patience.\n' +
+                    '- Wait for canvas-agent completion before giving final "done" confirmation.\n' +
+                    '- After the tool fully finishes, briefly confirm what was done (e.g. "Done, added a shield power-up")\n' +
                     '- Keep responses under 2 sentences\n\n' +
                     'GAME DEVTOOLS:\n' +
                     'You also have game inspection tools. Use them proactively:\n' +
@@ -2323,8 +2327,12 @@ export class Traits {
                             try { request = JSON.parse(argsStr).request || argsStr; } catch(e) { request = argsStr; }
                             console.log('[Voice/Canvas] ▶ Canvas tool triggered, launching agent for request:', request);
 
-                            // Send function_call_output + response.create so model speaks while agent builds
-                            _sendOutput('{"status":"building","message":"Working on it now, give me a moment!"}');
+                            // Send function_call_output + response.create so model speaks while agent builds.
+                            // The wording is intentional: kickoff first, completion only after the agent resolves.
+                            const kickoffMsg = 'I just kicked off the implementation tasks: ' +
+                                String(request || 'updating the current game').replace(/\s+/g, ' ').trim().slice(0, 220) +
+                                '. We auto-save changes, so no manual save is needed. Please give me a little patience while the canvas agent finishes.';
+                            _sendOutput(JSON.stringify({ status: 'building', message: kickoffMsg }));
                             if (_voiceDc && _voiceDc.readyState === 'open') {
                                 _voiceDc.send(JSON.stringify({ type: 'response.create' }));
                             }
@@ -2336,7 +2344,7 @@ export class Traits {
                                 console.log('[Voice/Canvas] ✓ Agent finished:', ok ? 'ok' : 'error');
                                 if (_voiceDc && _voiceDc.readyState === 'open') {
                                     const completionText = ok
-                                        ? 'Canvas update is ready.'
+                                        ? 'Canvas agent finished. The implementation tasks are now done and auto-saved. Briefly summarize the concrete changes you made.'
                                         : 'Canvas update failed. Explain the error and ask whether to retry with a simpler request.';
                                     _voiceDc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: completionText }] } }));
                                     _voiceDc.send(JSON.stringify({ type: 'response.create' }));
