@@ -872,10 +872,6 @@ async function _checkUserRole() {
   } catch(_) {}
 }
 
-// Gate navigation to role-restricted routes
-const _origNavigate = navigate;
-// Override not needed — we gate inside navigate itself
-
 boot();
 </script>
 </body>
