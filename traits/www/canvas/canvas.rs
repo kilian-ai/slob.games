@@ -434,6 +434,10 @@ pub fn canvas(_args: &[Value]) -> Value {
                             span .fab-icon { "✨" }
                             span { "New Canvas" }
                         }
+                        button #fabSaveQuick {
+                            span .fab-icon { "💾" }
+                            span { "Save" }
+                        }
                         button #fabVoice {
                             span .fab-icon { "🎤" }
                             span #fabVoiceLabel { "Start Voice" }
@@ -1322,6 +1326,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                         // ── FAB menu ──
                         const fabToggle = document.getElementById('fabToggle');
                         const fabMenu = document.getElementById('fabMenu');
+                        const fabSaveQuick = document.getElementById('fabSaveQuick');
                         fabToggle.addEventListener('click', (e) => {
                             e.stopPropagation();
                             fabMenu.classList.toggle('show');
@@ -1350,6 +1355,23 @@ pub fn canvas(_args: &[Value]) -> Value {
                             _currentContent = '';
                             renderCanvas('');
                             renderProjectBar();
+                        });
+
+                        if (fabSaveQuick) {
+                            fabSaveQuick.addEventListener('click', () => {
+                                fabMenu.classList.remove('show');
+                                fabToggle.classList.remove('open');
+                                document.getElementById('btnSave')?.click();
+                            });
+                        }
+
+                        // Global save hotkey fallback (Cmd+S / Ctrl+S)
+                        document.addEventListener('keydown', (e) => {
+                            if (!(e.metaKey || e.ctrlKey) || String(e.key || '').toLowerCase() !== 's') return;
+                            const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+                            if (tag === 'input' || tag === 'textarea' || (e.target && e.target.isContentEditable)) return;
+                            e.preventDefault();
+                            document.getElementById('btnSave')?.click();
                         });
 
                         // Voice button — toggles start/stop
