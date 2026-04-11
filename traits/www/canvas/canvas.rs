@@ -108,6 +108,58 @@ pub fn canvas(_args: &[Value]) -> Value {
                             background: #555; border-radius: 3px;
                             margin: 10px auto 0;
                         }
+                        .phone-nav-bracket {
+                            position: absolute;
+                            top: 50%;
+                            width: 28px;
+                            height: 92px;
+                            border: 1px solid rgba(0, 224, 255, 0.32);
+                            background: linear-gradient(180deg, rgba(0, 224, 255, 0.12), rgba(0, 224, 255, 0.04));
+                            color: rgba(0, 224, 255, 0.78);
+                            cursor: pointer;
+                            transform: translateY(-50%);
+                            transition: opacity 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+                            opacity: 0.42;
+                            z-index: 4;
+                            display: none;
+                            user-select: none;
+                            -webkit-user-select: none;
+                        }
+                        .phone-nav-bracket::after {
+                            content: '';
+                            position: absolute;
+                            inset: 2px;
+                            background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(0,0,0,0));
+                            pointer-events: none;
+                        }
+                        .phone-nav-bracket:hover {
+                            opacity: 0.85;
+                            border-color: rgba(0, 224, 255, 0.72);
+                            box-shadow: 0 0 12px rgba(0, 224, 255, 0.22);
+                        }
+                        .phone-nav-bracket:active { opacity: 1; }
+                        .phone-nav-bracket.left {
+                            left: -16px;
+                            border-right: none;
+                            border-radius: 11px 0 0 11px;
+                            clip-path: polygon(100% 0, 36% 0, 0 17%, 58% 50%, 0 83%, 36% 100%, 100% 100%, 78% 82%, 22% 50%, 78% 18%);
+                        }
+                        .phone-nav-bracket.right {
+                            right: -16px;
+                            border-left: none;
+                            border-radius: 0 11px 11px 0;
+                            clip-path: polygon(0 0, 64% 0, 100% 17%, 42% 50%, 100% 83%, 64% 100%, 0 100%, 22% 82%, 78% 50%, 22% 18%);
+                        }
+                        .phone-nav-bracket .glyph {
+                            position: absolute;
+                            top: 50%;
+                            left: 50%;
+                            transform: translate(-50%, -50%);
+                            font-size: 14px;
+                            font-weight: 700;
+                            text-shadow: 0 0 6px rgba(0, 224, 255, 0.35);
+                            pointer-events: none;
+                        }
 
                         /* FAB menu */
                         #canvas-fab {
@@ -287,6 +339,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                         #phone-frame {
                             transform-origin: top center;
                         }
+                        .phone-nav-bracket { display: block; }
 
 
                         /* ── Mobile fullscreen ── */
@@ -303,6 +356,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 transform: none !important;
                             }
                             .phone-notch, .phone-home-bar { display: none !important; }
+                            .phone-nav-bracket { display: none !important; }
                             #phone-viewport {
                                 width: 100vw !important; height: 100vh !important;
                                 border-radius: 0 !important;
@@ -361,7 +415,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                             div .speaker {}
                             div .camera {}
                         }
+                        button #btnPrevBracket .phone-nav-bracket .left title="Previous game" aria-label="Previous game" { span .glyph { "<" } }
                         iframe #phone-viewport sandbox="allow-scripts allow-same-origin allow-forms" {}
+                        button #btnNextBracket .phone-nav-bracket .right title="Next game" aria-label="Next game" { span .glyph { ">" } }
                         div .phone-home-bar {}
                     }
                     div #canvasLoading style="display:none;position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(10,10,10,0.85);z-index:9999;align-items:center;justify-content:center;flex-direction:column;border-radius:24px" {
@@ -1947,6 +2003,30 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 gs.dispatchEvent(new Event('change'));
                             }
 
+                            function animateSwitch(direction) {
+                                const vp = document.getElementById('phone-viewport');
+                                const frame = document.getElementById('phone-frame');
+                                const w = frame ? frame.clientWidth : window.innerWidth;
+                                if (vp) {
+                                    vp.style.transition = 'transform 0.2s ease-out';
+                                    vp.style.transform = 'translateX(' + (direction === 'prev' ? w : -w) + 'px)';
+                                }
+                                setTimeout(() => {
+                                    switchGame(direction);
+                                    if (vp) {
+                                        vp.style.transition = 'none';
+                                        vp.style.transform = 'translateX(' + (direction === 'prev' ? -w : w) + 'px)';
+                                        requestAnimationFrame(() => {
+                                            if (vp) {
+                                                vp.style.transition = 'transform 0.22s ease-out';
+                                                vp.style.transform = '';
+                                            }
+                                        });
+                                    }
+                                    resumeGame();
+                                }, 200);
+                            }
+
                             function resetViewportTransform() {
                                 const vp = document.getElementById('phone-viewport');
                                 if (!vp) return;
@@ -1970,25 +2050,7 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                                 if (Math.abs(pct) >= SWIPE_THRESHOLD) {
                                     const direction = pct > 0 ? 'prev' : 'next';
-                                    if (vp) {
-                                        vp.style.transition = 'transform 0.2s ease-out';
-                                        vp.style.transform = 'translateX(' + (pct > 0 ? w : -w) + 'px)';
-                                    }
-                                    setTimeout(() => {
-                                        switchGame(direction);
-                                        if (vp) {
-                                            vp.style.transition = 'none';
-                                            vp.style.transform = 'translateX(' + (pct > 0 ? -w : w) + 'px)';
-                                            requestAnimationFrame(() => {
-                                                if (vp) {
-                                                    vp.style.transition = 'transform 0.22s ease-out';
-                                                    vp.style.transform = '';
-                                                }
-                                            });
-                                        }
-                                        // Match mobile behavior: after swipe-switch, resume game.
-                                        resumeGame();
-                                    }, 200);
+                                    animateSwitch(direction);
                                 } else {
                                     // Small swipe: snap back and stay paused, like mobile.
                                     resetViewportTransform();
@@ -2032,9 +2094,32 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 }
                             }
 
+                            function onDesktopKeydown(e) {
+                                const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+                                if (tag === 'input' || tag === 'textarea' || (e.target && e.target.isContentEditable)) return;
+                                if (e.repeat) return;
+                                if (String(e.key || '').toLowerCase() === 'p') {
+                                    e.preventDefault();
+                                    if (gamePaused) {
+                                        resumeGame();
+                                        resetViewportTransform();
+                                    } else {
+                                        pauseGame();
+                                    }
+                                }
+                            }
+
+                            function onDesktopBracket(direction) {
+                                if (desktopGesture && desktopGesture.active) return;
+                                pauseGame();
+                                animateSwitch(direction);
+                            }
+
                             // Apply handlers to the phone frame area.
                             const frameEl = document.getElementById('phone-frame');
                             const vpEl = document.getElementById('phone-viewport');
+                            const prevBracket = document.getElementById('btnPrevBracket');
+                            const nextBracket = document.getElementById('btnNextBracket');
                             if (frameEl) {
                                 frameEl.addEventListener('wheel', onDesktopWheel, { passive: false });
                                 frameEl.addEventListener('contextmenu', onDesktopContextMenu);
@@ -2043,6 +2128,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 vpEl.addEventListener('wheel', onDesktopWheel, { passive: false });
                                 vpEl.addEventListener('contextmenu', onDesktopContextMenu);
                             }
+                            if (prevBracket) prevBracket.addEventListener('click', () => onDesktopBracket('prev'));
+                            if (nextBracket) nextBracket.addEventListener('click', () => onDesktopBracket('next'));
+                            document.addEventListener('keydown', onDesktopKeydown);
                         }
 
                         // ── Game Sync: auto-share games via relay WebSocket ──
