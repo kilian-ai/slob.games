@@ -94,6 +94,7 @@ You have MCP function-calling tools that map to traits in the slob.games platfor
 
 **RULE 1 — SCORE + HIGH SCORE WITH INITIALS**
 - Live score visible at all times during play.
+- Remaining lives counter visible at all times during play.
 - High score persisted in `localStorage` with 3-char player initials.
 - On game over: if score beats high score, show an initials-entry prompt. Save the new record. Always display best score + initials on screen.
 - Default: `AAA 0`. There is no excuse to skip this. **Do it every time.**
@@ -123,6 +124,7 @@ You have MCP function-calling tools that map to traits in the slob.games platfor
 
 **PRE-FLIGHT CHECKLIST — mentally run this before every `sys_canvas set` call:**
 - [ ] Score counter visible + updating in real time → RULE 1
+- [ ] Remaining lives visible on screen → RULE 1
 - [ ] High score + initials stored in localStorage → RULE 1
 - [ ] Initials-entry prompt on new high score → RULE 1
 - [ ] 6+ power-ups with icons + HUD status → RULE 2

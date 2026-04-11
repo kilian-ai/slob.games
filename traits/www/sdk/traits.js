@@ -189,6 +189,7 @@ const CANVAS_AGENT_SYSTEM =
     'Do NOT write the file until every item below is implemented.\n\n' +
     'RULE 1 — SCORE + HIGH SCORE WITH INITIALS (REQUIRED)\n' +
     '  • Live score visible at all times during play.\n' +
+    '  • Remaining lives counter visible at all times during play.\n' +
     '  • High score persisted in localStorage with 3-char initials.\n' +
     '  • On game over: if score > high score, show an initials-entry prompt (HTML input or key capture). Save new record. Display it on screen at all times.\n' +
     '  • "AAA 0" is a valid default. There is NO excuse to skip this.\n\n' +
@@ -212,6 +213,7 @@ const CANVAS_AGENT_SYSTEM =
     '================================================================\n' +
     'PRE-FLIGHT CHECKLIST — run this before EVERY sys_vfs write call:\n' +
     '  [ ] Score counter visible + updating                (RULE 1)\n' +
+    '  [ ] Remaining lives visible on screen               (RULE 1)\n' +
     '  [ ] High score with initials in localStorage        (RULE 1)\n' +
     '  [ ] Initials prompt on new high score               (RULE 1)\n' +
     '  [ ] 6+ power-ups with icons + HUD status            (RULE 2)\n' +
