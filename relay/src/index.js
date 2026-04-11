@@ -128,9 +128,33 @@ async function sha256hex(str) {
   return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function passwordHash(username, password, secret) {
+// Legacy password hash (SHA-256) — used only for migration of pre-PBKDF2 accounts
+async function legacyPasswordHash(username, password, secret) {
   return sha256hex(`${username}:${password}:${secret || ''}`);
 }
+
+// PBKDF2 password hashing — 100k iterations, SHA-256, 256-bit output
+async function pbkdf2Hash(password, salt) {
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: enc.encode(salt), iterations: 100000, hash: 'SHA-256' },
+    keyMaterial, 256
+  );
+  return Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function generateSalt() {
+  const buf = new Uint8Array(16);
+  crypto.getRandomValues(buf);
+  return Array.from(buf).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Rate limiting constants for auth endpoints
+const MAX_AUTH_ATTEMPTS = 5;
+const AUTH_COOLDOWN_MS = 60_000; // 60 seconds
 
 // ── CORS ─────────────────────────────────────────────────────────────────────
 
@@ -347,12 +371,28 @@ export class GameRoom {
       password_hash TEXT NOT NULL,
       created TEXT NOT NULL
     )`);
+    const userCols = this.sql.exec("PRAGMA table_info(users)").toArray().map(r => r.name);
+    if (!userCols.includes('salt')) this.sql.exec("ALTER TABLE users ADD COLUMN salt TEXT NOT NULL DEFAULT ''");
+
+    // In-memory rate limiting for auth endpoints
+    this.authAttempts = new Map(); // username → { count, lastAttempt }
     this.sql.exec(`CREATE TABLE IF NOT EXISTS scores (
       game_hash TEXT PRIMARY KEY,
       score INTEGER NOT NULL,
       player TEXT NOT NULL DEFAULT '',
       updated TEXT NOT NULL
     )`);
+  }
+
+  _trackFailedAuth(username) {
+    const attempt = this.authAttempts.get(username) || { count: 0, lastAttempt: 0 };
+    // Reset counter if cooldown has expired
+    if (Date.now() - attempt.lastAttempt >= AUTH_COOLDOWN_MS) {
+      attempt.count = 0;
+    }
+    attempt.count++;
+    attempt.lastAttempt = Date.now();
+    this.authAttempts.set(username, attempt);
   }
 
   async authUser(request) {
@@ -421,31 +461,66 @@ export class GameRoom {
         const exists = this.sql.exec("SELECT 1 FROM users WHERE username = ? OR email = ?", username, email).toArray();
         if (exists.length > 0) return json({ error: "username or email already exists" }, 409);
 
+        const salt = generateSalt();
+        const hashed = await pbkdf2Hash(password, salt);
         const created = new Date().toISOString();
-        const hashed = await passwordHash(username, password, this.env.RELAY_SECRET);
         this.sql.exec(
-          "INSERT INTO users (username, email, password_hash, created) VALUES (?, ?, ?, ?)",
-          username, email, hashed, created
+          "INSERT INTO users (username, email, password_hash, salt, created) VALUES (?, ?, ?, ?, ?)",
+          username, email, hashed, salt, created
         );
         const token = await signUserToken(username, new URL(request.url).origin, this.env.RELAY_SECRET);
         return json({ ok: true, username, token });
       }
 
-      // POST /auth/login — verify creds + issue token
+      // POST /auth/login — verify creds + issue token (with rate limiting)
       if (url.pathname === "/auth/login" && request.method === "POST") {
         if (!this.env.RELAY_SECRET) return json({ error: "RELAY_SECRET not configured" }, 503);
         const body = await request.json().catch(() => ({}));
         const username = normalizeSlug(body.username || '', '');
         const password = String(body.password || '');
         if (!username || !password) return json({ error: "username and password required" }, 400);
+
+        // Rate limiting: block after MAX_AUTH_ATTEMPTS failures within cooldown window
+        const attempt = this.authAttempts.get(username);
+        if (attempt && attempt.count >= MAX_AUTH_ATTEMPTS && Date.now() - attempt.lastAttempt < AUTH_COOLDOWN_MS) {
+          return json({ error: "too many attempts, try again later" }, 429);
+        }
+
         const row = this.sql.exec(
-          "SELECT username, password_hash FROM users WHERE username = ?", username
+          "SELECT username, password_hash, salt FROM users WHERE username = ?", username
         ).toArray()[0];
-        if (!row) return json({ error: "invalid credentials" }, 401);
+        if (!row) {
+          this._trackFailedAuth(username);
+          return json({ error: "invalid credentials" }, 401);
+        }
 
-        const hashed = await passwordHash(username, password, this.env.RELAY_SECRET);
-        if (hashed !== row.password_hash) return json({ error: "invalid credentials" }, 401);
+        let valid = false;
+        if (row.salt) {
+          // PBKDF2 path
+          const hashed = await pbkdf2Hash(password, row.salt);
+          valid = (hashed === row.password_hash);
+        } else {
+          // Legacy SHA-256 path — migrate on success
+          const hashed = await legacyPasswordHash(username, password, this.env.RELAY_SECRET);
+          valid = (hashed === row.password_hash);
+          if (valid) {
+            // Migrate to PBKDF2
+            const newSalt = generateSalt();
+            const newHash = await pbkdf2Hash(password, newSalt);
+            this.sql.exec(
+              "UPDATE users SET password_hash = ?, salt = ? WHERE username = ?",
+              newHash, newSalt, username
+            );
+          }
+        }
 
+        if (!valid) {
+          this._trackFailedAuth(username);
+          return json({ error: "invalid credentials" }, 401);
+        }
+
+        // Success — clear rate limit counter
+        this.authAttempts.delete(username);
         const token = await signUserToken(username, new URL(request.url).origin, this.env.RELAY_SECRET);
         return json({ ok: true, username, token });
       }
