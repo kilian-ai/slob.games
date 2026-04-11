@@ -79,6 +79,43 @@ pub fn spa(_args: &[Value]) -> Value {
                         p.inline-status id="authStatus" {}
                       }
 
+                      section.card {
+                        h2 { "Models" }
+                        p.note { "Voice and canvas LLM model preferences. Stored in this browser." }
+                        div.form-row {
+                          label.select-label for="voiceModelSelect" { "Voice Model" }
+                          select id="voiceModelSelect" onchange="saveModelPref('SLOB_VOICE_MODEL', this.value)" {
+                            option value="gpt-4o-mini-realtime-preview" { "gpt-4o-mini-realtime (budget)" }
+                            option value="gpt-4o-realtime-preview" { "gpt-4o-realtime (quality)" }
+                          }
+                        }
+                        div.form-row {
+                          label.select-label for="voiceNameSelect" { "Voice" }
+                          select id="voiceNameSelect" onchange="saveModelPref('SLOB_VOICE_NAME', this.value)" {
+                            option value="shimmer" { "Shimmer" }
+                            option value="alloy" { "Alloy" }
+                            option value="ash" { "Ash" }
+                            option value="ballad" { "Ballad" }
+                            option value="coral" { "Coral" }
+                            option value="echo" { "Echo" }
+                            option value="sage" { "Sage" }
+                            option value="verse" { "Verse" }
+                          }
+                        }
+                        div.form-row {
+                          label.select-label for="canvasModelSelect" { "Canvas LLM" }
+                          select id="canvasModelSelect" onchange="saveModelPref('SLOB_CANVAS_MODEL', this.value)" {
+                            option value="gpt-4.1" { "gpt-4.1 (default)" }
+                            option value="gpt-4.1-mini" { "gpt-4.1-mini (fast)" }
+                            option value="gpt-4.1-nano" { "gpt-4.1-nano (budget)" }
+                            option value="gpt-4o" { "gpt-4o" }
+                            option value="gpt-4o-mini" { "gpt-4o-mini" }
+                            option value="o3" { "o3 (reasoning)" }
+                          }
+                        }
+                        p.inline-status id="modelStatus" {}
+                      }
+
                         section.card {
                             h2 { "Secrets" }
                             p.note {
@@ -250,6 +287,25 @@ input, select, button {
 input {
   min-width: 180px; flex: 1 1 220px;
   padding: 12px 14px;
+}
+select {
+  min-width: 180px; flex: 1 1 220px;
+  padding: 12px 14px;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%235a6570' stroke-width='1.5' fill='none'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+}
+.select-label {
+  display: block;
+  width: 100%;
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: -6px;
+  font-family: 'Courier New', Menlo, monospace;
 }
 button {
   padding: 10px 14px;
@@ -705,6 +761,7 @@ async function registerUser() {
     }
     storage.setItem(ENV_PFX + 'SLOB_USERNAME', data.username);
     storage.setItem(SECRET_PFX + 'SLOB_USER_TOKEN', data.token);
+    if (data.role) storage.setItem(ENV_PFX + 'SLOB_USER_ROLE', data.role);
     renderEnvVars();
     renderSecrets();
     setStatus('authStatus', 'Registered as ' + data.username + '. Token stored.', false);
@@ -733,6 +790,7 @@ async function loginUser() {
     }
     storage.setItem(ENV_PFX + 'SLOB_USERNAME', data.username);
     storage.setItem(SECRET_PFX + 'SLOB_USER_TOKEN', data.token);
+    if (data.role) storage.setItem(ENV_PFX + 'SLOB_USER_ROLE', data.role);
     renderEnvVars();
     renderSecrets();
     setStatus('authStatus', 'Logged in as ' + data.username + '. Token stored.', false);
@@ -742,10 +800,36 @@ async function loginUser() {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Model preferences
+// ═══════════════════════════════════════════════════════════════
+function saveModelPref(key, value) {
+  storage.setItem(ENV_PFX + key, value);
+  setStatus('modelStatus', key + ' → ' + value);
+}
+
+function initModelDropdowns() {
+  var pairs = [
+    ['voiceModelSelect',  'SLOB_VOICE_MODEL'],
+    ['voiceNameSelect',   'SLOB_VOICE_NAME'],
+    ['canvasModelSelect', 'SLOB_CANVAS_MODEL'],
+  ];
+  for (var i = 0; i < pairs.length; i++) {
+    var el = byId(pairs[i][0]);
+    var val = storage.getItem(ENV_PFX + pairs[i][1]);
+    if (el && val) {
+      for (var j = 0; j < el.options.length; j++) {
+        if (el.options[j].value === val) { el.selectedIndex = j; break; }
+      }
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Init
 // ═══════════════════════════════════════════════════════════════
 try { renderSecrets(); renderEnvVars(); } catch(_) {}
 renderGames();
+initModelDropdowns();
 window.addEventListener('traits-canvas-projects-changed', renderGames);
 
 // Expose to onclick handlers
@@ -758,6 +842,7 @@ window.loginUser = loginUser;
 window.playGame = playGame;
 window.buildGame = buildGame;
 window.deleteGame = deleteGame;
+window.saveModelPref = saveModelPref;
 
 })();
 "##;

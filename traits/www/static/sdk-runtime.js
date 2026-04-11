@@ -275,10 +275,13 @@ async function _runCanvasAgent(sdk, request) {
 
     console.log('[Canvas/Agent] ▶ Starting — existing:', _existing.length, 'chars | request:', request, '| logs:', _gameLogs.length, 'chars');
 
+    // Resolve canvas LLM model preference from localStorage
+    const _canvasModel = (typeof localStorage !== 'undefined' && localStorage.getItem('traits.env.SLOB_CANVAS_MODEL')) || 'gpt-4.1';
+
     // ── Browser-native path: direct OpenAI fetch — works without helper or server ──
     const apiKey = _voiceApiKey || await _ensureVoiceApiKey(sdk).catch(() => null);
     if (apiKey) {
-        return await _runCanvasAgentBrowser(request, _existing, apiKey, _gameLogs);
+        return await _runCanvasAgentBrowser(request, _existing, apiKey, _gameLogs, _canvasModel);
     }
 
     // ── Fallback: dispatch through SDK cascade (needs helper or server) ──
@@ -286,7 +289,7 @@ async function _runCanvasAgent(sdk, request) {
         ? `User request: ${request}${_gameLogs}\n\nRead canvas/app.html, apply the change, write the COMPLETE updated file back immediately.`
 : `Build the following for the canvas:\n\n${request}\n\nWrite a complete, self-contained HTML+CSS+JS file to canvas/app.html. Requirements:\n- 390px wide × 844px tall, fills the phone viewport\n- Dark theme: background #0a0a0a, bright accent colors\n- Inline all CSS and JS — no external dependencies\n- querySelector('canvas') for canvas access (scripts run inside an iframe)\n- let (not const) for any reassigned variables\n- Cancel any existing animation first: if(window.__canvasAnimId) cancelAnimationFrame(window.__canvasAnimId)\n- Store new animation ID: window.__canvasAnimId = requestAnimationFrame(loop)\n- No DOMContentLoaded listeners`;
 
-    const agentArgs = [prompt, CANVAS_AGENT_SYSTEM, 'sys.vfs,sys.canvas', 'gpt-4.1', 20];
+    const agentArgs = [prompt, CANVAS_AGENT_SYSTEM, 'sys.vfs,sys.canvas', _canvasModel, 20];
     try {
         const result = await sdk.call('llm.agent', agentArgs);
         const r = result?.result || result;
@@ -351,8 +354,9 @@ async function _runCanvasAgent(sdk, request) {
 
 // ── Browser-native canvas agent loop — direct OpenAI chat completions, no server needed ──
 // Handles sys_vfs read/write locally via localStorage['traits.pvfs'].
-async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs) {
+async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canvasModel) {
     gameLogs = gameLogs || '';
+    canvasModel = canvasModel || 'gpt-4.1';
     const SYS_VFS_TOOL = {
         type: 'function',
         function: {
@@ -385,7 +389,7 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs) {
             const resp = await fetch('https://api.openai.com/v1/chat/completions', {
                 method: 'POST',
                 headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: 'gpt-4.1', messages, tools: [SYS_VFS_TOOL], tool_choice: 'auto' })
+                body: JSON.stringify({ model: canvasModel, messages, tools: [SYS_VFS_TOOL], tool_choice: 'auto' })
             });
             if (!resp.ok) {
                 const err = await resp.text().catch(() => String(resp.status));

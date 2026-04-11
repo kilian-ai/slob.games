@@ -373,6 +373,11 @@ export class GameRoom {
     )`);
     const userCols = this.sql.exec("PRAGMA table_info(users)").toArray().map(r => r.name);
     if (!userCols.includes('salt')) this.sql.exec("ALTER TABLE users ADD COLUMN salt TEXT NOT NULL DEFAULT ''");
+    if (!userCols.includes('role')) this.sql.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'");
+    if (!userCols.includes('last_login')) this.sql.exec("ALTER TABLE users ADD COLUMN last_login TEXT NOT NULL DEFAULT ''");
+
+    // Seed kilian-ai as admin if exists
+    this.sql.exec("UPDATE users SET role = 'admin' WHERE username = 'kilian-ai' AND role != 'admin'");
 
     // In-memory rate limiting for auth endpoints
     this.authAttempts = new Map(); // username → { count, lastAttempt }
@@ -469,10 +474,9 @@ export class GameRoom {
           username, email, hashed, salt, created
         );
         const token = await signUserToken(username, new URL(request.url).origin, this.env.RELAY_SECRET);
-        return json({ ok: true, username, token });
+        return json({ ok: true, username, token, role: 'user' });
       }
-
-      // POST /auth/login — verify creds + issue token (with rate limiting)
+      // ── verify creds + issue token (with rate limiting) ──
       if (url.pathname === "/auth/login" && request.method === "POST") {
         if (!this.env.RELAY_SECRET) return json({ error: "RELAY_SECRET not configured" }, 503);
         const body = await request.json().catch(() => ({}));
@@ -519,10 +523,52 @@ export class GameRoom {
           return json({ error: "invalid credentials" }, 401);
         }
 
-        // Success — clear rate limit counter
+        // Success — clear rate limit counter and update last_login
         this.authAttempts.delete(username);
+        this.sql.exec("UPDATE users SET last_login = ? WHERE username = ?", new Date().toISOString(), username);
+        const userRole = this.sql.exec("SELECT role FROM users WHERE username = ?", username).toArray()[0]?.role || 'user';
         const token = await signUserToken(username, new URL(request.url).origin, this.env.RELAY_SECRET);
-        return json({ ok: true, username, token });
+        return json({ ok: true, username, token, role: userRole });
+      }
+
+      // GET /auth/me — get current user info (including role)
+      if (url.pathname === "/auth/me" && request.method === "GET") {
+        const user = await this.authUser(request);
+        if (!user) return json({ error: "auth required" }, 401);
+        const row = this.sql.exec(
+          "SELECT username, email, role, created, last_login FROM users WHERE username = ?", user
+        ).toArray()[0];
+        if (!row) return json({ error: "user not found" }, 404);
+        return json({ ok: true, ...row });
+      }
+
+      // ── Admin endpoints (require admin role) ──
+
+      // GET /admin/users — list all registered users
+      if (url.pathname === "/admin/users" && request.method === "GET") {
+        const user = await this.authUser(request);
+        if (!user) return json({ error: "auth required" }, 401);
+        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
+        if (role !== 'admin') return json({ error: "admin required" }, 403);
+        const rows = this.sql.exec(
+          "SELECT username, email, role, created, last_login FROM users ORDER BY created ASC"
+        ).toArray();
+        return json(rows);
+      }
+
+      // GET /admin/games — list all games (external + internal) with owner info
+      if (url.pathname === "/admin/games" && request.method === "GET") {
+        const user = await this.authUser(request);
+        if (!user) return json({ error: "auth required" }, 401);
+        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
+        if (role !== 'admin') return json({ error: "admin required" }, 403);
+        const external = this.sql.exec(
+          "SELECT content_hash, name, size, updated, owner, game_id, scope FROM games ORDER BY owner ASC, name ASC"
+        ).toArray();
+        const internal = this.sql.exec(
+          "SELECT owner, game_id, name, content_hash, size, updated, forked_from_hash FROM internal_games ORDER BY owner ASC, game_id ASC"
+        ).toArray();
+        return json({ external, internal });
       }
 
       // GET /games — list all external games

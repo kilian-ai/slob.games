@@ -121,6 +121,7 @@ a:hover{text-decoration:underline}
     <a data-href="/" class="active">Play</a>
     <a data-href="/build">Build</a>
     <a data-href="/settings">Settings</a>
+    <a data-href="/dashboard" id="navAdmin" style="display:none">Admin</a>
   </div>
   <div class="status">
     <span class="dot loading" id="statusDot"></span>
@@ -153,6 +154,12 @@ const ROUTES = {
   '/wasm':       'www.wasm',
   '/admin':      'www.admin.spa',
   '/settings':   'www.admin.spa',
+  '/dashboard':  'www.admin.dashboard',
+};
+
+// Routes that require a specific role to access
+const ROUTE_ROLES = {
+  '/dashboard': 'admin',
 };
 
 const LOCAL_ROUTE_KEY = 'traits.shell.route';
@@ -430,6 +437,16 @@ async function navigate(route, pushState = true) {
     return;
   }
 
+  // Permission gate: check role for restricted routes
+  const requiredRole = ROUTE_ROLES[route];
+  if (requiredRole) {
+    const role = _userRole || (localStorage.getItem('traits.env.SLOB_USER_ROLE') || '');
+    if (role !== requiredRole) {
+      frame.innerHTML = '<div style="padding:4rem;text-align:center;color:var(--muted);font-family:Courier New,monospace"><h2>Access Denied</h2><p>This page requires the <strong>' + requiredRole + '</strong> role.</p><p style="margin-top:1rem"><a data-href="/settings" style="color:#00e0ff;cursor:pointer">Go to Settings</a></p></div>';
+      return;
+    }
+  }
+
   // Show a brief loading state for slow pages
   frame.style.opacity = '0.6';
 
@@ -581,8 +598,8 @@ async function _startGlobalVoice() {
   _voiceLabel.textContent = 'Connecting voice…';
 
   const result = await sdk.startVoice({
-    voice: 'shimmer',
-    model: 'gpt-realtime-mini-2025-12-15',
+    voice: localStorage.getItem('traits.env.SLOB_VOICE_NAME') || 'shimmer',
+    model: localStorage.getItem('traits.env.SLOB_VOICE_MODEL') || 'gpt-4o-mini-realtime-preview',
     onTranscript: (text) => { _voiceLabel.textContent = '🎤 ' + text; },
     onResponse: (text) => {
       _voiceLabel.textContent = '💬 ' + text;
@@ -825,10 +842,39 @@ async function boot() {
   overlay.classList.add('hidden');
   setTimeout(() => overlay.remove(), 300);
 
+  // Check user role for permission-gated nav items
+  _checkUserRole();
+
   // Route to initial page
   const route = currentRouteFromLocation();
   await navigate(route, false);
 }
+
+// ── Permission gate: fetch role from relay, show/hide admin nav ──
+let _userRole = null;
+async function _checkUserRole() {
+  try {
+    const token = (localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '').trim();
+    if (!token) return;
+    const r = await fetch('https://relay.traits.build/sync/auth/me', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    const data = await r.json();
+    if (data.ok && data.role) {
+      _userRole = data.role;
+      localStorage.setItem('traits.env.SLOB_USER_ROLE', data.role);
+      // Show admin nav if admin
+      if (data.role === 'admin') {
+        const adminLink = document.getElementById('navAdmin');
+        if (adminLink) adminLink.style.display = '';
+      }
+    }
+  } catch(_) {}
+}
+
+// Gate navigation to role-restricted routes
+const _origNavigate = navigate;
+// Override not needed — we gate inside navigate itself
 
 boot();
 </script>
