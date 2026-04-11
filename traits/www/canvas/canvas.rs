@@ -621,6 +621,10 @@ pub fn canvas(_args: &[Value]) -> Value {
                         function forwardKey(e, type) {
                             if (!phoneFrame.classList.contains('visible')) return;
                             if (!GAME_KEYS.includes(e.key)) return;
+                            // Don't intercept keys when user is typing in an input/textarea/select
+                            var tag = (document.activeElement || {}).tagName;
+                            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+                            if (document.activeElement && document.activeElement.isContentEditable) return;
                             e.preventDefault();
                             try {
                                 const iDoc = phoneViewport.contentDocument;
