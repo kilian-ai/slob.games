@@ -529,6 +529,62 @@ pub fn canvas(_args: &[Value]) -> Value {
                             } catch(_) { return 0; }
                         }
 
+                        function runOneTimeHistoricalDedupe() {
+                            try {
+                                const FLAG = 'traits.env.GAMES_DEDUPE_V2';
+                                if (localStorage.getItem(FLAG)) return 0;
+
+                                const raw = localStorage.getItem('traits.pvfs') || '{}';
+                                const files = JSON.parse(raw);
+                                const col = files['canvas/games.json']
+                                    ? JSON.parse(files['canvas/games.json'])
+                                    : { active: null, games: {} };
+                                const games = col.games || {};
+
+                                var byName = {};
+                                for (var id in games) {
+                                    if (!games.hasOwnProperty(id)) continue;
+                                    var g = games[id] || {};
+                                    var nk = String(g.name || 'untitled').trim().toLowerCase();
+                                    if (!byName[nk]) byName[nk] = [];
+                                    byName[nk].push(id);
+                                }
+
+                                var removed = 0;
+                                for (var nk in byName) {
+                                    var ids = byName[nk];
+                                    if (!ids || ids.length <= 1) continue;
+
+                                    // Prefer relay-identity entries, then larger content, then most recently updated.
+                                    ids.sort(function(a, b) {
+                                        var ga = games[a] || {};
+                                        var gb = games[b] || {};
+                                        var sa = ((ga._sync_owner || ga.owner) && (ga._sync_game_id || ga.game_id)) ? 1 : 0;
+                                        var sb = ((gb._sync_owner || gb.owner) && (gb._sync_game_id || gb.game_id)) ? 1 : 0;
+                                        if (sb !== sa) return sb - sa;
+                                        var la = (ga.content || '').length;
+                                        var lb = (gb.content || '').length;
+                                        if (lb !== la) return lb - la;
+                                        return String(gb.updated || '').localeCompare(String(ga.updated || ''));
+                                    });
+
+                                    var keep = ids[0];
+                                    for (var i = 1; i < ids.length; i++) {
+                                        var del = ids[i];
+                                        if (col.active === del) col.active = keep;
+                                        delete games[del];
+                                        removed++;
+                                    }
+                                }
+
+                                col.games = games;
+                                files['canvas/games.json'] = JSON.stringify(col);
+                                localStorage.setItem('traits.pvfs', JSON.stringify(files));
+                                localStorage.setItem(FLAG, '1');
+                                return removed;
+                            } catch(_) { return 0; }
+                        }
+
                         function getActiveGameContent() {
                             const col = readGamesCollection();
                             if (!col.active || !col.games[col.active]) return '';
@@ -606,6 +662,7 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                         document.getElementById('btnSave').addEventListener('click', saveProject);
                         window.addEventListener('traits-canvas-projects-changed', renderProjectBar);
+                        runOneTimeHistoricalDedupe();
                         dedupeLocalGames();
                         renderProjectBar();
 
@@ -1858,6 +1915,133 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 shellNav.style.left = '0';
                                 shellNav.style.right = '0';
                                 shellNav.style.transition = 'opacity 0.3s, transform 0.3s';
+                            }
+                        } else {
+                            // ── Desktop gesture parity with mobile two-finger controls ──
+                            let gamePaused = false;
+                            let desktopGesture = null; // {dx, active, timer}
+                            const SWIPE_THRESHOLD = 0.15; // fraction of viewport width
+
+                            function pauseGame() {
+                                if (gamePaused) return;
+                                gamePaused = true;
+                                const vp = document.getElementById('phone-viewport');
+                                if (vp) vp.contentWindow?.postMessage({type:'canvas-pause'}, '*');
+                            }
+
+                            function resumeGame() {
+                                if (!gamePaused) return;
+                                gamePaused = false;
+                                const vp = document.getElementById('phone-viewport');
+                                if (vp) vp.contentWindow?.postMessage({type:'canvas-resume'}, '*');
+                            }
+
+                            function switchGame(direction) {
+                                const gs = document.getElementById('game-select');
+                                if (!gs || gs.options.length < 2) return;
+                                const idx = gs.selectedIndex;
+                                const next = direction === 'next'
+                                    ? (idx + 1) % gs.options.length
+                                    : (idx - 1 + gs.options.length) % gs.options.length;
+                                gs.selectedIndex = next;
+                                gs.dispatchEvent(new Event('change'));
+                            }
+
+                            function resetViewportTransform() {
+                                const vp = document.getElementById('phone-viewport');
+                                if (!vp) return;
+                                vp.style.transition = 'transform 0.2s ease-out';
+                                vp.style.transform = '';
+                            }
+
+                            function endDesktopGesture() {
+                                if (!desktopGesture || !desktopGesture.active) return;
+                                const vp = document.getElementById('phone-viewport');
+                                const frame = document.getElementById('phone-frame');
+                                const w = frame ? frame.clientWidth : window.innerWidth;
+                                const dx = desktopGesture.dx || 0;
+                                const pct = w ? (dx / w) : 0;
+
+                                desktopGesture.active = false;
+                                if (desktopGesture.timer) {
+                                    clearTimeout(desktopGesture.timer);
+                                    desktopGesture.timer = null;
+                                }
+
+                                if (Math.abs(pct) >= SWIPE_THRESHOLD) {
+                                    const direction = pct > 0 ? 'prev' : 'next';
+                                    if (vp) {
+                                        vp.style.transition = 'transform 0.2s ease-out';
+                                        vp.style.transform = 'translateX(' + (pct > 0 ? w : -w) + 'px)';
+                                    }
+                                    setTimeout(() => {
+                                        switchGame(direction);
+                                        if (vp) {
+                                            vp.style.transition = 'none';
+                                            vp.style.transform = 'translateX(' + (pct > 0 ? -w : w) + 'px)';
+                                            requestAnimationFrame(() => {
+                                                if (vp) {
+                                                    vp.style.transition = 'transform 0.22s ease-out';
+                                                    vp.style.transform = '';
+                                                }
+                                            });
+                                        }
+                                        // Match mobile behavior: after swipe-switch, resume game.
+                                        resumeGame();
+                                    }, 200);
+                                } else {
+                                    // Small swipe: snap back and stay paused, like mobile.
+                                    resetViewportTransform();
+                                }
+                            }
+
+                            function beginDesktopGesture() {
+                                if (desktopGesture && desktopGesture.active) return;
+                                desktopGesture = { dx: 0, active: true, timer: null };
+                                pauseGame();
+                                const vp = document.getElementById('phone-viewport');
+                                if (vp) vp.style.transition = 'none';
+                            }
+
+                            function scheduleDesktopGestureEnd() {
+                                if (!desktopGesture) return;
+                                if (desktopGesture.timer) clearTimeout(desktopGesture.timer);
+                                desktopGesture.timer = setTimeout(endDesktopGesture, 140);
+                            }
+
+                            function onDesktopWheel(e) {
+                                // Trackpad two-finger horizontal swipe maps to wheel deltaX.
+                                if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+                                e.preventDefault();
+                                beginDesktopGesture();
+                                desktopGesture.dx += (-e.deltaX);
+                                const vp = document.getElementById('phone-viewport');
+                                if (vp) vp.style.transform = 'translateX(' + desktopGesture.dx + 'px)';
+                                scheduleDesktopGestureEnd();
+                            }
+
+                            function onDesktopContextMenu(e) {
+                                // Right-click / two-finger tap on trackpad toggles pause/resume.
+                                e.preventDefault();
+                                if (desktopGesture && desktopGesture.active) return;
+                                if (gamePaused) {
+                                    resumeGame();
+                                    resetViewportTransform();
+                                } else {
+                                    pauseGame();
+                                }
+                            }
+
+                            // Apply handlers to the phone frame area.
+                            const frameEl = document.getElementById('phone-frame');
+                            const vpEl = document.getElementById('phone-viewport');
+                            if (frameEl) {
+                                frameEl.addEventListener('wheel', onDesktopWheel, { passive: false });
+                                frameEl.addEventListener('contextmenu', onDesktopContextMenu);
+                            }
+                            if (vpEl) {
+                                vpEl.addEventListener('wheel', onDesktopWheel, { passive: false });
+                                vpEl.addEventListener('contextmenu', onDesktopContextMenu);
                             }
                         }
 
