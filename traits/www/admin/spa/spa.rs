@@ -26,12 +26,6 @@ pub fn spa(_args: &[Value]) -> Value {
                         }
                     }
 
-                    // Install as app
-                    section.card id="setupCard" {
-                        h2 { "Install" }
-                        div id="platformInfo" {}
-                    }
-
                     // Kernel info (enriched)
                     section.card id="kernelCard" data-trait="sys.list" data-handler="refreshStats" data-interval="30000" {
                         h2 { "Kernel" }
@@ -62,10 +56,7 @@ pub fn spa(_args: &[Value]) -> Value {
 
                     // Games list
                     section.card {
-                      div style="display:flex;align-items:center;justify-content:space-between;gap:10px;" {
-                        h2 style="margin:0;" { "Games" }
-                        button.primary onclick="cleanupGames()" style="font-size:11px;padding:6px 10px;" { "Clean Duplicates" }
-                      }
+                        h2 { "Games" }
                         p.note { "Internal games only. External games appear on the Play page." }
                       p.note id="gamesSummary" { "—" }
                         div id="gamesList" { p.muted { "Loading games…" } }
@@ -78,10 +69,10 @@ pub fn spa(_args: &[Value]) -> Value {
                         p.note { "Register/login for a user token used by relay sync and private internal rooms." }
                         div.form-row {
                           input id="authUsername" type="text" placeholder="Username";
-                          input id="authEmail" type="email" placeholder="Email (for register)";
+                          input id="authPassword" type="password" placeholder="Password";
                         }
                         div.form-row {
-                          input id="authPassword" type="password" placeholder="Password";
+                          input id="authEmail" type="email" placeholder="Email (for register)";
                           button.primary onclick="registerUser()" { "Register" }
                           button onclick="loginUser()" { "Login" }
                         }
@@ -284,8 +275,6 @@ code {
   border-radius: 8px;
 }
 a { color: #00e0ff; }
-.platform-icon { font-size: 1.3rem; margin-right: 6px; vertical-align: middle; }
-.install-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
 
 /* Kernel stats grid */
 .kernel-grid {
@@ -376,68 +365,28 @@ a { color: #00e0ff; }
 const JS: &str = r##"
 (function() {
 // ═══════════════════════════════════════════════════════════════
-// Platform detection + Install card
+// Platform detection (badge only)
 // ═══════════════════════════════════════════════════════════════
 (function setupCard() {
   var ua = navigator.userAgent || '';
   var p = navigator.platform || '';
-  var os = 'unknown', icon = '💻', label = 'Unknown';
+  var label = 'Unknown';
   if (/iPhone|iPad|iPod/.test(ua) || (/Mac/.test(p) && 'ontouchend' in document)) {
-    os = 'ios'; icon = '📱'; label = 'iPhone / iPad';
+    label = 'iPhone / iPad';
   } else if (/Android/.test(ua)) {
-    os = 'android'; icon = '📱'; label = 'Android';
+    label = 'Android';
   } else if (/Mac/.test(p) || /Mac/.test(ua)) {
-    os = 'macos'; icon = '🍎'; label = 'macOS';
+    label = 'macOS';
   } else if (/Win/.test(p) || /Win/.test(ua)) {
-    os = 'windows'; icon = '🪟'; label = 'Windows';
+    label = 'Windows';
   } else if (/Linux/.test(p) || /Linux/.test(ua)) {
-    os = 'linux'; icon = '🐧'; label = 'Linux';
+    label = 'Linux';
   } else if (/CrOS/.test(ua)) {
-    os = 'chromeos'; icon = '💻'; label = 'ChromeOS';
+    label = 'ChromeOS';
   }
-
   var badge = document.getElementById('platformBadge');
   if (badge) badge.textContent = label;
-
-  var el = document.getElementById('platformInfo');
-  if (!el) return;
-
-  var h = '<span class="platform-icon">' + icon + '</span> <strong>' + label + '</strong><br>';
-
-  if (os === 'ios') {
-    h += '<p class="note" style="margin-top:8px;">Add slob.games to your Home Screen for fullscreen play.</p>';
-    h += '<div class="install-row">';
-    h += '<button class="primary" onclick="addToHomeScreen()">Add to Home Screen</button>';
-    h += '</div>';
-    h += '<p class="note" style="margin-top:8px;font-size:12px;color:#555;">Tap Share ⎙ then "Add to Home Screen" in Safari.</p>';
-  } else if (os === 'android') {
-    h += '<p class="note" style="margin-top:8px;">Install slob.games as an app for fullscreen play.</p>';
-    h += '<div class="install-row">';
-    h += '<button class="primary" onclick="addToHomeScreen()">Install App</button>';
-    h += '</div>';
-  } else {
-    h += '<p class="note" style="margin-top:8px;">Install as a desktop app for quick access.</p>';
-    h += '<div class="install-row">';
-    h += '<button class="primary" onclick="addToHomeScreen()">Install App</button>';
-    h += '</div>';
-    h += '<p class="note" style="margin-top:6px;font-size:12px;color:#555;">Most browsers support installing web apps via the address bar menu.</p>';
-  }
-
-  el.innerHTML = h;
 })();
-
-function addToHomeScreen() {
-  if (window.deferredPrompt) {
-    window.deferredPrompt.prompt();
-  } else {
-    var isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
-    if (isIOS) alert('Tap the Share button ⎙ then "Add to Home Screen"');
-    else alert('Open browser menu and tap "Install App" or "Add to Home Screen"');
-  }
-}
-window.addEventListener('beforeinstallprompt', function(e) {
-  e.preventDefault(); window.deferredPrompt = e;
-});
 
 // ═══════════════════════════════════════════════════════════════
 // Storage helpers
@@ -664,52 +613,6 @@ function deleteGame(id, name) {
   });
 }
 
-function cleanupGames() {
-  try {
-    var raw = localStorage.getItem('traits.pvfs') || '{}';
-    var files = JSON.parse(raw);
-    var col = files['canvas/games.json'] ? JSON.parse(files['canvas/games.json']) : { active: null, games: {} };
-    var byName = {};
-    for (var id in col.games) {
-      if (!col.games.hasOwnProperty(id)) continue;
-      var g = col.games[id];
-      var scope = (g.scope || g._scope || 'internal');
-      if (scope === 'external') continue;
-      var nk = (g.name || 'untitled').trim().toLowerCase();
-      if (!byName[nk]) { byName[nk] = []; }
-      byName[nk].push(id);
-    }
-    var removed = 0;
-    for (var nk in byName) {
-      var ids = byName[nk];
-      if (ids.length <= 1) continue;
-      ids.sort(function(a, b) {
-        var la = (col.games[a].content || '').length;
-        var lb = (col.games[b].content || '').length;
-        if (lb !== la) return lb - la;
-        return (col.games[b].updated || '').localeCompare(col.games[a].updated || '');
-      });
-      var keep = ids[0];
-      for (var i = 1; i < ids.length; i++) {
-        var del = ids[i];
-        if (col.active === del) col.active = keep;
-        delete col.games[del];
-        removed++;
-      }
-    }
-    if (removed > 0) {
-      files['canvas/games.json'] = JSON.stringify(col);
-      localStorage.setItem('traits.pvfs', JSON.stringify(files));
-      renderGames();
-      alert('Removed ' + removed + ' duplicate' + (removed === 1 ? '' : 's') + '.');
-    } else {
-      alert('No duplicates found.');
-    }
-  } catch(e) {
-    alert('Cleanup failed: ' + e.message);
-  }
-}
-
 // ═══════════════════════════════════════════════════════════════
 // Secrets & Environment
 // ═══════════════════════════════════════════════════════════════
@@ -846,7 +749,6 @@ renderGames();
 window.addEventListener('traits-canvas-projects-changed', renderGames);
 
 // Expose to onclick handlers
-window.addToHomeScreen = addToHomeScreen;
 window.saveSecret = saveSecret;
 window.deleteSecret = deleteSecret;
 window.saveEnvVar = saveEnvVar;
