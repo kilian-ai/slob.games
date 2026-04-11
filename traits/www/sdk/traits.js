@@ -135,6 +135,91 @@ let _voiceDc = null;             // DataChannel for sending/receiving events
 let _voiceAudioEl = null;        // <audio> element for model playback
 let _voiceApiKey = null;
 let _voiceSdk = null;            // Reference to Traits instance for tool dispatch
+let _voiceSessionId = null;      // Stable session id reused across voice restarts
+
+const LS_VOICE_SESSION_ID = 'traits.voice.session_id';
+const LS_VOICE_HISTORY_PREFIX = 'traits.voice.history.';
+
+function _generateVoiceSessionId() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const ts = [
+        d.getUTCFullYear(),
+        pad(d.getUTCMonth() + 1),
+        pad(d.getUTCDate()),
+        '_',
+        pad(d.getUTCHours()),
+        pad(d.getUTCMinutes()),
+        pad(d.getUTCSeconds()),
+    ].join('');
+    const rnd = Math.random().toString(36).slice(2, 8);
+    return `voice_${ts}_${rnd}`;
+}
+
+function _readLocalVoiceHistory(sessionId) {
+    if (!sessionId) return [];
+    try {
+        const raw = localStorage.getItem(LS_VOICE_HISTORY_PREFIX + sessionId) || '[]';
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr : [];
+    } catch (_) { return []; }
+}
+
+function _appendLocalVoiceHistory(sessionId, role, content) {
+    if (!sessionId || !content) return;
+    try {
+        const clean = String(content).trim();
+        if (!clean) return;
+        const hist = _readLocalVoiceHistory(sessionId);
+        hist.push({ role: String(role || 'user'), content: clean, ts: Date.now() });
+        // Keep only the latest 40 turns locally to limit prompt growth.
+        while (hist.length > 40) hist.shift();
+        localStorage.setItem(LS_VOICE_HISTORY_PREFIX + sessionId, JSON.stringify(hist));
+    } catch (_) {}
+}
+
+async function _resolveVoiceSessionId(sdk, opts = {}, model = '') {
+    if (opts.sessionId && String(opts.sessionId).trim()) {
+        const sid = String(opts.sessionId).trim();
+        try { localStorage.setItem(LS_VOICE_SESSION_ID, sid); } catch (_) {}
+        _voiceSessionId = sid;
+        return sid;
+    }
+
+    try {
+        const stored = (localStorage.getItem(LS_VOICE_SESSION_ID) || '').trim();
+        if (stored) {
+            _voiceSessionId = stored;
+            return stored;
+        }
+    } catch (_) {}
+
+    // Try sys.chat current/new first when available, then fall back to local generated id.
+    try {
+        const cur = await sdk.call('sys.chat', ['current']);
+        const curId = cur?.session_id || cur?.result?.session_id || '';
+        if (curId) {
+            try { localStorage.setItem(LS_VOICE_SESSION_ID, curId); } catch (_) {}
+            _voiceSessionId = curId;
+            return curId;
+        }
+    } catch (_) {}
+
+    try {
+        const created = await sdk.call('sys.chat', ['new', 'slob.games', model || '']);
+        const newId = created?.session_id || created?.result?.session_id || '';
+        if (newId) {
+            try { localStorage.setItem(LS_VOICE_SESSION_ID, newId); } catch (_) {}
+            _voiceSessionId = newId;
+            return newId;
+        }
+    } catch (_) {}
+
+    const fallback = _generateVoiceSessionId();
+    try { localStorage.setItem(LS_VOICE_SESSION_ID, fallback); } catch (_) {}
+    _voiceSessionId = fallback;
+    return fallback;
+}
 
 function parseDispatchTarget(path) {
     if (typeof path !== 'string') return { cleanPath: path, target: null };
@@ -1938,6 +2023,8 @@ export class Traits {
         try {
             const LS_VOICE_INSTRUCTIONS = 'traits.voice.instructions';
             const currentPage = _normalizeVoicePageFromHash((typeof location !== 'undefined' && location.hash) || '');
+            const voiceSessionId = await _resolveVoiceSessionId(this, opts, model);
+            console.log('[Voice] Using persistent session_id:', voiceSessionId);
 
             // ── If caller passed custom instructions, inject them so sys.voice.instruct build picks them up ──
             if (opts.instructions) {
@@ -1952,12 +2039,27 @@ export class Traits {
             // Includes: agent context + memory notes + chat history + voice instruct text
             let fullInstructions = '';
             try {
-                const instrResult = await this.call('sys.voice.instruct', ['build', opts.agent || '', opts.sessionId || '']);
+                const instrResult = await this.call('sys.voice.instruct', ['build', opts.agent || '', voiceSessionId || '']);
                 fullInstructions = instrResult?.instructions || instrResult?.result?.instructions || '';
             } catch(_) {}
             if (!fullInstructions) {
                 fullInstructions = 'You are a concise, helpful voice assistant powered by slob.games. Keep responses short and conversational. You have access to function-calling tools that execute locally via WebAssembly.';
             }
+            // Browser-local continuity fallback: include recent local voice history for this session.
+            // This keeps context even when sys.chat is unavailable in WASM-only mode.
+            try {
+                const hist = _readLocalVoiceHistory(voiceSessionId);
+                if (hist.length > 0) {
+                    const recent = hist.slice(-10).map((m) => {
+                        const role = m.role === 'assistant' ? 'assistant' : 'user';
+                        const txt = String(m.content || '').replace(/\s+/g, ' ').trim();
+                        return `  ${role}: ${txt.slice(0, 240)}`;
+                    }).join('\n');
+                    if (recent) {
+                        fullInstructions += '\n\nRecent browser voice context (same persistent session):\n' + recent;
+                    }
+                }
+            } catch (_) {}
             // Canvas page prefix (visual context cue)
             if (currentPage === 'canvas') {
                 const canvasPrefix =
@@ -2178,6 +2280,8 @@ export class Traits {
                             opts.onTranscript(msg.transcript.trim());
                         }
                         _voiceLastUserTranscript = (msg.transcript || '').trim();
+                        _appendLocalVoiceHistory(voiceSessionId, 'user', _voiceLastUserTranscript);
+                        try { await _self.call('sys.chat', ['append', voiceSessionId, 'user', _voiceLastUserTranscript]); } catch(_) {}
                     }
 
                     // ── Model response transcript ──
@@ -2186,6 +2290,8 @@ export class Traits {
                             opts.onResponse(msg.transcript.trim());
                         }
                         if (msg.transcript) {
+                            _appendLocalVoiceHistory(voiceSessionId, 'assistant', msg.transcript.trim());
+                            try { await _self.call('sys.chat', ['append', voiceSessionId, 'assistant', msg.transcript.trim()]); } catch(_) {}
                             _dispatchVoiceEvent('response', { text: msg.transcript.trim() });
                         }
                     }
@@ -2499,7 +2605,7 @@ export class Traits {
             const answerSdp = await sdpResponse.text();
             await _voicePc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
 
-            return { ok: true, tools: tools.length };
+            return { ok: true, tools: tools.length, sessionId: voiceSessionId };
 
         } catch(e) {
             await this.stopVoice();
