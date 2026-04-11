@@ -599,6 +599,91 @@ function readGamesCollection() {
   } catch(_) { return { active: null, games: {} }; }
 }
 
+function slugify(s) {
+  return String(s || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'untitled';
+}
+
+function upsertInternalRelayGameToLocal(owner, gameId, data) {
+  try {
+    var raw = localStorage.getItem('traits.pvfs') || '{}';
+    var files = JSON.parse(raw);
+    var col = files['canvas/games.json']
+      ? JSON.parse(files['canvas/games.json'])
+      : { active: null, games: {} };
+
+    var o = owner || data.owner || 'user';
+    var gid = gameId || data.game_id || slugify(data.name || 'untitled');
+    var identityKey = (o + '|' + gid).toLowerCase();
+    var targetId = 'ri-' + slugify(o + '-' + gid).slice(0, 44);
+
+    // Reuse an existing entry for this relay internal identity if present.
+    for (var id in (col.games || {})) {
+      if (!col.games.hasOwnProperty(id)) continue;
+      var g = col.games[id] || {};
+      var k = ((g._sync_owner || g.owner || '') + '|' + (g._sync_game_id || g.game_id || '')).toLowerCase();
+      if (k && k === identityKey) {
+        targetId = id;
+        break;
+      }
+    }
+
+    col.games[targetId] = {
+      name: data.name || gid,
+      content: data.content || '',
+      scope: 'internal',
+      _scope: 'internal',
+      owner: o,
+      game_id: gid,
+      _sync_owner: o,
+      _sync_game_id: gid,
+      _sync_hash: data.content_hash || data.checksum || '',
+      version: data.version || 'v1',
+      checksum: data.checksum || data.content_hash || '',
+      created: (col.games[targetId] && col.games[targetId].created) || data.updated || new Date().toISOString(),
+      updated: data.updated || new Date().toISOString()
+    };
+
+    // Remove stale duplicates for this same identity.
+    for (var did in (col.games || {})) {
+      if (!col.games.hasOwnProperty(did) || did === targetId) continue;
+      var dg = col.games[did] || {};
+      var dk = ((dg._sync_owner || dg.owner || '') + '|' + (dg._sync_game_id || dg.game_id || '')).toLowerCase();
+      if (dk && dk === identityKey) {
+        if (col.active === did) col.active = targetId;
+        delete col.games[did];
+      }
+    }
+
+    // Backward-compat cleanup: remove old local placeholders with the same name.
+    var targetName = String((data.name || gid) || '').trim().toLowerCase();
+    if (targetName) {
+      for (var lid in (col.games || {})) {
+        if (!col.games.hasOwnProperty(lid) || lid === targetId) continue;
+        var lg = col.games[lid] || {};
+        var lscope = (lg.scope || lg._scope || 'internal');
+        var lname = String(lg.name || '').trim().toLowerCase();
+        var hasSyncIdentity = !!((lg._sync_owner || lg.owner) && (lg._sync_game_id || lg.game_id));
+        if (lscope === 'internal' && lname === targetName && !hasSyncIdentity) {
+          if (col.active === lid) col.active = targetId;
+          delete col.games[lid];
+        }
+      }
+    }
+
+    col.active = targetId;
+    files['canvas/games.json'] = JSON.stringify(col);
+    files['canvas/app.html'] = data.content || '';
+    localStorage.setItem('traits.pvfs', JSON.stringify(files));
+    return targetId;
+  } catch(_) {
+    return null;
+  }
+}
+
 function formatSize(bytes) {
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -767,8 +852,13 @@ function playRelayGame(owner, gameId) {
     headers: authHeaders()
   }).then(function(r) { return r.json(); }).then(function(data) {
     if (!data.content) { alert('Could not load game'); return; }
-    callTrait('sys.canvas', ['new', data.name || gameId]).then(function() {
+    var localId = upsertInternalRelayGameToLocal(owner, gameId, data);
+    var activate = localId
+      ? callTrait('sys.canvas', ['activate', localId])
+      : callTrait('sys.canvas', ['new', data.name || gameId]);
+    activate.then(function() {
       callTrait('sys.canvas', ['set', data.content]).then(function() {
+        window.dispatchEvent(new CustomEvent('traits-canvas-projects-changed'));
         if (location.protocol === 'file:') {
           sessionStorage.setItem('traits.shell.route', '/');
           location.hash = '#/';

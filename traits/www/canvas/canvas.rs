@@ -490,7 +490,15 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 for (var id in col.games) {
                                     var g = col.games[id];
                                     var scope = (g.scope || g._scope || 'internal');
-                                    var n = scope + '|' + (g.name || 'untitled').trim().toLowerCase();
+                                    var identity = '';
+                                    if ((g._sync_owner || g.owner) && (g._sync_game_id || g.game_id)) {
+                                        identity = 'relay|' + String(g._sync_owner || g.owner).trim().toLowerCase() + '|' + String(g._sync_game_id || g.game_id).trim().toLowerCase();
+                                    } else if (scope === 'external' && g.owner && g.game_id) {
+                                        identity = 'external|' + String(g.owner).trim().toLowerCase() + '|' + String(g.game_id).trim().toLowerCase();
+                                    } else {
+                                        identity = scope + '|' + (g.name || 'untitled').trim().toLowerCase();
+                                    }
+                                    var n = identity;
                                     if (!byName[n]) byName[n] = [];
                                     byName[n].push(id);
                                 }
@@ -546,6 +554,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                         const gameSelect = document.getElementById('game-select');
 
                         function renderProjectBar() {
+                            dedupeLocalGames();
                             const games = getGamesList();
                             const sel = gameSelect;
                             sel.innerHTML = '';
