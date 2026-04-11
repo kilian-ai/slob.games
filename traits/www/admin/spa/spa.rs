@@ -723,8 +723,12 @@ async function renderGames() {
 }
 
 function renderRelayGames(data, el, summary) {
-  var internal = data.internal || [];
-  var external = data.external || [];
+  var internal = (data.internal || []).slice().sort(function(a, b) {
+    return String(a.name || '').localeCompare(String(b.name || ''));
+  });
+  var external = (data.external || []).slice().sort(function(a, b) {
+    return String(a.name || '').localeCompare(String(b.name || ''));
+  });
   if (summary) {
     summary.textContent = 'Internal: ' + internal.length + ' · External: ' + external.length + ' (relay)';
   }
@@ -743,7 +747,7 @@ function renderRelayGames(data, el, summary) {
       var hash = (g.content_hash || '').slice(0, 8);
       html += '<div class="game-row">';
       html += '<div class="game-info">';
-      html += '<div class="game-name">' + name + '</div>';
+      html += '<div class="game-name" style="cursor:pointer" onclick="playRelayGame(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\')">' + name + '</div>';
       html += '<div class="game-meta">';
       html += '<span>' + identity + '</span>';
       html += '<span>' + size + '</span>';
@@ -765,7 +769,7 @@ function renderRelayGames(data, el, summary) {
       var ehash = (ge.content_hash || '').slice(0, 8);
       html += '<div class="game-row">';
       html += '<div class="game-info">';
-      html += '<div class="game-name">' + ename + '</div>';
+      html += '<div class="game-name" style="cursor:pointer" onclick="playExternalGame(\'' + esc(ge.content_hash) + '\')">' + ename + '</div>';
       html += '<div class="game-meta">';
       html += '<span>' + esize + '</span>';
       html += '<span>' + ago(ge.updated) + '</span>';
