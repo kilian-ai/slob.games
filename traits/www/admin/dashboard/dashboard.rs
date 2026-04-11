@@ -226,12 +226,21 @@ function ago(iso) {
 
 async function apiFetch(path) {
   var r = await fetch(API + path, { headers: { 'Authorization': 'Bearer ' + token } });
-  return r.json();
+  var text = await r.text();
+  var body = {};
+  try { body = text ? JSON.parse(text) : {}; } catch (_) { body = {}; }
+  if (!r.ok) return { ok: false, error: body.error || ('HTTP ' + r.status) };
+  return body;
 }
 
 async function apiDelete(path) {
   var r = await fetch(API + path, { method: 'DELETE', headers: { 'Authorization': 'Bearer ' + token } });
-  return r.json();
+  var text = await r.text();
+  var body = {};
+  try { body = text ? JSON.parse(text) : {}; } catch (_) { body = {}; }
+  if (!r.ok) return { ok: false, error: body.error || ('HTTP ' + r.status) };
+  if (typeof body.ok === 'undefined') body.ok = true;
+  return body;
 }
 
 async function apiPut(path, body) {
@@ -469,14 +478,30 @@ async function submitEditUser(usernameEnc) {
 async function deleteGame(hashEnc) {
   var hash = decodeURIComponent(hashEnc);
   if (!confirm('Delete game #' + hash.slice(0,8) + '? This cannot be undone.')) return;
-  var r = await apiDelete('/admin/games/' + hashEnc);
-  if (r.ok) {
-    // Re-fetch authoritative state so grouped views update immediately.
-    var gp = await apiFetch('/admin/games');
-    gamesData = gp && gp.external ? gp : { external: [], internal: [] };
+  try {
+    var r = await apiDelete('/admin/games/' + hashEnc);
+    if (!r.ok) {
+      alert(r.error || 'Delete failed');
+      return;
+    }
+
+    // Immediate optimistic removal to avoid stale/stuck UI.
+    gamesData.external = (gamesData.external || []).filter(function(g) {
+      return String(g.content_hash || '') !== hash;
+    });
+    gamesData.internal = (gamesData.internal || []).filter(function(g) {
+      return String(g.content_hash || '') !== hash;
+    });
     renderGames();
-  } else {
-    alert(r.error || 'Delete failed');
+
+    // Re-fetch authoritative state in background to keep grouped data accurate.
+    var gp = await apiFetch('/admin/games');
+    if (gp && gp.ok !== false && gp.external) {
+      gamesData = gp;
+      renderGames();
+    }
+  } catch (e) {
+    alert((e && e.message) ? e.message : 'Delete failed');
   }
 }
 
