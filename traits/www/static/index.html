@@ -599,7 +599,7 @@ async function _startGlobalVoice() {
 
   const result = await sdk.startVoice({
     voice: localStorage.getItem('traits.env.SLOB_VOICE_NAME') || 'shimmer',
-    model: localStorage.getItem('traits.env.SLOB_VOICE_MODEL') || 'gpt-4o-mini-realtime-preview',
+    model: localStorage.getItem('traits.env.SLOB_VOICE_MODEL') || 'gpt-realtime-mini-2025-12-15',
     onTranscript: (text) => { _voiceLabel.textContent = '🎤 ' + text; },
     onResponse: (text) => {
       _voiceLabel.textContent = '💬 ' + text;

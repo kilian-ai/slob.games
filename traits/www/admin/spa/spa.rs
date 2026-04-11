@@ -85,8 +85,9 @@ pub fn spa(_args: &[Value]) -> Value {
                         div.form-row {
                           label.select-label for="voiceModelSelect" { "Voice Model" }
                           select id="voiceModelSelect" onchange="saveModelPref('SLOB_VOICE_MODEL', this.value)" {
-                            option value="gpt-4o-mini-realtime-preview" { "gpt-4o-mini-realtime (budget)" }
+                            option value="gpt-realtime-mini-2025-12-15" { "realtime-mini (default)" }
                             option value="gpt-4o-realtime-preview" { "gpt-4o-realtime (quality)" }
+                            option value="gpt-4o-mini-realtime-preview" { "gpt-4o-mini-realtime" }
                           }
                         }
                         div.form-row {
@@ -108,6 +109,9 @@ pub fn spa(_args: &[Value]) -> Value {
                             option value="gpt-4.1" { "gpt-4.1 (default)" }
                             option value="gpt-4.1-mini" { "gpt-4.1-mini (fast)" }
                             option value="gpt-4.1-nano" { "gpt-4.1-nano (budget)" }
+                            option value="gpt-5.4" { "gpt-5.4" }
+                            option value="gpt-5.3-codex" { "gpt-5.3-codex" }
+                            option value="gpt-5.3-mini" { "gpt-5.3-mini" }
                             option value="gpt-4o" { "gpt-4o" }
                             option value="gpt-4o-mini" { "gpt-4o-mini" }
                             option value="o3" { "o3 (reasoning)" }
