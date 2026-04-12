@@ -1855,6 +1855,13 @@ export class Traits {
             return this.call(bound, args, opts);
         }
 
+        // 0a. Intercept sys.canvas 'agent' — JS-side canvas agent, not WASM
+        if (cleanPath === 'sys.canvas' && Array.isArray(args) && args[0] === 'agent') {
+            const request = args[1] || 'build a game';
+            const raw = await _runCanvasAgent(this, request);
+            try { return JSON.parse(raw); } catch(_) { return { ok: false, error: raw }; }
+        }
+
         let remoteFailure = null;
         let wasmResult = null;
 
