@@ -1387,6 +1387,32 @@ export class GameRoom {
         }
         break;
       }
+
+      case 'need-resources': {
+        // P2P resource request — forward to all OTHER clients
+        if (!Array.isArray(data.paths) || data.paths.length === 0) return;
+        const fwd = JSON.stringify({
+          type: 'need-resources',
+          paths: data.paths.slice(0, 50),
+          nonce: data.nonce || '',
+        });
+        for (const sock of this.state.getWebSockets()) {
+          if (sock !== ws) try { sock.send(fwd); } catch (_) {}
+        }
+        break;
+      }
+
+      case 'have-resources': {
+        // P2P resource response — forward to all OTHER clients
+        if (!data.nonce || typeof data.resources !== 'object') return;
+        // Limit forwarded payload to ~900KB to stay under WS frame limits
+        const raw = JSON.stringify(data);
+        if (raw.length > 900_000) return;
+        for (const sock of this.state.getWebSockets()) {
+          if (sock !== ws) try { sock.send(raw); } catch (_) {}
+        }
+        break;
+      }
     }
   }
 

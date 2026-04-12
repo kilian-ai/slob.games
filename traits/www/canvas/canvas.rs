@@ -3001,6 +3001,116 @@ pub fn canvas(_args: &[Value]) -> Value {
                             let reconnectDelay = 2000;
                             let _syncing = false; // prevent re-entrant sync from storage events
                             let serverHashSet = new Set(); // track what relay already has
+                            var _p2pNonce = ''; // tracks our active need-resources request
+
+                            // ── P2P Resource Sync ──
+
+                            // Detect missing resources for synced games and request via WebSocket
+                            function _requestMissingResources(games) {
+                                if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                                if (!Array.isArray(games) || !games.length) return;
+                                var allMissing = [];
+                                var files = _readPvfsFiles();
+                                for (var i = 0; i < games.length; i++) {
+                                    var g = games[i];
+                                    var content = g.content || '';
+                                    if (!content) continue;
+                                    var lowerContent = content.toLowerCase();
+                                    var prefixes = ['sprites/', 'assets/', 'images/', 'textures/', 'audio/'];
+                                    for (var p = 0; p < prefixes.length; p++) {
+                                        if (lowerContent.indexOf(prefixes[p]) === -1) continue;
+                                        // Find all path references matching this prefix
+                                        var re = new RegExp(prefixes[p].replace('/', '\\/') + '[a-zA-Z0-9_\\-]+\\.[a-zA-Z0-9]+', 'g');
+                                        var matches = content.match(re) || [];
+                                        for (var m = 0; m < matches.length; m++) {
+                                            var path = matches[m];
+                                            if (!files[path] && allMissing.indexOf(path) === -1) {
+                                                allMissing.push(path);
+                                            }
+                                        }
+                                    }
+                                }
+                                if (allMissing.length === 0) return;
+                                _p2pNonce = String(Date.now()) + Math.random().toString(36).slice(2, 6);
+                                console.log('[p2p] requesting', allMissing.length, 'missing resource(s)');
+                                ws.send(JSON.stringify({
+                                    type: 'need-resources',
+                                    paths: allMissing.slice(0, 50),
+                                    nonce: _p2pNonce,
+                                }));
+                            }
+
+                            // On connect, check all local games for missing resources
+                            function _checkAllGamesForMissingResources() {
+                                var col = readGamesCollection();
+                                var gameArr = [];
+                                for (var id in (col.games || {})) {
+                                    if (!Object.prototype.hasOwnProperty.call(col.games, id)) continue;
+                                    gameArr.push(col.games[id]);
+                                }
+                                _requestMissingResources(gameArr);
+                            }
+
+                            // Respond to a need-resources request from another client
+                            function _handleNeedResources(data) {
+                                if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                                if (!Array.isArray(data.paths) || !data.paths.length || !data.nonce) return;
+                                var files = _readPvfsFiles();
+                                var found = {};
+                                var bytes = 0;
+                                var CHUNK_LIMIT = 800000; // stay under 900KB relay limit
+                                for (var i = 0; i < data.paths.length; i++) {
+                                    var p = String(data.paths[i] || '').trim();
+                                    if (!p || p.indexOf('..') !== -1 || p.startsWith('/')) continue;
+                                    var val = files[p];
+                                    if (typeof val !== 'string' || !val) continue;
+                                    if (bytes + val.length > CHUNK_LIMIT) {
+                                        // Send what we have so far, then start a new chunk
+                                        if (Object.keys(found).length > 0) {
+                                            ws.send(JSON.stringify({
+                                                type: 'have-resources',
+                                                nonce: data.nonce,
+                                                resources: found,
+                                            }));
+                                            console.log('[p2p] sent', Object.keys(found).length, 'resource(s)');
+                                        }
+                                        found = {};
+                                        bytes = 0;
+                                        // If single file exceeds limit, send it alone
+                                        if (val.length > CHUNK_LIMIT) continue;
+                                    }
+                                    found[p] = val;
+                                    bytes += val.length;
+                                }
+                                if (Object.keys(found).length > 0) {
+                                    ws.send(JSON.stringify({
+                                        type: 'have-resources',
+                                        nonce: data.nonce,
+                                        resources: found,
+                                    }));
+                                    console.log('[p2p] sent', Object.keys(found).length, 'resource(s)');
+                                }
+                            }
+
+                            // Apply received resources from another client
+                            function _handleHaveResources(data) {
+                                if (!data.resources || typeof data.resources !== 'object') return;
+                                var wrote = _applySyncedResourcesToPvfs(data.resources, 4 * 1024 * 1024);
+                                if (wrote > 0) {
+                                    console.log('[p2p] received', wrote, 'resource(s)');
+                                    // If active game uses these resources, refresh render
+                                    var col = readGamesCollection();
+                                    var active = col.active && col.games ? col.games[col.active] : null;
+                                    if (active && active.content) {
+                                        var content = active.content;
+                                        var gotAny = false;
+                                        for (var p in data.resources) {
+                                            if (content.indexOf(p) !== -1) { gotAny = true; break; }
+                                        }
+                                        if (gotAny) renderCanvas(content);
+                                    }
+                                }
+                            }
 
                             function connect() {
                                 if (ws) return;
@@ -3017,6 +3127,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 ws.onopen = () => {
                                     reconnectDelay = 2000;
                                     console.log('[sync] connected');
+                                    // After catalog sync settles, check for missing resources
+                                    setTimeout(_checkAllGamesForMissingResources, 4000);
                                 };
 
                                 ws.onmessage = async (e) => {
@@ -3074,6 +3186,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                                             const firstId = col.active || Object.keys(col.games || {})[0];
                                             if (firstId) activateGame(firstId);
                                         }
+                                        // Request any missing resources from peers
+                                        _requestMissingResources(data.games);
                                     }
 
                                     if (data.type === 'sync') {
@@ -3091,6 +3205,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                                                 if (firstId) activateGame(firstId);
                                             }
                                         }
+                                        // Request any missing resources from peers
+                                        _requestMissingResources(data.games);
                                     }
 
                                     if (data.type === 'scores') {
@@ -3156,6 +3272,14 @@ pub fn canvas(_args: &[Value]) -> Value {
                                                 renderProjectBar();
                                             }
                                         } catch(_) {}
+                                    }
+
+                                    // ── P2P Resource Sync ──
+                                    if (data.type === 'need-resources') {
+                                        _handleNeedResources(data);
+                                    }
+                                    if (data.type === 'have-resources') {
+                                        _handleHaveResources(data);
                                     }
                                 };
 
