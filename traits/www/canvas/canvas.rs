@@ -2025,6 +2025,18 @@ pub fn canvas(_args: &[Value]) -> Value {
                         vcmInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') vcmSendText(); });
 
                         // ── Mobile fullscreen: auto-hide chrome, two-finger carousel ──
+                        // Build sorted list of public/external games for carousel rotation
+                        function _publicGamesList() {
+                            const col = readGamesCollection();
+                            const list = [];
+                            for (const [id, g] of Object.entries(col.games || {})) {
+                                if ((g.scope || g._scope || 'internal') !== 'external') continue;
+                                list.push({ id, name: g.name || 'untitled' });
+                            }
+                            list.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+                            return { list, activeId: col.active };
+                        }
+
                         const isMobile = window.matchMedia('(max-width:768px) and (pointer:coarse)').matches;
                         if (isMobile) {
                             const shellNav = document.getElementById('shell-nav');
@@ -2070,24 +2082,25 @@ pub fn canvas(_args: &[Value]) -> Value {
                             }
 
                             function switchGame(direction) {
-                                const gs = document.getElementById('game-select');
-                                if (!gs || gs.options.length < 2) return;
-                                const idx = gs.selectedIndex;
+                                const { list, activeId } = _publicGamesList();
+                                if (list.length < 1) return;
+                                let idx = list.findIndex(g => g.id === activeId);
+                                if (idx < 0) idx = 0; // current game not in public list — start at first
                                 const next = direction === 'next'
-                                    ? (idx + 1) % gs.options.length
-                                    : (idx - 1 + gs.options.length) % gs.options.length;
-                                gs.selectedIndex = next;
-                                gs.dispatchEvent(new Event('change'));
+                                    ? (idx + 1) % list.length
+                                    : (idx - 1 + list.length) % list.length;
+                                activateGame(list[next].id);
                             }
 
                             function getGameLabel(direction) {
-                                const gs = document.getElementById('game-select');
-                                if (!gs || gs.options.length < 2) return '';
-                                const idx = gs.selectedIndex;
+                                const { list, activeId } = _publicGamesList();
+                                if (list.length < 1) return '';
+                                let idx = list.findIndex(g => g.id === activeId);
+                                if (idx < 0) idx = 0;
                                 const target = direction === 'next'
-                                    ? (idx + 1) % gs.options.length
-                                    : (idx - 1 + gs.options.length) % gs.options.length;
-                                return gs.options[target]?.text || '';
+                                    ? (idx + 1) % list.length
+                                    : (idx - 1 + list.length) % list.length;
+                                return list[target].name;
                             }
 
                             // ── Carousel gesture state ──
@@ -2255,14 +2268,14 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                             if (fabGameSelect && gameSelect) {
                                 fabGameSelect.addEventListener('click', () => {
-                                    // Cycle to the next game in the dropdown
-                                    const idx = gameSelect.selectedIndex;
-                                    const next = (idx + 1) % gameSelect.options.length;
-                                    gameSelect.selectedIndex = next;
-                                    gameSelect.dispatchEvent(new Event('change'));
-                                    // Update label to show current game
-                                    const name = gameSelect.options[next]?.text || 'Switch Game';
-                                    fabGameSelect.querySelector('span:last-child').textContent = name;
+                                    // Cycle to next public game alphabetically
+                                    const { list, activeId } = _publicGamesList();
+                                    if (list.length < 1) return;
+                                    let idx = list.findIndex(g => g.id === activeId);
+                                    if (idx < 0) idx = 0;
+                                    const next = (idx + 1) % list.length;
+                                    activateGame(list[next].id);
+                                    fabGameSelect.querySelector('span:last-child').textContent = list[next].name;
                                 });
                             }
                             if (fabSaveMob) fabSaveMob.addEventListener('click', () => document.getElementById('btnSave')?.click());
@@ -2300,14 +2313,14 @@ pub fn canvas(_args: &[Value]) -> Value {
                             }
 
                             function switchGame(direction) {
-                                const gs = document.getElementById('game-select');
-                                if (!gs || gs.options.length < 2) return;
-                                const idx = gs.selectedIndex;
+                                const { list, activeId } = _publicGamesList();
+                                if (list.length < 1) return;
+                                let idx = list.findIndex(g => g.id === activeId);
+                                if (idx < 0) idx = 0;
                                 const next = direction === 'next'
-                                    ? (idx + 1) % gs.options.length
-                                    : (idx - 1 + gs.options.length) % gs.options.length;
-                                gs.selectedIndex = next;
-                                gs.dispatchEvent(new Event('change'));
+                                    ? (idx + 1) % list.length
+                                    : (idx - 1 + list.length) % list.length;
+                                activateGame(list[next].id);
                             }
 
                             function animateSwitch(direction) {

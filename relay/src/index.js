@@ -1047,7 +1047,7 @@ export class GameRoom {
       }
 
       // PUT /internal/game/:gameId — update authenticated user's internal game
-      if (url.pathname.startsWith('/internal/game/') && request.method === 'PUT') {
+      if (url.pathname.startsWith('/internal/game/') && !url.pathname.endsWith('/publish') && request.method === 'PUT') {
         const user = await this.authUser(request);
         if (!user) return json({ error: 'auth required' }, 401);
         const gameId = normalizeSlug(url.pathname.slice('/internal/game/'.length), '');
