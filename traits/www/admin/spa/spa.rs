@@ -809,24 +809,12 @@ function renderLocalGames(el, summary) {
     el.innerHTML = '<div class="no-games">No games cached locally. Connect to relay and log in.</div>';
     return;
   }
-  var byName = {};
-  for (var j = 0; j < games.length; j++) {
-    var gg = games[j][1] || {};
-    var nk = (gg.name || 'untitled').trim().toLowerCase();
-    if (!byName[nk]) { byName[nk] = games[j]; continue; }
-    var prevLen = (byName[nk][1].content || '').length;
-    var curLen = (gg.content || '').length;
-    if (curLen > prevLen || (curLen === prevLen && (gg.updated || '') > (byName[nk][1].updated || ''))) {
-      byName[nk] = games[j];
-    }
-  }
-  var unique = [];
-  for (var nk2 in byName) { if (byName.hasOwnProperty(nk2)) unique.push(byName[nk2]); }
-  unique.sort(function(a, b) { return (a[1].name || '').localeCompare(b[1].name || ''); });
+  // No dedup — show all raw entries sorted by name so nothing is hidden
+  var unique = games.slice().sort(function(a, b) { return ((a[1] && a[1].name) || '').localeCompare((b[1] && b[1].name) || ''); });
   var html = '';
   for (var i = 0; i < unique.length; i++) {
     var gid = unique[i][0];
-    var g = unique[i][1];
+    var g = unique[i][1] || {};
     var name = esc(g.name || 'untitled');
     var size = formatSize((g.content || '').length);
     var scope = g.scope || 'local';
@@ -838,6 +826,7 @@ function renderLocalGames(el, summary) {
     html += '<span>' + scope + '</span>';
     html += '<span>' + size + '</span>';
     html += '<span>' + ago(g.updated) + '</span>';
+    html += '<span style="opacity:0.4;font-size:10px;font-family:monospace">' + esc(gid) + '</span>';
     html += '</div></div>';
     html += '<div class="game-actions">';
     html += '<button class="btn-play" onclick="playGame(\'' + esc(gid) + '\')">Play</button>';
