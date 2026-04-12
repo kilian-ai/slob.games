@@ -511,11 +511,22 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
     try {
         for (let step = 0; step < 10; step++) {
             console.log('[Canvas/Agent/Browser] Step', step + 1);
-            const resp = await fetch('https://api.openai.com/v1/chat/completions', {
-                method: 'POST',
-                headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: canvasModel, messages, tools: [SYS_VFS_TOOL, LLM_IMAGE_TOOL], tool_choice: 'auto' })
-            });
+            let resp;
+            for (let _retry = 0; _retry < 3; _retry++) {
+                try {
+                    resp = await fetch('https://api.openai.com/v1/chat/completions', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ model: canvasModel, messages, tools: [SYS_VFS_TOOL, LLM_IMAGE_TOOL], tool_choice: 'auto' })
+                    });
+                    break;
+                } catch (_fetchErr) {
+                    if (_retry < 2) {
+                        console.warn('[Canvas/Agent/Browser] Fetch failed (attempt', _retry + 1 + '/3), retrying in', (_retry + 1) * 2 + 's:', _fetchErr.message);
+                        await new Promise(r => setTimeout(r, (_retry + 1) * 2000));
+                    } else { throw _fetchErr; }
+                }
+            }
             if (!resp.ok) {
                 const err = await resp.text().catch(() => String(resp.status));
                 const lowerErr = String(err || '').toLowerCase();
