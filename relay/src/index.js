@@ -534,14 +534,15 @@ export class GameRoom {
   normalizeExternalGameRow(row) {
     const owner = normalizeSlug(row?.owner || 'public', 'public');
     const gameId = this.deriveGameId(row?.name || row?.content_hash || 'untitled', row?.game_id || '');
+    const { resources: _raw, ...rest } = (row || {});
     return {
-      ...row,
+      ...rest,
       owner,
       game_id: gameId,
       scope: row?.scope || 'external',
       version: row?.version || '',
       checksum: row?.checksum || row?.content_hash || '',
-      resource_paths: parseManifestField(row?.resources),
+      resource_paths: parseManifestField(_raw),
     };
   }
 
@@ -875,7 +876,7 @@ export class GameRoom {
       // GET /games — list all external games (with high score)
       if (url.pathname === "/games" && request.method === "GET") {
         const rows = this.sql.exec(
-          `SELECT g.content_hash, g.name, g.size, g.updated, g.owner, g.game_id, g.scope, g.version, g.checksum,
+          `SELECT g.content_hash, g.name, g.size, g.updated, g.owner, g.game_id, g.scope, g.version, g.checksum, g.resources,
                   s.score AS highscore, s.player AS highscore_player
            FROM games g
            LEFT JOIN scores s ON s.game_hash = g.content_hash
