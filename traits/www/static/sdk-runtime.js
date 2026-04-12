@@ -1906,6 +1906,26 @@ class Traits {
                 if (wasmResult.result && wasmResult.result.dispatch === 'openai_stream') {
                     return this._callOpenAIStream(wasmResult.result.prompt, wasmResult.result.model);
                 }
+                if (typeof window !== 'undefined' && cleanPath === 'sys.canvas') {
+                    const r = wasmResult.result || {};
+                    if (r.action === 'set' || r.action === 'append' || r.action === 'clear') {
+                        try {
+                            if (wasm && wasm.pvfs_refresh) wasm.pvfs_refresh();
+                        } catch(_) {}
+                        try {
+                            const getRes = this._callWasm('sys.canvas', ['get']);
+                            const content = getRes?.result?.content ?? getRes?.content ?? '';
+                            this._lastCanvasContent = content;
+                            window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content } }));
+                        } catch(_) {
+                            window.dispatchEvent(new CustomEvent('traits-canvas-update', {}));
+                        }
+                    }
+                    if (r.canvas_project_action || r.action === 'new' || r.action === 'rename' || r.action === 'activate' || r.action === 'fork') {
+                        window.dispatchEvent(new CustomEvent('traits-canvas-project', { detail: r }));
+                        window.dispatchEvent(new CustomEvent('traits-canvas-update', {}));
+                    }
+                }
                 return wasmResult;
             }
             // WASM failed — fall through to native backends
