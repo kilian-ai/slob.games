@@ -598,6 +598,98 @@ pub fn canvas(_args: &[Value]) -> Value {
                             } catch(_) {}
                         }
 
+                        function _readPvfsFiles() {
+                            try { return JSON.parse(localStorage.getItem('traits.pvfs') || '{}') || {}; }
+                            catch(_) { return {}; }
+                        }
+
+                        function _writePvfsFiles(files) {
+                            try { localStorage.setItem('traits.pvfs', JSON.stringify(files || {})); }
+                            catch(_) {}
+                        }
+
+                        function _canonicalResourceMap(resources) {
+                            const src = (resources && typeof resources === 'object') ? resources : {};
+                            const out = {};
+                            const keys = Object.keys(src).sort();
+                            for (const k of keys) {
+                                const path = String(k || '').trim();
+                                if (!path || path === 'canvas/app.html' || path === 'canvas/games.json') continue;
+                                if (path.indexOf('..') !== -1 || path.startsWith('/')) continue;
+                                const val = src[k];
+                                if (typeof val !== 'string' || !val) continue;
+                                out[path] = val;
+                            }
+                            return out;
+                        }
+
+                        function _stableGamePackageString(content, resources) {
+                            return JSON.stringify({
+                                content: String(content || ''),
+                                resources: _canonicalResourceMap(resources)
+                            });
+                        }
+
+                        function _collectGameResourcesForContent(content, maxBytes) {
+                            const text = String(content || '');
+                            const files = _readPvfsFiles();
+                            const out = {};
+                            const limit = Math.max(64 * 1024, Number(maxBytes) || (2 * 1024 * 1024));
+                            let bytes = 0;
+
+                            const lowerText = text.toLowerCase();
+                            const hintedPrefixes = [];
+                            if (lowerText.indexOf('sprites/') !== -1) hintedPrefixes.push('sprites/');
+                            if (lowerText.indexOf('assets/') !== -1) hintedPrefixes.push('assets/');
+                            if (lowerText.indexOf('images/') !== -1) hintedPrefixes.push('images/');
+                            if (lowerText.indexOf('textures/') !== -1) hintedPrefixes.push('textures/');
+                            if (lowerText.indexOf('audio/') !== -1) hintedPrefixes.push('audio/');
+
+                            for (const [path, val] of Object.entries(files)) {
+                                if (!path || path === 'canvas/app.html' || path === 'canvas/games.json') continue;
+                                if (typeof val !== 'string' || !val) continue;
+
+                                const lowerPath = String(path).toLowerCase();
+                                const hinted = hintedPrefixes.some(p => lowerPath.startsWith(p));
+                                const referenced = text.indexOf(path) !== -1;
+                                const mediaLike = /\.(png|jpg|jpeg|gif|webp|svg|mp3|wav|ogg|m4a|webm|json|txt|toml|atlas)$/i.test(path);
+                                if (!referenced && !(hinted && mediaLike)) continue;
+
+                                if (bytes + val.length > limit) continue;
+                                out[path] = val;
+                                bytes += val.length;
+                            }
+
+                            return {
+                                resources: _canonicalResourceMap(out),
+                                bytes,
+                            };
+                        }
+
+                        function _applySyncedResourcesToPvfs(resources, maxBytes) {
+                            const normalized = _canonicalResourceMap(resources);
+                            const keys = Object.keys(normalized);
+                            if (!keys.length) return 0;
+
+                            const files = _readPvfsFiles();
+                            const limit = Math.max(64 * 1024, Number(maxBytes) || (2 * 1024 * 1024));
+                            let used = 0;
+                            let wrote = 0;
+
+                            for (const path of keys) {
+                                const val = normalized[path];
+                                if (used + val.length > limit) continue;
+                                used += val.length;
+                                if (files[path] !== val) {
+                                    files[path] = val;
+                                    wrote++;
+                                }
+                            }
+
+                            if (wrote > 0) _writePvfsFiles(files);
+                            return wrote;
+                        }
+
                         function nowIso() {
                             return new Date().toISOString();
                         }
@@ -916,6 +1008,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 active.version = relayInfo?.version || active.version || '';
                                 active.updated = nowIso();
 
+                                _applySyncedResourcesToPvfs(relayInfo?.resources, 2 * 1024 * 1024);
+
                                 const activeIdentity = _relayIdentityOf(active);
                                 const activeHash = await _shortContentHash(active.content || '');
                                 for (const [id, other] of Object.entries(col.games || {})) {
@@ -960,7 +1054,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     if (!active || !active.content) return false;
 
                                     const gameId = active._sync_game_id || active.game_id || _slugifyGameId(active.name || activeId);
-                                    const syncKey = [activeId, gameId, active.name || '', active.updated || '', (active.content || '').length].join('|');
+                                    const pkg = _collectGameResourcesForContent(active.content || '', 2 * 1024 * 1024);
+                                    const pkgHash = await _shortContentHash(_stableGamePackageString(active.content || '', pkg.resources));
+                                    const syncKey = [activeId, gameId, active.name || '', active.updated || '', pkgHash, Object.keys(pkg.resources).length, pkg.bytes].join('|');
                                     if (syncKey === __lastRelayInternalSyncKey) return true;
 
                                     const resp = await fetch('https://relay.slob.games/sync/internal/game/' + encodeURIComponent(gameId), {
@@ -972,7 +1068,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                                         body: JSON.stringify({
                                             name: active.name || 'untitled',
                                             content: active.content,
-                                            version: active.version || ''
+                                            version: active.version || '',
+                                            resources: pkg.resources,
                                         })
                                     });
                                     if (!resp.ok) return false;
@@ -2765,7 +2862,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                         // ── Game Sync: auto-share games via relay WebSocket ──
                         (async function initGameSync() {
                             const RELAY_WS = 'wss://relay.slob.games/sync';
-                            const MAX_PUSH_SIZE = 256 * 1024; // 256KB per game
+                            const MAX_PUSH_SIZE = 256 * 1024; // legacy content-only limit
+                            const MAX_PUSH_PACKAGE_SIZE = 2 * 1024 * 1024; // content + resources package limit
 
                             function slugify(s) {
                                 return String(s || '')
@@ -2798,11 +2896,15 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 const result = [];
                                 for (const [id, g] of Object.entries(col.games || {})) {
                                     if (!g.content) continue;
-                                    const hash = await contentHash(g.content);
+                                    const pkg = _collectGameResourcesForContent(g.content, MAX_PUSH_PACKAGE_SIZE);
+                                    const packageText = _stableGamePackageString(g.content, pkg.resources);
+                                    const hash = await contentHash(packageText);
                                     result.push({
                                         id,
                                         name: g.name || 'untitled',
                                         content: g.content,
+                                        resources: pkg.resources,
+                                        resource_bytes: pkg.bytes,
                                         hash,
                                         owner: g.owner || localUsername(),
                                         game_id: g.game_id || slugify(g.name || id),
@@ -2833,6 +2935,13 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     let added = 0;
                                     for (const g of games) {
                                         if (!g.content || !g.content_hash) continue;
+                                        const normalizedResources = _canonicalResourceMap(g.resources);
+                                        let resourceBudget = 0;
+                                        for (const [resPath, resVal] of Object.entries(normalizedResources)) {
+                                            if (resourceBudget + resVal.length > MAX_PUSH_PACKAGE_SIZE) continue;
+                                            resourceBudget += resVal.length;
+                                            files[resPath] = resVal;
+                                        }
                                         const owner = g.owner || 'public';
                                         const gid = g.game_id || slugify(g.name || g.content_hash);
                                         const gameId = ('s-' + slugify(owner + '-' + gid)).slice(0, 48);
@@ -2931,7 +3040,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                             g.scope !== 'internal' &&
                                             !serverHashSet.has(g.hash) &&
                                             g.content.length > 0 &&
-                                            g.content.length <= MAX_PUSH_SIZE
+                                            (g.content.length + (g.resource_bytes || 0)) <= MAX_PUSH_PACKAGE_SIZE
                                         );
                                         if (toPush.length > 0) {
                                             ws.send(JSON.stringify({
@@ -2939,6 +3048,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                                 games: toPush.map(g => ({
                                                     name: g.name,
                                                     content: g.content,
+                                                    resources: g.resources || {},
                                                     content_hash: g.hash,
                                                     checksum: g.hash,
                                                     owner: g.owner,
@@ -3069,7 +3179,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     g.scope !== 'internal' &&
                                     !serverHashSet.has(g.hash) &&
                                     g.content.length > 0 &&
-                                    g.content.length <= MAX_PUSH_SIZE
+                                    (g.content.length + (g.resource_bytes || 0)) <= MAX_PUSH_PACKAGE_SIZE
                                 );
                                 if (toPush.length > 0) {
                                     ws.send(JSON.stringify({
@@ -3077,6 +3187,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                         games: toPush.map(g => ({
                                             name: g.name,
                                             content: g.content,
+                                            resources: g.resources || {},
                                             content_hash: g.hash,
                                             checksum: g.hash,
                                             owner: g.owner,
@@ -3101,8 +3212,11 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     const internalGames = [];
                                     for (const [id, g] of Object.entries(games)) {
                                         const scope = g.scope || g._scope || 'internal';
-                                        if (scope !== 'external' && g.content && g.content.length > 0 && g.content.length <= MAX_PUSH_SIZE) {
-                                            internalGames.push({ id, g });
+                                        if (!g.content || g.content.length <= 0) continue;
+                                        const pkg = _collectGameResourcesForContent(g.content, MAX_PUSH_PACKAGE_SIZE);
+                                        const packageBytes = g.content.length + pkg.bytes;
+                                        if (scope !== 'external' && packageBytes <= MAX_PUSH_PACKAGE_SIZE) {
+                                            internalGames.push({ id, g, resources: pkg.resources });
                                         }
                                     }
                                     if (!internalGames.length) {
@@ -3113,7 +3227,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     console.log('[migration] pushing', internalGames.length, 'internal game(s) to relay');
                                     const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token };
                                     let pushed = 0;
-                                    for (const { id, g } of internalGames) {
+                                    for (const { id, g, resources } of internalGames) {
                                         const gameId = g.game_id || slugify(g.name || id);
                                         try {
                                             const resp = await fetch('https://relay.slob.games/sync/internal/game/' + encodeURIComponent(gameId), {
@@ -3122,7 +3236,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                                                 body: JSON.stringify({
                                                     name: g.name || 'untitled',
                                                     content: g.content,
-                                                    version: g.version || 'v1'
+                                                    version: g.version || 'v1',
+                                                    resources: resources || {},
                                                 })
                                             });
                                             if (resp.ok) pushed++;

@@ -623,6 +623,43 @@ function slugify(s) {
     .replace(/^-+|-+$/g, '') || 'untitled';
 }
 
+function normalizeRelayResources(resources) {
+  var src = (resources && typeof resources === 'object') ? resources : {};
+  var out = {};
+  var keys = Object.keys(src).sort();
+  for (var i = 0; i < keys.length; i++) {
+    var path = String(keys[i] || '').trim();
+    if (!path || path === 'canvas/app.html' || path === 'canvas/games.json') continue;
+    if (path.indexOf('..') !== -1 || path.charAt(0) === '/') continue;
+    var val = src[keys[i]];
+    if (typeof val !== 'string' || !val) continue;
+    out[path] = val;
+  }
+  return out;
+}
+
+function applyRelayResourcesToPvfs(resources) {
+  try {
+    var normalized = normalizeRelayResources(resources);
+    var keys = Object.keys(normalized);
+    if (!keys.length) return 0;
+    var raw = localStorage.getItem('traits.pvfs') || '{}';
+    var files = JSON.parse(raw);
+    var changed = 0;
+    for (var i = 0; i < keys.length; i++) {
+      var p = keys[i];
+      if (files[p] !== normalized[p]) {
+        files[p] = normalized[p];
+        changed++;
+      }
+    }
+    if (changed > 0) localStorage.setItem('traits.pvfs', JSON.stringify(files));
+    return changed;
+  } catch(_) {
+    return 0;
+  }
+}
+
 function localInternalGamesForSettings() {
   try {
     var col = readGamesCollection();
@@ -683,6 +720,12 @@ function upsertInternalRelayGameToLocal(owner, gameId, data) {
     // Only sync name/metadata from relay, not content.
     var localContent = (existingGame && existingGame.content) || '';
     var contentToUse = localContent && localContent !== data.content ? localContent : (data.content || '');
+    var resources = normalizeRelayResources(data.resources);
+    for (var rp in resources) {
+      if (Object.prototype.hasOwnProperty.call(resources, rp)) {
+        files[rp] = resources[rp];
+      }
+    }
 
     col.games[targetId] = {
       name: data.name || gid,
@@ -963,6 +1006,7 @@ function playRelayGame(owner, gameId) {
     headers: authHeaders()
   }).then(function(r) { return r.json(); }).then(function(data) {
     if (!data.content) { alert('Could not load game'); return; }
+    applyRelayResourcesToPvfs(data.resources);
     var localId = upsertInternalRelayGameToLocal(owner, gameId, data);
     var isNewGame = !localId;
     var activate = localId
@@ -993,6 +1037,7 @@ function playExternalGame(hash) {
     return r.json();
   }).then(function(data) {
     if (!data.content) { alert('Could not load game'); return; }
+    applyRelayResourcesToPvfs(data.resources);
     callTrait('sys.canvas', ['new', data.name || 'Game', data.version || '']).then(function() {
       callTrait('sys.canvas', ['set', data.content]).then(function() {
         if (location.protocol === 'file:') {
