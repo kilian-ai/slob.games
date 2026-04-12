@@ -85,6 +85,35 @@ pub fn canvas(_args: &[Value]) -> Value {
                             display: flex; align-items: center; justify-content: center;
                             gap: 8px;
                         }
+                        .phone-game-label {
+                            position: absolute;
+                            top: 8px;
+                            left: 18px;
+                            z-index: 4;
+                            font: 600 11px/1.2 monospace;
+                            color: #c7d1da;
+                            background: rgba(10, 16, 26, 0.72);
+                            border: 1px solid rgba(0, 224, 255, 0.2);
+                            border-radius: 8px;
+                            padding: 3px 7px;
+                            max-width: 260px;
+                            white-space: nowrap;
+                            overflow: hidden;
+                            text-overflow: ellipsis;
+                        }
+                        .phone-runtime-label {
+                            position: absolute;
+                            top: 8px;
+                            right: 18px;
+                            z-index: 4;
+                            font: 600 11px/1 monospace;
+                            color: #00e0ff;
+                            opacity: 0.9;
+                            background: rgba(0, 224, 255, 0.08);
+                            border: 1px solid rgba(0, 224, 255, 0.28);
+                            border-radius: 8px;
+                            padding: 3px 7px;
+                        }
                         .phone-notch .camera {
                             width: 12px; height: 12px; border-radius: 50%;
                             background: #111; border: 1px solid #2a2a2c;
@@ -411,6 +440,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                         p { "Canvas is empty — use " code { "sys.canvas set \"<html>\"" } " or voice to draw." }
                     }
                     div #phone-frame {
+                        div #phoneGameLabel .phone-game-label { "untitled v—" }
+                        div #phoneRuntimeLabel .phone-runtime-label { "wasm()" }
                         div .phone-notch {
                             div .speaker {}
                             div .camera {}
@@ -537,6 +568,15 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 if (!json) return { active: null, games: {} };
                                 return JSON.parse(json);
                             } catch(_) { return { active: null, games: {} }; }
+                        }
+
+                        function writeGamesCollection(col) {
+                            try {
+                                const raw = localStorage.getItem('traits.pvfs') || '{}';
+                                const files = JSON.parse(raw);
+                                files['canvas/games.json'] = JSON.stringify(col || { active: null, games: {} });
+                                localStorage.setItem('traits.pvfs', JSON.stringify(files));
+                            } catch(_) {}
                         }
 
                         function nowIso() {
@@ -723,6 +763,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             for (const [id, g] of Object.entries(col.games || {})) {
                                 list.push({
                                     id, name: g.name || 'untitled',
+                                    version: g.version || '',
                                     scope: g.scope || g._scope || 'internal',
                                     length: (g.content || '').length,
                                     active: id === col.active,
@@ -734,6 +775,16 @@ pub fn canvas(_args: &[Value]) -> Value {
                         }
 
                         const gameSelect = document.getElementById('game-select');
+                        const phoneGameLabel = document.getElementById('phoneGameLabel');
+
+                        function renderActiveGameBadge() {
+                            if (!phoneGameLabel) return;
+                            const col = readGamesCollection();
+                            const a = col.active ? (col.games || {})[col.active] : null;
+                            const nm = (a && a.name) ? String(a.name) : 'untitled';
+                            const ver = (a && a.version) ? String(a.version) : '—';
+                            phoneGameLabel.textContent = nm + ' v' + ver;
+                        }
 
                         function renderProjectBar() {
                             dedupeLocalGames();
@@ -748,10 +799,12 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 const opt = document.createElement('option');
                                 opt.value = g.id;
                                 const scopeTag = (g.scope === 'external') ? '🌐' : '🏠';
-                                opt.textContent = scopeTag + ' ' + (g.name || 'untitled');
+                                const vv = g.version ? (' v' + g.version) : '';
+                                opt.textContent = scopeTag + ' ' + (g.name || 'untitled') + vv;
                                 if (g.active) opt.selected = true;
                                 sel.appendChild(opt);
                             });
+                            renderActiveGameBadge();
                         }
 
                         gameSelect.addEventListener('change', (e) => {
@@ -787,6 +840,16 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     const activeId = colNow.active;
                                     const g = activeId ? colNow.games[activeId] : null;
                                     if (!g || !g.content) return false;
+                                    var releaseVersion = g.version || '';
+                                    try {
+                                        const vr = await sdk.call('sys.version', ['hhmmss']);
+                                        releaseVersion = (vr && (vr.version || (vr.result && vr.result.version))) || releaseVersion;
+                                    } catch(_) {}
+                                    if (releaseVersion) {
+                                        g.version = String(releaseVersion);
+                                        g.updated = new Date().toISOString();
+                                        writeGamesCollection(colNow);
+                                    }
                                     const gameId = g.game_id || g._sync_game_id || _slugify(g.name || activeId);
                                     const resp = await fetch('https://relay.traits.build/sync/internal/game/' + encodeURIComponent(gameId), {
                                         method: 'PUT',
@@ -797,7 +860,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                         body: JSON.stringify({
                                             name: g.name || 'untitled',
                                             content: g.content,
-                                            version: g.version || 'v1'
+                                            version: g.version || ''
                                         })
                                     });
                                     return !!resp.ok;
@@ -819,6 +882,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 // Make saved games visible in Settings/Admin (relay-backed views).
                                 // If not logged in, save still succeeds locally.
                                 await _pushActiveToRelayInternal();
+                                renderActiveGameBadge();
                             }
                         }
 
@@ -2616,6 +2680,35 @@ pub fn canvas(_args: &[Value]) -> Value {
                                                 }
                                             } catch(_) {}
                                         }
+                                    }
+
+                                    if (data.type === 'game-deleted') {
+                                        try {
+                                            const dead = String(data.content_hash || '');
+                                            if (!dead) return;
+                                            const raw = localStorage.getItem('traits.pvfs') || '{}';
+                                            const files = JSON.parse(raw);
+                                            const col = files['canvas/games.json']
+                                                ? JSON.parse(files['canvas/games.json'])
+                                                : { active: null, games: {} };
+                                            var removed = 0;
+                                            for (const gid in (col.games || {})) {
+                                                if (!Object.prototype.hasOwnProperty.call(col.games, gid)) continue;
+                                                const g = col.games[gid] || {};
+                                                const isExternal = (g.scope || g._scope || '') === 'external';
+                                                const h = String(g._sync_hash || g.checksum || '');
+                                                if (isExternal && h === dead) {
+                                                    if (col.active === gid) col.active = null;
+                                                    delete col.games[gid];
+                                                    removed++;
+                                                }
+                                            }
+                                            if (removed > 0) {
+                                                files['canvas/games.json'] = JSON.stringify(col);
+                                                localStorage.setItem('traits.pvfs', JSON.stringify(files));
+                                                renderProjectBar();
+                                            }
+                                        } catch(_) {}
                                     }
                                 };
 

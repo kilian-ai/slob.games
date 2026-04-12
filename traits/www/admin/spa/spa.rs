@@ -650,6 +650,7 @@ function upsertInternalRelayGameToLocal(owner, gameId, data) {
       _sync_game_id: gid,
       _sync_hash: data.content_hash || data.checksum || '',
       version: data.version || 'v1',
+      published: !!data.published,
       checksum: data.checksum || data.content_hash || '',
       created: (existingGame && existingGame.created) || data.updated || new Date().toISOString(),
       updated: (existingGame && contentToUse === localContent) ? (existingGame.updated || data.updated) : (data.updated || new Date().toISOString())
@@ -726,17 +727,22 @@ function renderRelayGames(data, el, summary) {
       var size = formatSize(g.size || 0);
       var identity = esc((g.owner || '?') + '/' + (g.game_id || '?'));
       var hash = (g.content_hash || '').slice(0, 8);
+      var ver = esc(g.version || '—');
+      var pub = !!g.published;
       html += '<div class="game-row">';
       html += '<div class="game-info">';
       html += '<div class="game-name" style="cursor:pointer" onclick="playRelayGame(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\')">' + name + '</div>';
       html += '<div class="game-meta">';
       html += '<span>' + identity + '</span>';
+      html += '<span>v' + ver + '</span>';
       html += '<span>' + size + '</span>';
       html += '<span>' + ago(g.updated) + '</span>';
+      html += '<span>' + (pub ? 'published' : 'private') + '</span>';
       html += '<span style="opacity:0.5">#' + hash + '</span>';
       html += '</div></div>';
       html += '<div class="game-actions">';
       html += '<button class="btn-play" onclick="playRelayGame(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\')">Play</button>';
+      html += '<button onclick="togglePublishInternal(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\',' + (pub ? 'false' : 'true') + ')">' + (pub ? 'Published' : 'Publish') + '</button>';
       html += '<button class="danger" onclick="deleteRelayGame(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\',\'' + name.replace(/'/g, "\\'") + '\')">Del</button>';
       html += '</div></div>';
     }
@@ -748,10 +754,12 @@ function renderRelayGames(data, el, summary) {
       var ename = esc(ge.name || 'untitled');
       var esize = formatSize(ge.size || 0);
       var ehash = (ge.content_hash || '').slice(0, 8);
+      var ever = esc(ge.version || '—');
       html += '<div class="game-row">';
       html += '<div class="game-info">';
       html += '<div class="game-name" style="cursor:pointer" onclick="playExternalGame(\'' + esc(ge.content_hash) + '\')">' + ename + '</div>';
       html += '<div class="game-meta">';
+      html += '<span>v' + ever + '</span>';
       html += '<span>' + esize + '</span>';
       html += '<span>' + ago(ge.updated) + '</span>';
       html += '<span style="opacity:0.5">#' + ehash + '</span>';
@@ -762,6 +770,44 @@ function renderRelayGames(data, el, summary) {
     }
   }
   el.innerHTML = html;
+}
+
+async function togglePublishInternal(owner, gameId, publish) {
+  function _gamesMsg(msg) {
+    var gs = byId('gamesSummary');
+    if (gs) gs.textContent = msg;
+  }
+  var me = (storage.getItem(ENV_PFX + 'SLOB_USERNAME') || '').trim();
+  if (!me || String(me).toLowerCase() !== String(owner || '').toLowerCase()) {
+    _gamesMsg('Only the owner can change publish state.');
+    return;
+  }
+  try {
+    var path = 'https://relay.traits.build/sync/internal/game/' + encodeURIComponent(gameId) + '/publish';
+    var body = null;
+    if (publish) {
+      try {
+        var ver = await callTrait('sys.version', ['hhmmss']);
+        var v = (ver && (ver.version || (ver.result && ver.result.version))) || '';
+        if (v) body = { version: v };
+      } catch (_) {}
+    }
+    var r = await fetch(path, {
+      method: publish ? 'PUT' : 'DELETE',
+      headers: authHeaders(),
+      body: body ? JSON.stringify(body) : undefined
+    });
+    var data = await r.json().catch(function(){ return {}; });
+    if (!r.ok) {
+      _gamesMsg(data.error || 'Publish toggle failed');
+      return;
+    }
+    _relayGames = null;
+    await renderGames();
+    _gamesMsg(publish ? 'Game published.' : 'Game set to private.');
+  } catch (_) {
+    _gamesMsg('Publish toggle request failed');
+  }
 }
 
 function renderLocalGames(el, summary) {
@@ -791,12 +837,14 @@ function renderLocalGames(el, summary) {
     var name = esc(g.name || 'untitled');
     var size = formatSize((g.content || '').length);
     var scope = g.scope || 'local';
+    var ver = esc(g.version || '—');
     var active = gid === col.active ? ' <span style="color:#00ff88;font-size:10px;">● ACTIVE</span>' : '';
     html += '<div class="game-row">';
     html += '<div class="game-info">';
     html += '<div class="game-name">' + name + active + '</div>';
     html += '<div class="game-meta">';
     html += '<span>' + scope + '</span>';
+    html += '<span>v' + ver + '</span>';
     html += '<span>' + size + '</span>';
     html += '<span>' + ago(g.updated) + '</span>';
     html += '<span style="opacity:0.4;font-size:10px;font-family:monospace">' + esc(gid) + '</span>';
@@ -830,7 +878,7 @@ function playRelayGame(owner, gameId) {
     var isNewGame = !localId;
     var activate = localId
       ? callTrait('sys.canvas', ['activate', localId])
-      : callTrait('sys.canvas', ['new', data.name || gameId]);
+      : callTrait('sys.canvas', ['new', data.name || gameId, data.version || '']);
     activate.then(function() {
       // CRITICAL: Only call 'set' for NEW games. Existing games already have their content
       // from activate or upsert. Calling 'set' would overwrite locally-edited content.
@@ -856,7 +904,7 @@ function playExternalGame(hash) {
     return r.json();
   }).then(function(data) {
     if (!data.content) { alert('Could not load game'); return; }
-    callTrait('sys.canvas', ['new', data.name || 'Game']).then(function() {
+    callTrait('sys.canvas', ['new', data.name || 'Game', data.version || '']).then(function() {
       callTrait('sys.canvas', ['set', data.content]).then(function() {
         if (location.protocol === 'file:') {
           sessionStorage.setItem('traits.shell.route', '/');

@@ -166,8 +166,9 @@ pub fn canvas(args: &[Value]) -> Value {
             let active_id = col["active"].as_str().unwrap_or("");
             let content = col["games"][active_id]["content"].as_str().unwrap_or("");
             let name = col["games"][active_id]["name"].as_str().unwrap_or("");
+            let version = col["games"][active_id]["version"].as_str().unwrap_or("");
             json!({"ok": true, "content": content, "length": content.len(),
-                    "game_id": active_id, "name": name})
+                "game_id": active_id, "name": name, "version": version})
         }
 
         // ── clear: clear active game content ──
@@ -189,11 +190,13 @@ pub fn canvas(args: &[Value]) -> Value {
         // ── new: create a new empty game and activate it ──
         "new" => {
             let name = args.get(1).and_then(|v| v.as_str()).unwrap_or("untitled");
+            let version = args.get(2).and_then(|v| v.as_str()).unwrap_or("");
             let mut col = read_games();
             let ts = now_ts();
             let id = gen_id();
             col["games"][&id] = json!({
                 "name": name,
+                "version": version,
                 "content": "",
                 "scope": "internal",
                 "_scope": "internal",
@@ -217,6 +220,7 @@ pub fn canvas(args: &[Value]) -> Value {
                     list.push(json!({
                         "id": id,
                         "name": g["name"].as_str().unwrap_or("untitled"),
+                        "version": g["version"].as_str().unwrap_or(""),
                         "owner": g["owner"].as_str().unwrap_or("local"),
                         "scope": g["scope"].as_str().or_else(|| g["_scope"].as_str()).unwrap_or("internal"),
                         "game_id": g["game_id"].as_str().unwrap_or(""),
@@ -252,8 +256,9 @@ pub fn canvas(args: &[Value]) -> Value {
             write_games(&col);
             let content = col["games"][id]["content"].as_str().unwrap_or("");
             let name = col["games"][id]["name"].as_str().unwrap_or("");
+                let version = col["games"][id]["version"].as_str().unwrap_or("");
             json!({"ok": true, "action": "activate", "game_id": id,
-                    "name": name, "content": content, "length": content.len()})
+                    "name": name, "version": version, "content": content, "length": content.len()})
         }
 
         // ── fork: if active is external, clone to internal and activate clone ──
