@@ -546,10 +546,14 @@ async function deleteGame(hashEnc) {
     renderGames();
 
     // Re-fetch authoritative state in background to keep grouped data accurate.
-    var gp = await apiFetch('/admin/games');
-    if (gp && gp.ok !== false && gp.external) {
-      gamesData = gp;
-      renderGames();
+    try {
+      var gp = await apiFetch('/admin/games');
+      if (gp && gp.ok !== false && gp.external) {
+        gamesData = gp;
+        renderGames();
+      }
+    } catch (_) {
+      // Ignore refresh errors after successful delete; optimistic UI already updated.
     }
   } catch (e) {
     alert((e && e.message) ? e.message : 'Delete failed');

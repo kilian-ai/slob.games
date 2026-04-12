@@ -924,11 +924,12 @@ async function deleteRelayGame(owner, gameId, name) {
       method: 'DELETE',
       headers: authHeaders()
     });
-    var data = await r.json();
-    if (data.ok) {
+    if (r.ok) {
       _relayGames = null;
       await renderGames();
     } else {
+      var data = null;
+      try { data = await r.json(); } catch (_) {}
       alert(data.error || 'Delete failed');
     }
   } catch(e) { alert('Delete request failed'); }
