@@ -793,11 +793,6 @@ async function togglePublishInternal(owner, gameId, publish) {
     var gs = byId('gamesSummary');
     if (gs) gs.textContent = msg;
   }
-  var me = (storage.getItem(ENV_PFX + 'SLOB_USERNAME') || '').trim();
-  if (!me || String(me).toLowerCase() !== String(owner || '').toLowerCase()) {
-    _gamesMsg('Only the owner can change publish state.');
-    return;
-  }
   try {
     var path = 'https://relay.traits.build/sync/internal/game/' + encodeURIComponent(gameId) + '/publish';
     var body = null;
