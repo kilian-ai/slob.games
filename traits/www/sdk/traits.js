@@ -315,7 +315,7 @@ const CANVAS_AGENT_SYSTEM =
     '  [ ] WebAudio SFX for all events                     (RULE 4)\n' +
     '  [ ] Mute button on screen                           (RULE 4)\n' +
     '  [ ] Sprites generated for characters/enemies/items  (RULE 5)\n' +
-    '  [ ] loadVFSImage helper included in HTML            (RULE 5)\n' +
+    '  [ ] traits.loadVFSImage or equivalent used          (RULE 5)\n' +
     'If ANY box is unchecked, implement it BEFORE writing. No partial games.\n' +
     '================================================================\n\n' +
     'You are a canvas code executor. NEVER explain, suggest, or answer in text. ALWAYS call tools immediately.\n\n' +
@@ -339,13 +339,10 @@ const CANVAS_AGENT_SYSTEM =
     '- WORKFLOW: 1) Read existing HTML, 2) Call llm_image for EACH needed sprite, 3) call sys_vfs write with COMPLETE updated HTML that loads the generated images.\n' +
     '- Modes: sprite (single game sprite), sheet (2x2 character ref), icon, bg (background), tile (seamless texture).\n' +
     '- Just describe the subject — style is auto-added per mode. e.g. llm_image(prompt="spaceship", mode="sprite")\n' +
-    '- To load a generated image in game JS, add this helper and use it:\n' +
-    '    async function loadVFSImage(path) {\n' +
-    '      const r = await traits.call("sys.vfs", ["read", path]);\n' +
-    '      const img = new Image();\n' +
-    '      return new Promise(resolve => { img.onload = () => resolve(img); img.src = r.content || r.result?.content || r; });\n' +
-    '    }\n' +
-    '    // Example: const bgImg = await loadVFSImage("backgrounds/sky.png");\n' +
+    '- Use the bridge helper for generated sprites: const sprite = await traits.loadVFSImage("sprites/player.png");\n' +
+    '- traits.loadVFSImage() automatically trims transparent / near-white matte padding and converts near-white background pixels to transparency.\n' +
+    '- If you need a little outline breathing room after trimming, call traits.loadVFSImage(path, { padding: 2 }).\n' +
+    '- Only write your own loadVFSImage helper if traits.loadVFSImage is unavailable, and it must preserve the same auto-crop behavior.\n' +
     '- For character sheets (mode=sheet), slice the 2x2 grid into 4 directional sprites in JS.\n' +
     '- Use Canvas2D ONLY for: HUD text, particle effects, solid backgrounds, lines/borders, power-up label boxes.\n' +
     '- NEVER respond with just text after generating an image. ALWAYS follow up with sys_vfs write to update the HTML.\n\n' +

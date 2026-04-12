@@ -954,12 +954,80 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                         const BRIDGE = `<script>(function(){
                             var sdk = function(){ return window.parent._traitsSDK; };
+                            function _cropSpriteImage(img, opts) {
+                                opts = opts || {};
+                                var whiteThreshold = opts.whiteThreshold == null ? 245 : Number(opts.whiteThreshold);
+                                var alphaThreshold = opts.alphaThreshold == null ? 8 : Number(opts.alphaThreshold);
+                                var padding = opts.padding == null ? 0 : Math.max(0, Number(opts.padding) || 0);
+                                var preserveWhite = !!opts.preserveWhite;
+                                var w = img.naturalWidth || img.width || 0;
+                                var h = img.naturalHeight || img.height || 0;
+                                if (!w || !h) return img;
+                                var srcCanvas = document.createElement('canvas');
+                                srcCanvas.width = w;
+                                srcCanvas.height = h;
+                                var srcCtx = srcCanvas.getContext('2d', { willReadFrequently: true });
+                                if (!srcCtx) return img;
+                                srcCtx.drawImage(img, 0, 0);
+                                var imageData = srcCtx.getImageData(0, 0, w, h);
+                                var data = imageData.data;
+                                var minX = w, minY = h, maxX = -1, maxY = -1;
+                                for (var y = 0; y < h; y++) {
+                                    for (var x = 0; x < w; x++) {
+                                        var i = (y * w + x) * 4;
+                                        var r = data[i];
+                                        var g = data[i + 1];
+                                        var b = data[i + 2];
+                                        var a = data[i + 3];
+                                        var isWhiteBg = !preserveWhite && a > alphaThreshold && r >= whiteThreshold && g >= whiteThreshold && b >= whiteThreshold;
+                                        var isBg = a <= alphaThreshold || isWhiteBg;
+                                        if (isWhiteBg) data[i + 3] = 0;
+                                        if (!isBg) {
+                                            if (x < minX) minX = x;
+                                            if (y < minY) minY = y;
+                                            if (x > maxX) maxX = x;
+                                            if (y > maxY) maxY = y;
+                                        }
+                                    }
+                                }
+                                if (maxX < minX || maxY < minY) return img;
+                                srcCtx.putImageData(imageData, 0, 0);
+                                minX = Math.max(0, minX - padding);
+                                minY = Math.max(0, minY - padding);
+                                maxX = Math.min(w - 1, maxX + padding);
+                                maxY = Math.min(h - 1, maxY + padding);
+                                var outW = maxX - minX + 1;
+                                var outH = maxY - minY + 1;
+                                var outCanvas = document.createElement('canvas');
+                                outCanvas.width = outW;
+                                outCanvas.height = outH;
+                                var outCtx = outCanvas.getContext('2d');
+                                if (!outCtx) return img;
+                                outCtx.drawImage(srcCanvas, minX, minY, outW, outH, 0, 0, outW, outH);
+                                return outCanvas;
+                            }
+                            function _loadVFSImage(path, opts) {
+                                return (sdk() && sdk().call('sys.vfs', ['read', path])).then(function(r) {
+                                    var src = (r && (r.content || (r.result && r.result.content))) || r;
+                                    return new Promise(function(resolve, reject) {
+                                        var img = new Image();
+                                        img.onload = function() {
+                                            try { resolve(_cropSpriteImage(img, opts)); }
+                                            catch (_) { resolve(img); }
+                                        };
+                                        img.onerror = reject;
+                                        img.src = src || '';
+                                    });
+                                });
+                            }
                             window.traits = {
                                 call:   function(p,a)   { return sdk() && sdk().call(p, a||[]); },
                                 list:   function(ns)    { return sdk() && sdk().call('sys.list', ns?[ns]:[]); },
                                 info:   function(p)     { return sdk() && sdk().call('sys.info', [p]); },
                                 echo:   function(t)     { return sdk() && sdk().call('sys.echo', [t]); },
                                 canvas: function(a,c)   { return sdk() && sdk().call('sys.canvas', c!==undefined?[a,c]:[a]); },
+                                loadVFSImage: function(path, opts) { return _loadVFSImage(path, opts); },
+                                cropSpriteImage: function(img, opts) { return _cropSpriteImage(img, opts); },
                                 audio:  function(a)     {
                                     var r = Array.prototype.slice.call(arguments, 1);
                                     return sdk() && sdk().call('sys.audio', [a].concat(r));
@@ -982,6 +1050,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     return {score: 0, player: ''};
                                 },
                             };
+                            if (!window.loadVFSImage) {
+                                window.loadVFSImage = function(path, opts) { return window.traits.loadVFSImage(path, opts); };
+                            }
                             var _qs = document.querySelector.bind(document);
                             document.querySelector = function(s) {
                                 return _qs(s.replace(/^#phone-viewport\s+/,'').replace(/^#canvas-container\s+/,''));
