@@ -1763,6 +1763,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             const sdk = window._traitsSDK;
                             if (sdk) {
                                 await sdk.call('sys.canvas', ['new']);
+                                await sdk.call('sys.canvas', ['clear']);
                             } else {
                                 // Early-click fallback before SDK init: still create/store a new game.
                                 createLocalGameFallback('untitled');
