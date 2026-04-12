@@ -405,6 +405,22 @@ a { color: #00e0ff; }
   color: #00e0ff;
 }
 .btn-build:hover { background: rgba(0,224,255,0.2); }
+.btn-publish {
+  background: rgba(90,101,112,0.14);
+  border-color: rgba(90,101,112,0.28);
+  color: #a8b4bf;
+}
+.btn-publish:hover {
+  background: rgba(90,101,112,0.24);
+}
+.btn-published {
+  background: rgba(0,255,136,0.18);
+  border-color: rgba(0,255,136,0.38);
+  color: #00ff88;
+}
+.btn-published:hover {
+  background: rgba(0,255,136,0.28);
+}
 .no-games {
   padding: 24px; text-align: center;
   color: var(--muted);
@@ -742,7 +758,7 @@ function renderRelayGames(data, el, summary) {
       html += '</div></div>';
       html += '<div class="game-actions">';
       html += '<button class="btn-play" onclick="playRelayGame(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\')">Play</button>';
-      html += '<button onclick="togglePublishInternal(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\',' + (pub ? 'false' : 'true') + ')">' + (pub ? 'Published' : 'Publish') + '</button>';
+      html += '<button class="' + (pub ? 'btn-published' : 'btn-publish') + '" onclick="togglePublishInternal(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\',' + (pub ? 'false' : 'true') + ')">' + (pub ? 'Published' : 'Publish') + '</button>';
       html += '<button class="danger" onclick="deleteRelayGame(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\',\'' + name.replace(/'/g, "\\'") + '\')">Del</button>';
       html += '</div></div>';
     }
@@ -790,6 +806,35 @@ async function togglePublishInternal(owner, gameId, publish) {
         var ver = await callTrait('sys.version', ['hhmmss']);
         var v = (ver && (ver.version || (ver.result && ver.result.version))) || '';
         if (v) body = { version: v };
+      } catch (_) {}
+
+      // Ensure publish uses latest local internal content (if present), then relay distributes from there.
+      try {
+        var col = readGamesCollection();
+        var games = (col && col.games) || {};
+        var localMatch = null;
+        for (var gid in games) {
+          if (!Object.prototype.hasOwnProperty.call(games, gid)) continue;
+          var lg = games[gid] || {};
+          var so = String(lg._sync_owner || lg.owner || '').toLowerCase();
+          var sg = String(lg._sync_game_id || lg.game_id || '').toLowerCase();
+          if (so === String(owner || '').toLowerCase() && sg === String(gameId || '').toLowerCase()) {
+            localMatch = lg;
+            break;
+          }
+        }
+        if (localMatch && localMatch.content) {
+          var putBody = {
+            name: localMatch.name || gameId,
+            content: localMatch.content,
+            version: (body && body.version) || localMatch.version || ''
+          };
+          await fetch('https://relay.traits.build/sync/internal/game/' + encodeURIComponent(gameId), {
+            method: 'PUT',
+            headers: authHeaders(),
+            body: JSON.stringify(putBody)
+          });
+        }
       } catch (_) {}
     }
     var r = await fetch(path, {
