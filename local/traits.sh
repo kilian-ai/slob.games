@@ -18,7 +18,7 @@ run_traits() {
 
     if [ "${1:-}" = "serve" ]; then
         if [ -z "${RELAY_URL:-}" ] || [ "$RELAY_URL" = "https://traits-build.fly.dev" ]; then
-            RELAY_URL="https://relay.traits.build"
+            RELAY_URL="https://relay.slob.games"
         fi
         export RELAY_URL
         echo "↳ Relay URL: $RELAY_URL"
@@ -42,7 +42,7 @@ run_traits() {
 if [ $# -eq 0 ]; then
     PORT="${TRAITS_PORT:-8090}"
     if [ -z "${RELAY_URL:-}" ] || [ "$RELAY_URL" = "https://traits-build.fly.dev" ]; then
-        RELAY_URL="https://relay.traits.build"
+        RELAY_URL="https://relay.slob.games"
     fi
     export RELAY_URL
     set -- serve --port "$PORT"
@@ -50,7 +50,7 @@ fi
 
 # Ensure `serve` gets a relay default even when args were provided explicitly.
 if [ "${1:-}" = "serve" ] && { [ -z "${RELAY_URL:-}" ] || [ "$RELAY_URL" = "https://traits-build.fly.dev" ]; }; then
-    RELAY_URL="https://relay.traits.build"
+    RELAY_URL="https://relay.slob.games"
     export RELAY_URL
 fi
 

@@ -95,7 +95,7 @@ Fly.io auto-scales between 0 and 2 machines:
 
 ## Relay pairing code persistence
 
-When a helper is started with `RELAY_URL=https://relay.traits.build traits serve`, the relay pairing code is now persisted and reused on reconnect when possible.
+When a helper is started with `RELAY_URL=https://relay.slob.games traits serve`, the relay pairing code is now persisted and reused on reconnect when possible.
 
 - Browser disconnect keeps the saved code locally so reconnect does not require retyping it.
 - Helper reconnect attempts to reclaim the previous code via `sys.config` (`sys.serve.RELAY_CODE`).
@@ -105,8 +105,8 @@ When a helper is started with `RELAY_URL=https://relay.traits.build traits serve
 
 `curl -fsSL https://traits.build/local/helper.sh | bash` now:
 
-- defaults to `RELAY_URL=https://relay.traits.build` for any `serve` invocation when `RELAY_URL` is unset,
-- auto-upgrades legacy `RELAY_URL=https://traits-build.fly.dev` to `https://relay.traits.build`,
+- defaults to `RELAY_URL=https://relay.slob.games` for any `serve` invocation when `RELAY_URL` is unset,
+- auto-upgrades legacy `RELAY_URL=https://traits-build.fly.dev` to `https://relay.slob.games`,
 - auto-reexecs `serve` from a downloaded helper file when started via `curl ... | bash` to recover normal interactive terminal behavior,
 - reattaches stdin from `/dev/tty` for `serve` when launched via a pipe so the REPL remains interactive,
 - `sys.serve` now also attempts a server-side `/dev/tty` reattach before disabling REPL if stdin is not a TTY,

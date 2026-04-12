@@ -594,7 +594,7 @@ async function fetchRelayGames() {
   } catch(_) {}
   if (token) {
     try {
-      var r2 = await fetch('https://relay.traits.build/sync/internal/games', {
+      var r2 = await fetch('https://relay.slob.games/sync/internal/games', {
         headers: authHeaders()
       });
       if (r2.ok) internal = await r2.json();
@@ -794,7 +794,7 @@ async function togglePublishInternal(owner, gameId, publish) {
     if (gs) gs.textContent = msg;
   }
   try {
-    var path = 'https://relay.traits.build/sync/internal/game/' + encodeURIComponent(gameId) + '/publish';
+    var path = 'https://relay.slob.games/sync/internal/game/' + encodeURIComponent(gameId) + '/publish';
     var body = null;
     if (publish) {
       try {
@@ -824,7 +824,7 @@ async function togglePublishInternal(owner, gameId, publish) {
             content: localMatch.content,
             version: (body && body.version) || localMatch.version || ''
           };
-          await fetch('https://relay.traits.build/sync/internal/game/' + encodeURIComponent(gameId), {
+          await fetch('https://relay.slob.games/sync/internal/game/' + encodeURIComponent(gameId), {
             method: 'PUT',
             headers: authHeaders(),
             body: JSON.stringify(putBody)
@@ -910,7 +910,7 @@ function playGame(id) {
 }
 
 function playRelayGame(owner, gameId) {
-  fetch('https://relay.traits.build/sync/internal/game/' + encodeURIComponent(gameId) + '?owner=' + encodeURIComponent(owner), {
+  fetch('https://relay.slob.games/sync/internal/game/' + encodeURIComponent(gameId) + '?owner=' + encodeURIComponent(owner), {
     headers: authHeaders()
   }).then(function(r) { return r.json(); }).then(function(data) {
     if (!data.content) { alert('Could not load game'); return; }
@@ -981,7 +981,7 @@ function deleteGame(id, name) {
 async function deleteRelayGame(owner, gameId, name) {
   if (!confirm('Delete "' + name + '" from relay? This cannot be undone.')) return;
   try {
-    var r = await fetch('https://relay.traits.build/sync/internal/game/' + encodeURIComponent(gameId) + '?owner=' + encodeURIComponent(owner), {
+    var r = await fetch('https://relay.slob.games/sync/internal/game/' + encodeURIComponent(gameId) + '?owner=' + encodeURIComponent(owner), {
       method: 'DELETE',
       headers: authHeaders()
     });
@@ -1087,7 +1087,7 @@ function deleteEnvVar(k) {
 }
 
 function relayApiBase() {
-  return 'https://relay.traits.build/sync';
+  return 'https://relay.slob.games/sync';
 }
 
 async function registerUser() {

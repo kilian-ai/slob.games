@@ -539,30 +539,30 @@ Parent stores last 50 entries in `window.__canvasGameLogs` for voice agent conte
 
 Games are synced between all connected clients via a **Cloudflare Durable Object** (`GameRoom`). The relay also exposes a REST API for reading, editing, and deleting games programmatically.
 
-**Relay:** `relay/src/index.js` — Cloudflare Worker at `https://relay.traits.build`
+**Relay:** `relay/src/index.js` — Cloudflare Worker at `https://relay.slob.games`
 **Deploy:** `cd relay && npx wrangler deploy`
 
 ### REST Endpoints
 
-All endpoints are under `https://relay.traits.build/sync/`. CORS allows all origins.
+All endpoints are under `https://relay.slob.games/sync/`. CORS allows all origins.
 
 ```bash
 # List all games (name, hash, size, updated)
-curl -s https://relay.traits.build/sync/games | python3 -m json.tool
+curl -s https://relay.slob.games/sync/games | python3 -m json.tool
 
 # Get full HTML content of one game
-curl -s https://relay.traits.build/sync/game/<HASH>
+curl -s https://relay.slob.games/sync/game/<HASH>
 
 # Update a game (content + optional rename) — returns new hash
-curl -X PUT https://relay.traits.build/sync/game/<HASH> \
+curl -X PUT https://relay.slob.games/sync/game/<HASH> \
   -H 'Content-Type: application/json' \
   -d '{"name": "Game Name", "content": "<html>...</html>"}'
 
 # Delete a game
-curl -X DELETE https://relay.traits.build/sync/game/<HASH>
+curl -X DELETE https://relay.slob.games/sync/game/<HASH>
 
 # List all high scores
-curl -s https://relay.traits.build/sync/scores
+curl -s https://relay.slob.games/sync/scores
 ```
 
 ### REST Response Formats
@@ -594,14 +594,14 @@ To programmatically view and modify synced games:
 
 ```bash
 # 1. List games to find the hash
-curl -s https://relay.traits.build/sync/games | python3 -c "
+curl -s https://relay.slob.games/sync/games | python3 -c "
 import sys,json
 for g in json.loads(sys.stdin.read()):
     print(f'{g[\"content_hash\"]} {g[\"size\"]:>6}B  {g[\"name\"]}')
 "
 
 # 2. Download a game
-curl -s https://relay.traits.build/sync/game/HASH | python3 -c "
+curl -s https://relay.slob.games/sync/game/HASH | python3 -c "
 import sys,json; print(json.loads(sys.stdin.read())['content'])" > /tmp/game.html
 
 # 3. Edit the HTML (search/replace, inject code, fix bugs)
@@ -612,7 +612,7 @@ import urllib.request, ssl, json
 html = open('/tmp/game.html').read()
 data = json.dumps({'name': 'Game Name', 'content': html}).encode()
 req = urllib.request.Request(
-    'https://relay.traits.build/sync/game/HASH',
+    'https://relay.slob.games/sync/game/HASH',
     data=data,
     headers={'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'},
     method='PUT')
@@ -629,7 +629,7 @@ For bulk operations (fix controls, inject score hooks, rename, delete stubs), wr
 
 ```python
 import urllib.request, ssl, json
-API = 'https://relay.traits.build/sync'
+API = 'https://relay.slob.games/sync'
 UA = {'User-Agent': 'Mozilla/5.0'}
 ctx = ssl.create_default_context()
 
@@ -665,7 +665,7 @@ result = api_put(f'/game/{hash}', {'name': 'New Name', 'content': html})
 
 ### WebSocket Game Sync Protocol
 
-Clients connect via `wss://relay.traits.build/sync` for real-time game sync. The parent `canvas.rs` manages this connection.
+Clients connect via `wss://relay.slob.games/sync` for real-time game sync. The parent `canvas.rs` manages this connection.
 
 **Server → Client messages:**
 

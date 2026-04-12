@@ -197,7 +197,7 @@ tr:hover td { background: rgba(0,224,255,0.03); }
 
 const JS: &str = r##"
 (function() {
-var API = 'https://relay.traits.build/sync';
+var API = 'https://relay.slob.games/sync';
 var token = '';
 var usersData = [];
 var gamesData = { external: [], internal: [] };

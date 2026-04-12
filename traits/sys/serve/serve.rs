@@ -232,7 +232,7 @@ fn normalize_relay_url(raw: &str) -> Option<String> {
 
     // Migrate the legacy relay endpoint to the current dedicated relay domain.
     if trimmed.eq_ignore_ascii_case("https://traits-build.fly.dev") {
-        return Some("https://relay.traits.build".to_string());
+        return Some("https://relay.slob.games".to_string());
     }
 
     Some(trimmed.to_string())
@@ -1272,7 +1272,7 @@ pub async fn start_server(config: crate::config::Config, port: u16) -> Result<()
     let config_relay_url = normalize_relay_url(&config_relay_url_raw);
 
     if config_relay_url_raw.trim().eq_ignore_ascii_case("https://traits-build.fly.dev") {
-        if let Err(e) = crate::config::write_persistent_config("sys.serve", "RELAY_URL", "https://relay.traits.build") {
+        if let Err(e) = crate::config::write_persistent_config("sys.serve", "RELAY_URL", "https://relay.slob.games") {
             info!("Failed to migrate legacy relay URL config: {}", e);
         }
     }

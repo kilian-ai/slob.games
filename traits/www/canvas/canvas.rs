@@ -851,7 +851,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                         writeGamesCollection(colNow);
                                     }
                                     const gameId = g.game_id || g._sync_game_id || _slugify(g.name || activeId);
-                                    const resp = await fetch('https://relay.traits.build/sync/internal/game/' + encodeURIComponent(gameId), {
+                                    const resp = await fetch('https://relay.slob.games/sync/internal/game/' + encodeURIComponent(gameId), {
                                         method: 'PUT',
                                         headers: {
                                             'Content-Type': 'application/json',
@@ -1620,7 +1620,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     const active = col.active && col.games ? col.games[col.active] : null;
                                     const sourceHash = active ? (active._sync_hash || active.checksum || '') : '';
                                     if (token && sourceHash) {
-                                        await fetch('https://relay.traits.build/sync/internal/fork', {
+                                        await fetch('https://relay.slob.games/sync/internal/fork', {
                                             method: 'POST',
                                             headers: {
                                                 'Content-Type': 'application/json',
@@ -1650,7 +1650,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                         const smTitleEl    = document.getElementById('smTitle');
                         const smBodyEl     = document.getElementById('smBody');
                         const smCloseBtn   = document.getElementById('smClose');
-                        const RELAY        = 'https://relay.traits.build';
+                        const RELAY        = 'https://relay.slob.games';
                         let _smAbort = false;
 
                         smCloseBtn.addEventListener('click', (e) => { e.stopPropagation(); smHide(); });
@@ -1875,7 +1875,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                                 .toLowerCase()
                                                 .replace(/[^a-z0-9]+/g, '-')
                                                 .replace(/^-+|-+$/g, '') || 'received';
-                                            await fetch('https://relay.traits.build/sync/internal/game/' + encodeURIComponent(gameId), {
+                                            await fetch('https://relay.slob.games/sync/internal/game/' + encodeURIComponent(gameId), {
                                                 method: 'PUT',
                                                 headers: {
                                                     'Content-Type': 'application/json',
@@ -2455,7 +2455,7 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                         // ── Game Sync: auto-share games via relay WebSocket ──
                         (async function initGameSync() {
-                            const RELAY_WS = 'wss://relay.traits.build/sync';
+                            const RELAY_WS = 'wss://relay.slob.games/sync';
                             const MAX_PUSH_SIZE = 256 * 1024; // 256KB per game
 
                             function slugify(s) {
@@ -2792,7 +2792,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     for (const { id, g } of internalGames) {
                                         const gameId = g.game_id || slugify(g.name || id);
                                         try {
-                                            const resp = await fetch('https://relay.traits.build/sync/internal/game/' + encodeURIComponent(gameId), {
+                                            const resp = await fetch('https://relay.slob.games/sync/internal/game/' + encodeURIComponent(gameId), {
                                                 method: 'PUT',
                                                 headers,
                                                 body: JSON.stringify({
