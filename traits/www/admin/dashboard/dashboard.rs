@@ -640,6 +640,7 @@ window.deleteUser = deleteUser;
 window.editUser = editUser;
 window.submitEditUser = submitEditUser;
 window.deleteGame = deleteGame;
+window.playAdminGame = playAdminGame;
 window.assignGame = assignGame;
 window.submitAssignGame = submitAssignGame;
 window.manageSecrets = manageSecrets;
