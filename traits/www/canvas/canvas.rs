@@ -667,6 +667,31 @@ pub fn canvas(_args: &[Value]) -> Value {
                                         removed++;
                                     }
                                 }
+
+                                var syncedBySlug = {};
+                                for (var sid in col.games) {
+                                    if (!Object.prototype.hasOwnProperty.call(col.games, sid)) continue;
+                                    var sg = col.games[sid] || {};
+                                    var hasRelayIdentity = !!_relayIdentityOf(sg);
+                                    var sscope = (sg.scope || sg._scope || 'internal');
+                                    if (!hasRelayIdentity || sscope === 'external') continue;
+                                    syncedBySlug[_slugifyGameId(sg._sync_game_id || sg.game_id || sg.name || sid)] = sid;
+                                }
+                                for (var lid in col.games) {
+                                    if (!Object.prototype.hasOwnProperty.call(col.games, lid)) continue;
+                                    var lg = col.games[lid] || {};
+                                    if (_relayIdentityOf(lg)) continue;
+                                    var lscope = (lg.scope || lg._scope || 'internal');
+                                    if (lscope === 'external') continue;
+                                    var lslug = _slugifyGameId(lg.game_id || lg.name || lid);
+                                    var preferredId = syncedBySlug[lslug];
+                                    if (preferredId && preferredId !== lid) {
+                                        if (col.active === lid) col.active = preferredId;
+                                        delete col.games[lid];
+                                        removed++;
+                                    }
+                                }
+
                                 if (removed > 0) {
                                     files['canvas/games.json'] = JSON.stringify(col);
                                     localStorage.setItem('traits.pvfs', JSON.stringify(files));
