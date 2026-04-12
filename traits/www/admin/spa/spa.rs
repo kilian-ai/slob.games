@@ -1198,6 +1198,7 @@ window.playExternalGame = playExternalGame;
 window.buildGame = buildGame;
 window.deleteGame = deleteGame;
 window.deleteRelayGame = deleteRelayGame;
+window.togglePublishInternal = togglePublishInternal;
 window.playGame = playGame;
 window.buildGame = buildGame;
 window.deleteGame = deleteGame;
