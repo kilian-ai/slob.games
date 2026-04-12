@@ -324,6 +324,17 @@ const CANVAS_AGENT_SYSTEM =
     '- Store new id: window.__canvasAnimId = requestAnimationFrame(loop)\n' +
     '- No DOMContentLoaded — script runs immediately on injection\n' +
     '- No external dependencies — inline all CSS and JS\n\n' +
+    'SPRITE / IMAGE GENERATION — llm_image tool:\n' +
+    '- Call llm_image BEFORE writing canvas/app.html to generate sprites the game needs.\n' +
+    '- Typical workflow: 1) Read existing HTML, 2) Call llm_image for each needed sprite, 3) Write HTML that references the generated VFS paths.\n' +
+    '- Modes: sprite (single game sprite), sheet (2x2 character ref — front/back/left/right), icon (UI icon), bg (panoramic background), tile (seamless texture).\n' +
+    '- Just describe the subject — style is auto-added per mode. e.g. llm_image(prompt="spaceship", mode="sprite")\n' +
+    '- Load generated images in game JS:\n' +
+    '    const resp = await traits.call(\'sys.vfs\', [\'read\', \'sprites/spaceship.png\']);\n' +
+    '    const img = new Image(); img.src = resp.content;\n' +
+    '- For character sheets (mode=sheet), slice the 2x2 grid into 4 directional sprites in JS.\n' +
+    '- Use llm_image for characters, enemies, items, backgrounds — anything that looks poor as code-drawn shapes.\n' +
+    '- Do NOT use llm_image for simple shapes, solid colors, or text — draw those with Canvas2D.\n\n' +
     'STYLE: Dark bg #0a0a0a, bright accents (#00ff88, #ff6b35, #4fc3f7), smooth 60fps.\n' +
     'Canvas scripts can call: traits.call(path,args), traits.echo(text), traits.audio(action,...).'
 
@@ -468,6 +479,24 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
             }
         }
     };
+    const LLM_IMAGE_TOOL = {
+        type: 'function',
+        function: {
+            name: 'llm_image',
+            description: 'Generate a game image/sprite via OpenAI and save to VFS. Returns the VFS path. Call BEFORE writing canvas/app.html so you can reference the generated image paths in your code. Load generated images in game JS via: const resp = await traits.call(\'sys.vfs\', [\'read\', path]); img.src = resp.content;',
+            parameters: {
+                type: 'object',
+                properties: {
+                    prompt: { type: 'string', description: 'Describe the subject (style is auto-added per mode). e.g. "a red dragon", "medieval stone wall"' },
+                    path: { type: 'string', description: 'VFS save path e.g. sprites/player.png. Auto-generated if omitted.' },
+                    size: { type: 'string', description: 'Image size e.g. 256x256, 512x512, 1024x1024. Auto per mode if omitted.' },
+                    model: { type: 'string', description: 'dall-e-2 (default/fast), dall-e-3 (quality), gpt-image-1 (newest)' },
+                    mode: { type: 'string', enum: ['sprite', 'sheet', 'icon', 'bg', 'tile'], description: 'sprite (single, default), sheet (2x2 character ref with front/back/left/right), icon, bg (background), tile (seamless texture)' }
+                },
+                required: ['prompt']
+            }
+        }
+    };
 
     const messages = [
         { role: 'system', content: CANVAS_AGENT_SYSTEM },
@@ -479,12 +508,12 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
 
     let lastContent = '';
     try {
-        for (let step = 0; step < 6; step++) {
+        for (let step = 0; step < 10; step++) {
             console.log('[Canvas/Agent/Browser] Step', step + 1);
             const resp = await fetch('https://api.openai.com/v1/chat/completions', {
                 method: 'POST',
                 headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: canvasModel, messages, tools: [SYS_VFS_TOOL], tool_choice: 'auto' })
+                body: JSON.stringify({ model: canvasModel, messages, tools: [SYS_VFS_TOOL, LLM_IMAGE_TOOL], tool_choice: 'auto' })
             });
             if (!resp.ok) {
                 const err = await resp.text().catch(() => String(resp.status));
@@ -565,6 +594,53 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                             window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content: lastContent } }));
                         }
                         toolResult = '{"ok":true}';
+                    }
+                } else if (tc.function.name === 'llm_image') {
+                    // Dispatch llm.image via REST API (same pattern as the Rust trait)
+                    try {
+                        const imgArgs = [
+                            args.prompt || '',
+                            args.path || '',
+                            args.size || '',
+                            args.model || 'dall-e-2',
+                            args.mode || 'sprite'
+                        ];
+                        console.log('[Canvas/Agent/Browser] llm_image call:', args.prompt, 'mode:', args.mode || 'sprite');
+                        const _sdk = window._traitsSDK;
+                        if (_sdk) {
+                            const imgResult = await _sdk.call('llm.image', imgArgs);
+                            const r = imgResult?.result || imgResult;
+                            if (r?.ok) {
+                                // Also sync the generated image to localStorage pvfs
+                                if (r.path && r.format === 'data_url') {
+                                    try {
+                                        let pvfs = {}; try { pvfs = JSON.parse(localStorage.getItem('traits.pvfs') || '{}'); } catch(_) {}
+                                        const imgContent = pvfs[r.path] || '';
+                                        if (!imgContent && wasmReady && wasm?.pvfs_refresh) { wasm.pvfs_refresh(); }
+                                    } catch(_) {}
+                                }
+                                toolResult = JSON.stringify({ ok: true, path: r.path, size: r.size, mode: r.mode,
+                                    usage: "Load in game JS: const resp = await traits.call('sys.vfs', ['read', '" + r.path + "']); img.src = resp.content;" });
+                                console.log('[Canvas/Agent/Browser] llm_image OK:', r.path);
+                            } else {
+                                toolResult = JSON.stringify({ ok: false, error: r?.error || 'llm.image failed' });
+                                console.warn('[Canvas/Agent/Browser] llm_image failed:', r?.error);
+                            }
+                        } else {
+                            // Fallback: direct REST call to server
+                            const imgResp = await fetch('/traits/llm/image', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ args: [args.prompt || '', args.path || '', args.size || '', args.model || 'dall-e-2', args.mode || 'sprite'] })
+                            });
+                            const imgData = await imgResp.json();
+                            toolResult = JSON.stringify(imgData?.ok ? { ok: true, path: imgData.path, size: imgData.size, mode: imgData.mode,
+                                usage: "Load in game JS: const resp = await traits.call('sys.vfs', ['read', '" + imgData.path + "']); img.src = resp.content;" }
+                                : { ok: false, error: imgData?.error || 'llm.image failed' });
+                        }
+                    } catch(e) {
+                        console.error('[Canvas/Agent/Browser] llm_image error:', e);
+                        toolResult = JSON.stringify({ ok: false, error: e.message || String(e) });
                     }
                 }
                 messages.push({ role: 'tool', tool_call_id: tc.id, content: toolResult });

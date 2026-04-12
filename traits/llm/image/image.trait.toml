@@ -1,0 +1,24 @@
+[trait]
+description = "Generate game sprites/assets via OpenAI image API with auto prompt engineering — sprite, sheet (multi-pose), icon, background, tileset modes"
+version = "v260412"
+author = "system"
+tags = ["llm", "openai", "image", "sprite", "generation", "canvas", "sheet"]
+
+[signature]
+params = [
+  { name = "prompt", type = "string", description = "What to generate — describe the subject. Style/framing is added automatically based on mode.", required = true },
+  { name = "path", type = "string", description = "VFS path to save the image (e.g. 'sprites/player.png'). Auto-generated if omitted.", required = false },
+  { name = "size", type = "string", description = "Image size: 256x256, 512x512, 1024x1024 (default: auto per mode)", required = false },
+  { name = "model", type = "string", description = "OpenAI model: dall-e-2 (fast/cheap), dall-e-3 (quality), gpt-image-1 (newest)", required = false, default = "dall-e-2" },
+  { name = "mode", type = "string", description = "Asset type: sprite (single, default), sheet (character sheet 4-pose grid for consistency), icon (UI icon), bg (background), tile (tileable texture)", required = false, default = "sprite" },
+]
+
+[signature.returns]
+type = "map"
+description = "{ ok, path, data_url_length, format, size, mode, enhanced_prompt }"
+
+[implementation]
+language = "rust"
+source = "builtin"
+entry = "image"
+wasm = true

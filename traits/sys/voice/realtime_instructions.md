@@ -194,6 +194,35 @@ Scripts injected into the canvas have access to a global `traits` object that ca
 - Use `onclick`, `oninput`, `onchange` handlers on HTML elements — they work normally.
 - For polling/live data, use `setInterval` with a reasonable interval (3-5s).
 
+### Sprite / Image Generation
+
+**llm_image** — Generate game images via OpenAI API and save to VFS. Prompts are automatically enhanced per mode.
+- `prompt` (required): What to generate — describe the *subject*, not style. e.g. "a red dragon" or "medieval stone wall".
+- `path` (optional): VFS path to save (e.g. `sprites/player.png`). Auto-generated per mode if omitted.
+- `size` (optional): API size — auto-selected per mode if omitted (`256x256` for sprites, `1024x1024` for sheets/bgs). Game code scales to actual sprite size.
+- `model` (optional): `dall-e-2` (default — fast/cheap), `dall-e-3` (quality), `gpt-image-1` (newest).
+- `mode` (optional): Asset type:
+  - `sprite` (default) — Single game sprite. Prompt is auto-wrapped with pixel art, centered, clean bg directives.
+  - `sheet` — 2x2 character reference sheet (front/back/left/right views of the same character in one image). Great for consistency — generate one sheet then slice in code. Returns JS code hint for slicing.
+  - `icon` — UI icon, flat design, no background, bold outlines.
+  - `bg` — Wide game background, panoramic, no characters.
+  - `tile` — Seamless tileable texture for terrain, walls, floors.
+
+**When to use:** When games need actual artwork that would look poor as code-drawn shapes. Use `sheet` mode for player characters / NPCs — it generates all 4 directional views in one API call, ensuring consistency.
+
+**Workflow for character sprites:**
+1. Call `llm_image(prompt, path, size, model, "sheet")` → generates 2x2 reference sheet, saves to VFS.
+2. The response includes `usage_hint` with JS code to slice the sheet into 4 individual directional sprites.
+3. Use sliced canvases directly in `drawImage()` calls for animation.
+
+**Workflow for simple sprites/items:**
+1. Call `llm_image(prompt)` with just a subject description → saves to `sprites/` automatically.
+2. Load in game via `traits.call('sys.vfs', ['read', 'sprites/...'])`.
+
+**Prompting tips:** Just describe the subject — the mode handles style wrapping. Adding "pixel art" or "transparent background" is OK but not needed in sprite mode.
+
+**When NOT to use:** Simple geometric shapes, solid-color blocks, text, or canvas primitives. Code-drawn graphics are instant and free.
+
 ### Audio / Sound Generation
 
 **sys_audio** — Generate and play sounds in the browser using the WebAudio API.

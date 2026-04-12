@@ -43,6 +43,51 @@ Persistent virtual filesystem. Files persist across sessions (localStorage in br
   - `action: "delete"`, `path: "path/to/file"` — Delete a file
   - `action: "exists"`, `path: "path/to/file"` — Check if file exists
 
+### Sprite / Image Generation
+- `llm_image` — Generate game images via OpenAI API, auto-enhanced per mode, saved to VFS.
+  - `prompt`: Describe the *subject* (style is auto-wrapped per mode). e.g. "a red dragon", "stone wall texture"
+  - `path`: VFS save path (auto-generated per mode if omitted: `sprites/`, `sheets/`, `icons/`, etc.)
+  - `size`: API size (auto-selected per mode if omitted — 256x256 for sprites, 1024x1024 for sheets/bgs)
+  - `model`: `dall-e-2` (default), `dall-e-3`, `gpt-image-1`
+  - `mode`: `sprite` (default), `sheet`, `icon`, `bg`, `tile`
+
+**Modes:**
+- `sprite` — Single game sprite, pixel art style, centered, clean background
+- `sheet` — 2x2 character reference sheet (front/back/left/right). One API call = 4 consistent directional views. Response includes JS slicing code.
+- `icon` — Flat UI icon, no background, bold outlines
+- `bg` — Wide game background, no characters, panoramic
+- `tile` — Seamless tileable texture for terrain/walls
+
+**Character sprite workflow (recommended for player/NPCs):**
+```js
+// 1. Generate a character sheet (done by voice/llm agent via tool call)
+//    llm_image("knight with blue armor", "sheets/knight.png", null, null, "sheet")
+
+// 2. Slice the 2x2 sheet into directional sprites
+const resp = await traits.call('sys.vfs', ['read', 'sheets/knight.png']);
+const sheet = new Image();
+sheet.src = resp.content;
+sheet.onload = () => {
+  const W = sheet.width / 2, H = sheet.height / 2;
+  ['front','back','left','right'].forEach((dir, i) => {
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const x = (i % 2) * W, y = Math.floor(i / 2) * H;
+    c.getContext('2d').drawImage(sheet, x, y, W, H, 0, 0, W, H);
+    sprites[dir] = c;
+  });
+};
+```
+
+**Simple sprite workflow:**
+```js
+const resp = await traits.call('sys.vfs', ['read', 'sprites/dragon.png']);
+const img = new Image();
+img.src = resp.content; // base64 data URL
+img.onload = () => ctx.drawImage(img, x, y, 32, 32);
+```
+For pixel art, add `image-rendering: pixelated` to canvas/img.
+
 ### Trait System
 - `kernel_call` — Call any trait by dot-path: `path: "trait.name"`, `args: "[\"arg1\", \"arg2\"]"`
 - `sys_list` — List available traits (optional namespace filter)
