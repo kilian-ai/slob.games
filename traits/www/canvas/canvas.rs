@@ -979,6 +979,43 @@ pub fn canvas(_args: &[Value]) -> Value {
                         dedupeLocalGames();
                         renderProjectBar();
 
+                        (async function installCanvasSdkHooks() {
+                            try {
+                                let tries = 0;
+                                while (!window._traitsSDK && tries < 40) {
+                                    await new Promise(r => setTimeout(r, 250));
+                                    tries++;
+                                }
+                                const sdk = window._traitsSDK;
+                                if (!sdk || sdk.__canvasHooksInstalled) return;
+                                const origCall = sdk.call.bind(sdk);
+                                sdk.call = async function(path, args, opts) {
+                                    const result = await origCall(path, args, opts);
+                                    try {
+                                        const cleanPath = String(path || '').split('@')[0];
+                                        if (cleanPath === 'sys.canvas' && result && result.ok) {
+                                            const r = result.result || result || {};
+                                            if (r.action === 'set' || r.action === 'append' || r.action === 'clear') {
+                                                try {
+                                                    const getRes = await origCall('sys.canvas', ['get']);
+                                                    const content = getRes?.result?.content ?? getRes?.content ?? '';
+                                                    window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content } }));
+                                                } catch(_) {
+                                                    window.dispatchEvent(new CustomEvent('traits-canvas-update', {}));
+                                                }
+                                            }
+                                            if (r.canvas_project_action || r.action === 'new' || r.action === 'rename' || r.action === 'activate' || r.action === 'fork' || r.action === 'delete') {
+                                                window.dispatchEvent(new CustomEvent('traits-canvas-project', { detail: r }));
+                                                window.dispatchEvent(new CustomEvent('traits-canvas-projects-changed'));
+                                            }
+                                        }
+                                    } catch(_) {}
+                                    return result;
+                                };
+                                sdk.__canvasHooksInstalled = true;
+                            } catch(_) {}
+                        })();
+
                         const phoneFrame    = document.getElementById('phone-frame');
                         const phoneViewport = document.getElementById('phone-viewport');
                         let _currentContent = '';

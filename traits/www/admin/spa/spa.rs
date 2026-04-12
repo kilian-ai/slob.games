@@ -623,6 +623,35 @@ function slugify(s) {
     .replace(/^-+|-+$/g, '') || 'untitled';
 }
 
+function localInternalGamesForSettings() {
+  try {
+    var col = readGamesCollection();
+    var games = col.games || {};
+    var list = [];
+    for (var id in games) {
+      if (!Object.prototype.hasOwnProperty.call(games, id)) continue;
+      var g = games[id] || {};
+      var scope = g.scope || g._scope || 'internal';
+      if (scope === 'external') continue;
+      list.push({
+        _local_id: id,
+        owner: g._sync_owner || g.owner || 'local',
+        game_id: g._sync_game_id || g.game_id || slugify(g.name || id),
+        name: g.name || 'untitled',
+        content_hash: g._sync_hash || g.checksum || '',
+        checksum: g.checksum || g._sync_hash || '',
+        version: g.version || '',
+        published: !!g.published,
+        size: (g.content || '').length,
+        updated: g.updated || g.created || new Date().toISOString(),
+        _local_only: !(g._sync_owner && g._sync_game_id),
+        _active: id === col.active,
+      });
+    }
+    return list;
+  } catch(_) { return []; }
+}
+
 function upsertInternalRelayGameToLocal(owner, gameId, data) {
   try {
     var raw = localStorage.getItem('traits.pvfs') || '{}';
@@ -721,7 +750,21 @@ async function renderGames() {
 }
 
 function renderRelayGames(data, el, summary) {
-  var internal = (data.internal || []).slice().sort(function(a, b) {
+  var relayInternal = (data.internal || []).slice();
+  var localInternal = localInternalGamesForSettings();
+  var merged = {};
+  for (var i0 = 0; i0 < relayInternal.length; i0++) {
+    var rg = relayInternal[i0] || {};
+    var rk = String((rg.owner || '?') + '|' + (rg.game_id || '?')).toLowerCase();
+    merged[rk] = Object.assign({}, rg, { _local_only: false });
+  }
+  for (var i1 = 0; i1 < localInternal.length; i1++) {
+    var lg = localInternal[i1] || {};
+    var lk = String((lg.owner || '?') + '|' + (lg.game_id || '?')).toLowerCase();
+    if (!merged[lk]) merged[lk] = lg;
+  }
+
+  var internal = Object.values(merged).sort(function(a, b) {
     return String(a.name || '').localeCompare(String(b.name || ''));
   });
   var external = (data.external || []).slice().sort(function(a, b) {
@@ -747,19 +790,25 @@ function renderRelayGames(data, el, summary) {
       var pub = !!g.published;
       html += '<div class="game-row">';
       html += '<div class="game-info">';
-      html += '<div class="game-name" style="cursor:pointer" onclick="playRelayGame(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\')">' + name + '</div>';
+      html += '<div class="game-name" style="cursor:pointer" onclick="' + (g._local_only
+        ? ('playGame(\'' + esc(g._local_id || '') + '\')')
+        : ('playRelayGame(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\')')) + '">' + name + '</div>';
       html += '<div class="game-meta">';
       html += '<span>' + identity + '</span>';
       html += '<span>v' + ver + '</span>';
       html += '<span>' + size + '</span>';
       html += '<span>' + ago(g.updated) + '</span>';
-      html += '<span>' + (pub ? 'published' : 'private') + '</span>';
+      html += '<span>' + (g._local_only ? 'pending sync' : (pub ? 'published' : 'private')) + '</span>';
       html += '<span style="opacity:0.5">#' + hash + '</span>';
       html += '</div></div>';
       html += '<div class="game-actions">';
-      html += '<button class="btn-play" onclick="playRelayGame(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\')">Play</button>';
-      html += '<button class="' + (pub ? 'btn-published' : 'btn-publish') + '" onclick="togglePublishInternal(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\',' + (pub ? 'false' : 'true') + ')">' + (pub ? 'Published' : 'Publish') + '</button>';
-      html += '<button class="danger" onclick="deleteRelayGame(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\',\'' + name.replace(/'/g, "\\'") + '\')">Del</button>';
+      html += '<button class="btn-play" onclick="' + (g._local_only
+        ? ('playGame(\'' + esc(g._local_id || '') + '\')')
+        : ('playRelayGame(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\')')) + '">Play</button>';
+      if (!g._local_only) {
+        html += '<button class="' + (pub ? 'btn-published' : 'btn-publish') + '" onclick="togglePublishInternal(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\',' + (pub ? 'false' : 'true') + ')">' + (pub ? 'Published' : 'Publish') + '</button>';
+        html += '<button class="danger" onclick="deleteRelayGame(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\',\'' + name.replace(/'/g, "\\'") + '\')">Del</button>';
+      }
       html += '</div></div>';
     }
   }
