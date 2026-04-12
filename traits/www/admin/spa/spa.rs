@@ -655,33 +655,6 @@ function upsertInternalRelayGameToLocal(owner, gameId, data) {
       updated: (existingGame && contentToUse === localContent) ? (existingGame.updated || data.updated) : (data.updated || new Date().toISOString())
     };
 
-    // Remove stale duplicates for this same identity.
-    for (var did in (col.games || {})) {
-      if (!col.games.hasOwnProperty(did) || did === targetId) continue;
-      var dg = col.games[did] || {};
-      var dk = ((dg._sync_owner || dg.owner || '') + '|' + (dg._sync_game_id || dg.game_id || '')).toLowerCase();
-      if (dk && dk === identityKey) {
-        if (col.active === did) col.active = targetId;
-        delete col.games[did];
-      }
-    }
-
-    // Backward-compat cleanup: remove old local placeholders with the same name.
-    var targetName = String((data.name || gid) || '').trim().toLowerCase();
-    if (targetName) {
-      for (var lid in (col.games || {})) {
-        if (!col.games.hasOwnProperty(lid) || lid === targetId) continue;
-        var lg = col.games[lid] || {};
-        var lscope = (lg.scope || lg._scope || 'internal');
-        var lname = String(lg.name || '').trim().toLowerCase();
-        var hasSyncIdentity = !!((lg._sync_owner || lg.owner) && (lg._sync_game_id || lg.game_id));
-        if (lscope === 'internal' && lname === targetName && !hasSyncIdentity) {
-          if (col.active === lid) col.active = targetId;
-          delete col.games[lid];
-        }
-      }
-    }
-
     col.active = targetId;
     files['canvas/games.json'] = JSON.stringify(col);
     files['canvas/app.html'] = data.content || '';

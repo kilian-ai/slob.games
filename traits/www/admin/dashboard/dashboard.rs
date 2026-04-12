@@ -358,36 +358,31 @@ function renderGames() {
     }
     el.innerHTML = h;
   } else {
-    // Group by game name
-    var byName = {};
-    for (var k2 = 0; k2 < all.length; k2++) {
-      var nm = (all[k2].name || 'untitled').toLowerCase();
-      if (!byName[nm]) byName[nm] = [];
-      byName[nm].push(all[k2]);
-    }
-    var names = Object.keys(byName).sort();
+    // Raw list sorted by name only — no grouping/deduping of same-name games.
+    var byNameList = all.slice().sort(function(a, b) {
+      var an = String(a.name || 'untitled').toLowerCase();
+      var bn = String(b.name || 'untitled').toLowerCase();
+      if (an !== bn) return an.localeCompare(bn);
+      return String(b.updated || '').localeCompare(String(a.updated || ''));
+    });
     var h2 = '';
-    for (var ni = 0; ni < names.length; ni++) {
-      var gn = byName[names[ni]];
-      h2 += '<div class="group-header">' + esc(gn[0].name || names[ni]) + ' (' + gn.length + ')</div>';
-      h2 += '<table><tr><th>Owner/ID</th><th>Name</th><th>Scope</th><th>HS</th><th>Size</th><th>Updated</th><th></th></tr>';
-      for (var gi2 = 0; gi2 < gn.length; gi2++) {
-        var gm2 = gn[gi2];
-        var scopeTag2 = gm2.scope === 'internal' ? '🏠' : '🌐';
-        var gh2 = encodeURIComponent(gm2.fullHash);
-        h2 += '<tr><td><code>' + esc(gm2.owner + '/' + gm2.game_id) + '</code></td>';
-        h2 += '<td><span style="cursor:pointer;color:var(--accent);text-decoration:underline" onclick="playAdminGame(\'' + esc(gm2.scope) + '\',\'' + encodeURIComponent(gm2.owner) + '\',\'' + encodeURIComponent(gm2.game_id || '') + '\',\'' + gh2 + '\')">' + esc(gm2.name) + '</span></td>';
-        h2 += '<td>' + scopeTag2 + ' ' + esc(gm2.scope) + '</td>';
-        h2 += '<td>' + (gm2.highscore ? '<span title="' + esc(gm2.highscore_player || '') + '">' + gm2.highscore + '</span>' : '<span style="opacity:0.3">—</span>') + '</td>';
-        h2 += '<td>' + formatSize(gm2.size) + '</td>';
-        h2 += '<td title="' + esc(gm2.updated) + '">' + ago(gm2.updated) + '</td>';
-        h2 += '<td class="actions">';
-        h2 += '<button class="btn-sm accent" onclick="assignGame(\'' + gh2 + '\',\'' + encodeURIComponent(gm2.owner) + '\')">Assign</button>';
-        h2 += '<button class="btn-sm danger" onclick="deleteGame(\'' + gh2 + '\')">Del</button>';
-        h2 += '</td></tr>';
-      }
-      h2 += '</table>';
+    h2 += '<table><tr><th>Owner/ID</th><th>Name</th><th>Scope</th><th>HS</th><th>Size</th><th>Updated</th><th></th></tr>';
+    for (var ni = 0; ni < byNameList.length; ni++) {
+      var gm2 = byNameList[ni];
+      var scopeTag2 = gm2.scope === 'internal' ? '🏠' : '🌐';
+      var gh2 = encodeURIComponent(gm2.fullHash);
+      h2 += '<tr><td><code>' + esc(gm2.owner + '/' + gm2.game_id) + '</code></td>';
+      h2 += '<td><span style="cursor:pointer;color:var(--accent);text-decoration:underline" onclick="playAdminGame(\'' + esc(gm2.scope) + '\',\'' + encodeURIComponent(gm2.owner) + '\',\'' + encodeURIComponent(gm2.game_id || '') + '\',\'' + gh2 + '\')">' + esc(gm2.name) + '</span></td>';
+      h2 += '<td>' + scopeTag2 + ' ' + esc(gm2.scope) + '</td>';
+      h2 += '<td>' + (gm2.highscore ? '<span title="' + esc(gm2.highscore_player || '') + '">' + gm2.highscore + '</span>' : '<span style="opacity:0.3">—</span>') + '</td>';
+      h2 += '<td>' + formatSize(gm2.size) + '</td>';
+      h2 += '<td title="' + esc(gm2.updated) + '">' + ago(gm2.updated) + '</td>';
+      h2 += '<td class="actions">';
+      h2 += '<button class="btn-sm accent" onclick="assignGame(\'' + gh2 + '\',\'' + encodeURIComponent(gm2.owner) + '\')">Assign</button>';
+      h2 += '<button class="btn-sm danger" onclick="deleteGame(\'' + gh2 + '\')">Del</button>';
+      h2 += '</td></tr>';
     }
+    h2 += '</table>';
     el.innerHTML = h2;
   }
 }
