@@ -823,34 +823,102 @@ pub fn canvas(_args: &[Value]) -> Value {
                             renderProjectBar();
                         }
 
-                        async function saveProject() {
-                            function _slugify(s) {
-                                return String(s || '')
-                                    .trim()
-                                    .toLowerCase()
-                                    .replace(/[^a-z0-9]+/g, '-')
-                                    .replace(/^-+|-+$/g, '') || 'untitled';
-                            }
+                        function _authToken() {
+                            try { return (localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '').trim(); }
+                            catch(_) { return ''; }
+                        }
 
-                            async function _pushActiveToRelayInternal() {
+                        function _slugifyGameId(s) {
+                            return String(s || '')
+                                .trim()
+                                .toLowerCase()
+                                .replace(/[^a-z0-9]+/g, '-')
+                                .replace(/^-+|-+$/g, '') || 'untitled';
+                        }
+
+                        function _relayIdentityOf(g) {
+                            const owner = String((g && (g._sync_owner || g.owner)) || '').trim().toLowerCase();
+                            const gameId = String((g && (g._sync_game_id || g.game_id)) || '').trim().toLowerCase();
+                            return (owner && gameId) ? (owner + '|' + gameId) : '';
+                        }
+
+                        async function _shortContentHash(text) {
+                            const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(text || '')));
+                            const arr = new Uint8Array(buf);
+                            let hex = '';
+                            for (let i = 0; i < arr.length; i++) hex += arr[i].toString(16).padStart(2, '0');
+                            return hex.slice(0, 16);
+                        }
+
+                        async function _mergeActiveGameWithRelayInternal(owner, gameId, relayInfo) {
+                            try {
+                                const col = readGamesCollection();
+                                const activeId = col.active;
+                                const active = activeId ? (col.games || {})[activeId] : null;
+                                if (!active) return false;
+
+                                const relayOwner = String(owner || relayInfo?.owner || active._sync_owner || active.owner || '').trim();
+                                const relayGameId = String(gameId || relayInfo?.game_id || active._sync_game_id || active.game_id || _slugifyGameId(active.name || activeId)).trim();
+                                if (!relayOwner || !relayGameId) return false;
+
+                                active.scope = 'internal';
+                                active._scope = 'internal';
+                                active.owner = relayOwner;
+                                active.game_id = relayGameId;
+                                active._sync_owner = relayOwner;
+                                active._sync_game_id = relayGameId;
+                                active._sync_hash = relayInfo?.content_hash || relayInfo?.checksum || active._sync_hash || '';
+                                active.checksum = relayInfo?.checksum || relayInfo?.content_hash || active.checksum || '';
+                                active.version = relayInfo?.version || active.version || '';
+                                active.updated = nowIso();
+
+                                const activeIdentity = _relayIdentityOf(active);
+                                const activeHash = await _shortContentHash(active.content || '');
+                                for (const [id, other] of Object.entries(col.games || {})) {
+                                    if (id === activeId || !other) continue;
+                                    const sameIdentity = _relayIdentityOf(other) === activeIdentity;
+                                    const otherScope = other.scope || other._scope || 'internal';
+                                    let sameUnsyncedCopy = false;
+                                    if (!sameIdentity && otherScope !== 'external' && !_relayIdentityOf(other)) {
+                                        const sameSlug = _slugifyGameId(other.game_id || other.name || id) === relayGameId;
+                                        if (sameSlug) {
+                                            const otherHash = await _shortContentHash(other.content || '');
+                                            sameUnsyncedCopy = otherHash === activeHash;
+                                        }
+                                    }
+                                    if (sameIdentity || sameUnsyncedCopy) {
+                                        delete col.games[id];
+                                    }
+                                }
+                                col.games[activeId] = active;
+                                col.active = activeId;
+                                writeGamesCollection(col);
+                                dedupeLocalGames();
+                                renderProjectBar();
+                                return true;
+                            } catch(_) { return false; }
+                        }
+
+                        let __relayInternalSyncTimer = null;
+                        let __lastRelayInternalSyncKey = '';
+                        async function _syncActiveToRelayInternal(opts) {
+                            opts = opts || {};
+                            const immediate = !!opts.immediate;
+
+                            const run = async function() {
                                 try {
-                                    const token = (localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '').trim();
+                                    const token = _authToken();
                                     if (!token) return false;
+
                                     const colNow = readGamesCollection();
                                     const activeId = colNow.active;
-                                    const g = activeId ? colNow.games[activeId] : null;
-                                    if (!g || !g.content) return false;
-                                    var releaseVersion = g.version || '';
-                                    try {
-                                        const vr = await sdk.call('sys.version', ['hhmmss']);
-                                        releaseVersion = (vr && (vr.version || (vr.result && vr.result.version))) || releaseVersion;
-                                    } catch(_) {}
-                                    if (releaseVersion) {
-                                        g.version = String(releaseVersion);
-                                        g.updated = new Date().toISOString();
-                                        writeGamesCollection(colNow);
-                                    }
-                                    const gameId = g.game_id || g._sync_game_id || _slugify(g.name || activeId);
+                                    const active = activeId ? (colNow.games || {})[activeId] : null;
+                                    if (!active || !active.content) return false;
+
+                                    const gameId = active._sync_game_id || active.game_id || _slugifyGameId(active.name || activeId);
+                                    const syncKey = [activeId, gameId, active.name || '', active.updated || '', (active.content || '').length].join('|');
+                                    if (syncKey === __lastRelayInternalSyncKey) return true;
+
                                     const resp = await fetch('https://relay.slob.games/sync/internal/game/' + encodeURIComponent(gameId), {
                                         method: 'PUT',
                                         headers: {
@@ -858,15 +926,34 @@ pub fn canvas(_args: &[Value]) -> Value {
                                             'Authorization': 'Bearer ' + token,
                                         },
                                         body: JSON.stringify({
-                                            name: g.name || 'untitled',
-                                            content: g.content,
-                                            version: g.version || ''
+                                            name: active.name || 'untitled',
+                                            content: active.content,
+                                            version: active.version || ''
                                         })
                                     });
-                                    return !!resp.ok;
-                                } catch (_) { return false; }
+                                    if (!resp.ok) return false;
+                                    const data = await resp.json().catch(() => ({}));
+                                    await _mergeActiveGameWithRelayInternal(data.owner, data.game_id || gameId, data);
+                                    __lastRelayInternalSyncKey = syncKey;
+                                    return true;
+                                } catch(_) { return false; }
+                            };
+
+                            if (immediate) {
+                                if (__relayInternalSyncTimer) clearTimeout(__relayInternalSyncTimer);
+                                __relayInternalSyncTimer = null;
+                                return await run();
                             }
 
+                            if (__relayInternalSyncTimer) clearTimeout(__relayInternalSyncTimer);
+                            __relayInternalSyncTimer = setTimeout(() => {
+                                __relayInternalSyncTimer = null;
+                                run().catch(() => {});
+                            }, 900);
+                            return true;
+                        }
+
+                        async function saveProject() {
                             const col = readGamesCollection();
                             if (!col.active || !col.games[col.active]) {
                                 alert('Canvas is empty — nothing to save.');
@@ -881,7 +968,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 renderProjectBar();
                                 // Make saved games visible in Settings/Admin (relay-backed views).
                                 // If not logged in, save still succeeds locally.
-                                await _pushActiveToRelayInternal();
+                                await _syncActiveToRelayInternal({ immediate: true });
                                 renderActiveGameBadge();
                             }
                         }
@@ -1317,6 +1404,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 __lastPersistedContent = text;
                                 await sdk.call('sys.canvas', ['set', text]);
                                 await _autoNameActiveGame(text);
+                                _syncActiveToRelayInternal({ immediate: false }).catch(() => {});
                             } catch(_) {}
                         }
 
@@ -1436,6 +1524,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                         const _gameName = _titleMatch ? _titleMatch[1].trim() : 'untitled';
                                         await sdk.call('sys.canvas', ['new', _gameName]);
                                         await sdk.call('sys.canvas', ['set', _existingHtml]);
+                                        _syncActiveToRelayInternal({ immediate: false }).catch(() => {});
                                         renderProjectBar();
                                     }
                                 })();
@@ -1937,25 +2026,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     // Create a new game for the received project
                                     await sdk.call('sys.canvas', ['new', _name]);
                                     await sdk.call('sys.canvas', ['set', content]);
-                                    // Best effort: also store in relay internal so it appears in Settings/Admin.
-                                    try {
-                                        const token = (localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '').trim();
-                                        if (token) {
-                                            const gameId = _name
-                                                .trim()
-                                                .toLowerCase()
-                                                .replace(/[^a-z0-9]+/g, '-')
-                                                .replace(/^-+|-+$/g, '') || 'received';
-                                            await fetch('https://relay.slob.games/sync/internal/game/' + encodeURIComponent(gameId), {
-                                                method: 'PUT',
-                                                headers: {
-                                                    'Content-Type': 'application/json',
-                                                    'Authorization': 'Bearer ' + token,
-                                                },
-                                                body: JSON.stringify({ name: _name, content: content, version: 'v1' })
-                                            });
-                                        }
-                                    } catch (_) {}
+                                    await _syncActiveToRelayInternal({ immediate: true });
                                 }
                             } catch(_) {}
                             __lastContent = content;
