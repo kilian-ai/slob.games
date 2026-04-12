@@ -582,10 +582,10 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                         console.log('[Canvas/Agent/Browser] VFS read:', args.path, fileContent.length, 'chars');
                     } else if (args.action === 'write') {
                         let pvfs = {}; try { pvfs = JSON.parse(localStorage.getItem('traits.pvfs') || '{}'); } catch(_) {}
-                        lastContent = args.content || '';
+                        const pendingContent = args.content || '';
                         const isCanvas = args.path === 'canvas/app.html' || String(args.path).endsWith('/app.html');
                         if (isCanvas) {
-                            const chk = _validateSpriteIntegration(lastContent);
+                            const chk = _validateSpriteIntegration(pendingContent);
                             if (!chk.ok) {
                                 toolResult = JSON.stringify({
                                     ok: false,
@@ -599,8 +599,9 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                                 continue;
                             }
                         }
-                        pvfs[args.path] = args.content || '';
+                        pvfs[args.path] = pendingContent;
                         try { localStorage.setItem('traits.pvfs', JSON.stringify(pvfs)); } catch(_) {}
+                        lastContent = pendingContent;
                         if (isCanvas && lastContent) {
                             const _sdk = window._traitsSDK;
                             if (_sdk) {

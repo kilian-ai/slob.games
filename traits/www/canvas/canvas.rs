@@ -1189,7 +1189,28 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 });
                             }
                             window.traits = {
-                                call:   function(p,a)   { return sdk() && sdk().call(p, a||[]); },
+                                call:   function(p,a)   {
+                                    var callArgs = a || [];
+                                    var q = sdk() && sdk().call(p, callArgs);
+                                    if (p === 'sys.vfs' && Array.isArray(callArgs) && callArgs[0] === 'read') {
+                                        return Promise.resolve(q).then(function(res) {
+                                            if (typeof res === 'string') return { content: res };
+                                            if (!res || typeof res !== 'object') return { content: '' };
+                                            var cands = [
+                                                res.content,
+                                                res.value,
+                                                res.result && res.result.content,
+                                                res.result && res.result.value,
+                                                res.result && res.result.result && res.result.result.content,
+                                            ];
+                                            for (var i = 0; i < cands.length; i++) {
+                                                if (typeof cands[i] === 'string') return { content: cands[i] };
+                                            }
+                                            return { content: '' };
+                                        });
+                                    }
+                                    return q;
+                                },
                                 list:   function(ns)    { return sdk() && sdk().call('sys.list', ns?[ns]:[]); },
                                 info:   function(p)     { return sdk() && sdk().call('sys.info', [p]); },
                                 echo:   function(t)     { return sdk() && sdk().call('sys.echo', [t]); },
