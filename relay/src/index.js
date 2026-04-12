@@ -641,17 +641,25 @@ export class GameRoom {
         return json(rows);
       }
 
-      // GET /admin/games — list all games (external + internal) with owner info
+      // GET /admin/games — list all games (external + internal) with owner info + high scores
       if (url.pathname === "/admin/games" && request.method === "GET") {
         const user = await this.authUser(request);
         if (!user) return json({ error: "auth required" }, 401);
         const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
         if (role !== 'admin') return json({ error: "admin required" }, 403);
         const external = this.sql.exec(
-          "SELECT content_hash, name, size, updated, owner, game_id, scope FROM games ORDER BY owner ASC, name ASC"
+          `SELECT g.content_hash, g.name, g.size, g.updated, g.owner, g.game_id, g.scope,
+                  s.score AS highscore, s.player AS highscore_player
+           FROM games g
+           LEFT JOIN scores s ON s.game_hash = g.content_hash
+           ORDER BY g.owner ASC, g.name ASC`
         ).toArray();
         const internal = this.sql.exec(
-          "SELECT owner, game_id, name, content_hash, size, updated, forked_from_hash FROM internal_games ORDER BY owner ASC, game_id ASC"
+          `SELECT ig.owner, ig.game_id, ig.name, ig.content_hash, ig.size, ig.updated, ig.forked_from_hash,
+                  s.score AS highscore, s.player AS highscore_player
+           FROM internal_games ig
+           LEFT JOIN scores s ON s.game_hash = ig.content_hash
+           ORDER BY ig.owner ASC, ig.game_id ASC`
         ).toArray();
         return json({ external, internal });
       }
@@ -782,10 +790,15 @@ export class GameRoom {
         return json({ ok: true, username: target, deleted: key });
       }
 
-      // GET /games — list all external games
+      // GET /games — list all external games (with high score)
       if (url.pathname === "/games" && request.method === "GET") {
         const rows = this.sql.exec(
-          "SELECT content_hash, name, size, updated, owner, game_id, scope, version, checksum FROM games WHERE scope = 'external' ORDER BY name ASC"
+          `SELECT g.content_hash, g.name, g.size, g.updated, g.owner, g.game_id, g.scope, g.version, g.checksum,
+                  s.score AS highscore, s.player AS highscore_player
+           FROM games g
+           LEFT JOIN scores s ON s.game_hash = g.content_hash
+           WHERE g.scope = 'external'
+           ORDER BY g.name ASC`
         ).toArray().map((r) => this.normalizeExternalGameRow(r));
         return json(rows);
       }
@@ -815,12 +828,17 @@ export class GameRoom {
         });
       }
 
-      // GET /internal/games — list authenticated user's internal games
+      // GET /internal/games — list authenticated user's internal games (with high score)
       if (url.pathname === "/internal/games" && request.method === "GET") {
         const user = await this.authUser(request);
         if (!user) return json({ error: "auth required" }, 401);
         const rows = this.sql.exec(
-          "SELECT owner, game_id, name, content_hash, checksum, version, size, updated, forked_from_hash FROM internal_games WHERE owner = ? ORDER BY updated DESC",
+          `SELECT ig.owner, ig.game_id, ig.name, ig.content_hash, ig.checksum, ig.version, ig.size, ig.updated, ig.forked_from_hash,
+                  s.score AS highscore, s.player AS highscore_player
+           FROM internal_games ig
+           LEFT JOIN scores s ON s.game_hash = ig.content_hash
+           WHERE ig.owner = ?
+           ORDER BY ig.updated DESC`,
           user
         ).toArray();
         return json(rows);

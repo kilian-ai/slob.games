@@ -1374,6 +1374,14 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 let hex = '';
                                 for (let i = 0; i < arr.length; i++) hex += arr[i].toString(16).padStart(2, '0');
                                 window.__activeGameHash = hex.slice(0, 16);
+                                // Immediately push any already-received relay score for this game to the iframe
+                                const _relayScore = window.__highScores[window.__activeGameHash];
+                                if (_relayScore && _relayScore.score > 0) {
+                                    try {
+                                        const _vp = document.getElementById('phone-viewport');
+                                        if (_vp && _vp.contentWindow) _vp.contentWindow.postMessage({type:'highscore-update', score:_relayScore.score, player:_relayScore.player||''}, '*');
+                                    } catch(_) {}
+                                }
                             } catch(_) { window.__activeGameHash = null; }
                         }
                         window.addEventListener('message', (e) => {
@@ -2555,10 +2563,19 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     }
 
                                     if (data.type === 'scores') {
-                                        // Initial high score catalog from server
+                                        // Initial high score catalog from server — highest always wins
                                         for (const s of (data.scores || [])) {
                                             const cur = window.__highScores[s.game_hash] || {score:0, player:''};
-                                            if (s.score > cur.score) window.__highScores[s.game_hash] = {score: s.score, player: s.player || ''};
+                                            if (s.score > cur.score) {
+                                                window.__highScores[s.game_hash] = {score: s.score, player: s.player || ''};
+                                                // If this is the active game, notify the iframe immediately
+                                                if (s.game_hash === window.__activeGameHash) {
+                                                    try {
+                                                        const vp = document.getElementById('phone-viewport');
+                                                        if (vp && vp.contentWindow) vp.contentWindow.postMessage({type:'highscore-update', score:s.score, player:s.player||''}, '*');
+                                                    } catch(_) {}
+                                                }
+                                            }
                                         }
                                     }
 

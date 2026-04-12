@@ -313,11 +313,11 @@ function renderGames() {
   var all = [];
   for (var i = 0; i < gamesData.external.length; i++) {
     var g = gamesData.external[i];
-    all.push({ owner: g.owner || 'public', game_id: g.game_id || '', name: g.name, size: g.size, updated: g.updated, scope: g.scope || 'external', fullHash: g.content_hash || '', hash: (g.content_hash || '').slice(0, 8) });
+    all.push({ owner: g.owner || 'public', game_id: g.game_id || '', name: g.name, size: g.size, updated: g.updated, scope: g.scope || 'external', fullHash: g.content_hash || '', hash: (g.content_hash || '').slice(0, 8), highscore: g.highscore || 0, highscore_player: g.highscore_player || '' });
   }
   for (var j = 0; j < gamesData.internal.length; j++) {
     var ig = gamesData.internal[j];
-    all.push({ owner: ig.owner, game_id: ig.game_id, name: ig.name, size: ig.size, updated: ig.updated, scope: 'internal', fullHash: ig.content_hash || '', hash: (ig.content_hash || '').slice(0, 8), forked: ig.forked_from_hash ? true : false });
+    all.push({ owner: ig.owner, game_id: ig.game_id, name: ig.name, size: ig.size, updated: ig.updated, scope: 'internal', fullHash: ig.content_hash || '', hash: (ig.content_hash || '').slice(0, 8), forked: ig.forked_from_hash ? true : false, highscore: ig.highscore || 0, highscore_player: ig.highscore_player || '' });
   }
 
   status.textContent = all.length + ' game' + (all.length === 1 ? '' : 's') + ' (' + gamesData.external.length + ' external, ' + gamesData.internal.length + ' internal)';
@@ -338,7 +338,7 @@ function renderGames() {
       var ow = owners[oi];
       var gs = byOwner[ow];
       h += '<div class="group-header">' + esc(ow) + ' (' + gs.length + ')</div>';
-      h += '<table><tr><th>Identity</th><th>Name</th><th>Scope</th><th>Size</th><th>Updated</th><th></th></tr>';
+      h += '<table><tr><th>Identity</th><th>Name</th><th>Scope</th><th>HS</th><th>Size</th><th>Updated</th><th></th></tr>';
       for (var gi = 0; gi < gs.length; gi++) {
         var gm = gs[gi];
         var identity = esc(gm.owner + '/' + gm.game_id);
@@ -346,6 +346,7 @@ function renderGames() {
         var gh = encodeURIComponent(gm.fullHash);
         h += '<tr><td><code>' + identity + '</code></td><td><span style="cursor:pointer;color:var(--accent);text-decoration:underline" onclick="playAdminGame(\'' + esc(gm.scope) + '\',\'' + encodeURIComponent(gm.owner) + '\',\'' + encodeURIComponent(gm.game_id || '') + '\',\'' + gh + '\')">' + esc(gm.name) + '</span></td>';
         h += '<td>' + scopeTag + ' ' + esc(gm.scope) + '</td>';
+        h += '<td>' + (gm.highscore ? '<span title="' + esc(gm.highscore_player || '') + '">' + gm.highscore + '</span>' : '<span style="opacity:0.3">—</span>') + '</td>';
         h += '<td>' + formatSize(gm.size) + '</td>';
         h += '<td title="' + esc(gm.updated) + '">' + ago(gm.updated) + '</td>';
         h += '<td class="actions">';
@@ -369,7 +370,7 @@ function renderGames() {
     for (var ni = 0; ni < names.length; ni++) {
       var gn = byName[names[ni]];
       h2 += '<div class="group-header">' + esc(gn[0].name || names[ni]) + ' (' + gn.length + ')</div>';
-      h2 += '<table><tr><th>Owner/ID</th><th>Name</th><th>Scope</th><th>Size</th><th>Updated</th><th></th></tr>';
+      h2 += '<table><tr><th>Owner/ID</th><th>Name</th><th>Scope</th><th>HS</th><th>Size</th><th>Updated</th><th></th></tr>';
       for (var gi2 = 0; gi2 < gn.length; gi2++) {
         var gm2 = gn[gi2];
         var scopeTag2 = gm2.scope === 'internal' ? '🏠' : '🌐';
@@ -377,6 +378,7 @@ function renderGames() {
         h2 += '<tr><td><code>' + esc(gm2.owner + '/' + gm2.game_id) + '</code></td>';
         h2 += '<td><span style="cursor:pointer;color:var(--accent);text-decoration:underline" onclick="playAdminGame(\'' + esc(gm2.scope) + '\',\'' + encodeURIComponent(gm2.owner) + '\',\'' + encodeURIComponent(gm2.game_id || '') + '\',\'' + gh2 + '\')">' + esc(gm2.name) + '</span></td>';
         h2 += '<td>' + scopeTag2 + ' ' + esc(gm2.scope) + '</td>';
+        h2 += '<td>' + (gm2.highscore ? '<span title="' + esc(gm2.highscore_player || '') + '">' + gm2.highscore + '</span>' : '<span style="opacity:0.3">—</span>') + '</td>';
         h2 += '<td>' + formatSize(gm2.size) + '</td>';
         h2 += '<td title="' + esc(gm2.updated) + '">' + ago(gm2.updated) + '</td>';
         h2 += '<td class="actions">';
@@ -529,34 +531,26 @@ async function submitEditUser(usernameEnc) {
 async function deleteGame(hashEnc) {
   var hash = decodeURIComponent(hashEnc);
   if (!confirm('Delete game #' + hash.slice(0,8) + '? This cannot be undone.')) return;
+
+  // Optimistic removal immediately — delete is very likely to succeed.
+  gamesData.external = (gamesData.external || []).filter(function(g) {
+    return String(g.content_hash || '') !== hash;
+  });
+  gamesData.internal = (gamesData.internal || []).filter(function(g) {
+    return String(g.content_hash || '') !== hash;
+  });
+  renderGames();
+
+  // Fire server-side delete; only restore + alert on a real server error.
   try {
     var r = await apiDelete('/admin/games/' + hashEnc);
     if (!r.ok) {
-      alert(r.error || 'Delete failed');
-      return;
+      alert(r.error || 'Delete failed on server — refresh to see current state');
+      try { var gp = await apiFetch('/admin/games'); if (gp && gp.external) { gamesData = gp; renderGames(); } } catch(_) {}
     }
-
-    // Immediate optimistic removal to avoid stale/stuck UI.
-    gamesData.external = (gamesData.external || []).filter(function(g) {
-      return String(g.content_hash || '') !== hash;
-    });
-    gamesData.internal = (gamesData.internal || []).filter(function(g) {
-      return String(g.content_hash || '') !== hash;
-    });
-    renderGames();
-
-    // Re-fetch authoritative state in background to keep grouped data accurate.
-    try {
-      var gp = await apiFetch('/admin/games');
-      if (gp && gp.ok !== false && gp.external) {
-        gamesData = gp;
-        renderGames();
-      }
-    } catch (_) {
-      // Ignore refresh errors after successful delete; optimistic UI already updated.
-    }
-  } catch (e) {
-    alert((e && e.message) ? e.message : 'Delete failed');
+  } catch (_) {
+    // Network error (e.g. "Failed to fetch") — optimistic removal is already reflected;
+    // the delete almost certainly went through, so we silently swallow this.
   }
 }
 
