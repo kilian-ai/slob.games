@@ -1770,7 +1770,6 @@ pub fn canvas(_args: &[Value]) -> Value {
                             }
                             __lastContent = '';
                             __lastPersistedContent = '';
-                            _currentContent = '';
                             renderCanvas('');
                             renderProjectBar();
                         });
