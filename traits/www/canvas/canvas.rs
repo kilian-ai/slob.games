@@ -2644,19 +2644,34 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                                     if (data.type === 'games') {
                                         // Full game content from server (response to 'need')
-                                        const localHashes = (await localGamesWithHashes()).map(g => g.hash);
-                                        _syncing = true;
-                                        addSyncedGames(data.games, localHashes);
-                                        _syncing = false;
-                                    }
-
-                                    if (data.type === 'sync') {
-                                        // Real-time broadcast from another client
+                                        const hadGames = getGamesList().length > 0;
                                         const localHashes = (await localGamesWithHashes()).map(g => g.hash);
                                         _syncing = true;
                                         const added = addSyncedGames(data.games, localHashes);
                                         _syncing = false;
-                                        if (added > 0) console.log('[sync] received', added, 'new game(s)');
+                                        // Auto-activate first game when syncing into empty collection
+                                        if (added > 0 && !hadGames) {
+                                            const col = readGamesCollection();
+                                            const firstId = col.active || Object.keys(col.games || {})[0];
+                                            if (firstId) activateGame(firstId);
+                                        }
+                                    }
+
+                                    if (data.type === 'sync') {
+                                        // Real-time broadcast from another client
+                                        const hadGames = getGamesList().length > 0;
+                                        const localHashes = (await localGamesWithHashes()).map(g => g.hash);
+                                        _syncing = true;
+                                        const added = addSyncedGames(data.games, localHashes);
+                                        _syncing = false;
+                                        if (added > 0) {
+                                            console.log('[sync] received', added, 'new game(s)');
+                                            if (!hadGames) {
+                                                const col = readGamesCollection();
+                                                const firstId = col.active || Object.keys(col.games || {})[0];
+                                                if (firstId) activateGame(firstId);
+                                            }
+                                        }
                                     }
 
                                     if (data.type === 'scores') {
@@ -2847,10 +2862,16 @@ pub fn canvas(_args: &[Value]) -> Value {
                             const container = document.getElementById('canvas-container');
                             function scaleFrame() {
                                 if (!phoneFrame || phoneFrame.style.display === 'none') return;
-                                const available = container.clientHeight - 40; // 20px padding each side
+                                const available = container.clientHeight;
                                 const natural = phoneFrame.scrollHeight || 900;
                                 const scale = Math.min(1, available / natural);
                                 phoneFrame.style.transform = 'scale(' + scale + ')';
+                                // CSS transform doesn't affect layout — the layout box stays
+                                // at the original height, causing align-items:center to mis-position.
+                                // Use align-self + margin to center based on the visual (scaled) height.
+                                phoneFrame.style.alignSelf = 'flex-start';
+                                const visualH = natural * scale;
+                                phoneFrame.style.marginTop = Math.max(0, (available - visualH) / 2) + 'px';
                             }
                             window.addEventListener('resize', scaleFrame);
                             // Run after a short delay to ensure layout is settled
