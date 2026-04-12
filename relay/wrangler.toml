@@ -4,7 +4,8 @@ compatibility_date = "2024-09-23"
 workers_dev = true
 
 routes = [
-  { pattern = "relay.traits.build", custom_domain = true }
+  { pattern = "relay.traits.build", custom_domain = true },
+  { pattern = "relay.slob.games", custom_domain = true }
 ]
 
 [durable_objects]

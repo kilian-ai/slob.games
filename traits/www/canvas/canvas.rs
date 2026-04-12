@@ -1008,7 +1008,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 active.version = relayInfo?.version || active.version || '';
                                 active.updated = nowIso();
 
-                                _applySyncedResourcesToPvfs(relayInfo?.resources, 2 * 1024 * 1024);
+                                _applySyncedResourcesToPvfs(relayInfo?.resources || {}, 2 * 1024 * 1024);
 
                                 const activeIdentity = _relayIdentityOf(active);
                                 const activeHash = await _shortContentHash(active.content || '');
@@ -1055,8 +1055,8 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                                     const gameId = active._sync_game_id || active.game_id || _slugifyGameId(active.name || activeId);
                                     const pkg = _collectGameResourcesForContent(active.content || '', 2 * 1024 * 1024);
-                                    const pkgHash = await _shortContentHash(_stableGamePackageString(active.content || '', pkg.resources));
-                                    const syncKey = [activeId, gameId, active.name || '', active.updated || '', pkgHash, Object.keys(pkg.resources).length, pkg.bytes].join('|');
+                                    const contentOnlyHash = await _shortContentHash(active.content || '');
+                                    const syncKey = [activeId, gameId, active.name || '', active.updated || '', contentOnlyHash, Object.keys(pkg.resources).length].join('|');
                                     if (syncKey === __lastRelayInternalSyncKey) return true;
 
                                     const resp = await fetch('https://relay.slob.games/sync/internal/game/' + encodeURIComponent(gameId), {
@@ -2896,15 +2896,13 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 const result = [];
                                 for (const [id, g] of Object.entries(col.games || {})) {
                                     if (!g.content) continue;
+                                    const hash = await contentHash(g.content);
                                     const pkg = _collectGameResourcesForContent(g.content, MAX_PUSH_PACKAGE_SIZE);
-                                    const packageText = _stableGamePackageString(g.content, pkg.resources);
-                                    const hash = await contentHash(packageText);
                                     result.push({
                                         id,
                                         name: g.name || 'untitled',
                                         content: g.content,
-                                        resources: pkg.resources,
-                                        resource_bytes: pkg.bytes,
+                                        resource_paths: Object.keys(pkg.resources).sort(),
                                         hash,
                                         owner: g.owner || localUsername(),
                                         game_id: g.game_id || slugify(g.name || id),
@@ -2935,12 +2933,15 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     let added = 0;
                                     for (const g of games) {
                                         if (!g.content || !g.content_hash) continue;
-                                        const normalizedResources = _canonicalResourceMap(g.resources);
-                                        let resourceBudget = 0;
-                                        for (const [resPath, resVal] of Object.entries(normalizedResources)) {
-                                            if (resourceBudget + resVal.length > MAX_PUSH_PACKAGE_SIZE) continue;
-                                            resourceBudget += resVal.length;
-                                            files[resPath] = resVal;
+                                        // If relay sent full resources (legacy), write to VFS
+                                        if (g.resources && typeof g.resources === 'object' && !Array.isArray(g.resources)) {
+                                            const normalizedResources = _canonicalResourceMap(g.resources);
+                                            let resourceBudget = 0;
+                                            for (const [resPath, resVal] of Object.entries(normalizedResources)) {
+                                                if (resourceBudget + resVal.length > MAX_PUSH_PACKAGE_SIZE) continue;
+                                                resourceBudget += resVal.length;
+                                                files[resPath] = resVal;
+                                            }
                                         }
                                         const owner = g.owner || 'public';
                                         const gid = g.game_id || slugify(g.name || g.content_hash);
@@ -3013,13 +3014,22 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 var files = _readPvfsFiles();
                                 for (var i = 0; i < games.length; i++) {
                                     var g = games[i];
+                                    // Check resource_paths manifest from relay
+                                    if (Array.isArray(g.resource_paths)) {
+                                        for (var rp = 0; rp < g.resource_paths.length; rp++) {
+                                            var p2 = g.resource_paths[rp];
+                                            if (p2 && !files[p2] && allMissing.indexOf(p2) === -1) {
+                                                allMissing.push(p2);
+                                            }
+                                        }
+                                    }
+                                    // Also scan content for path references
                                     var content = g.content || '';
                                     if (!content) continue;
                                     var lowerContent = content.toLowerCase();
                                     var prefixes = ['sprites/', 'assets/', 'images/', 'textures/', 'audio/'];
                                     for (var p = 0; p < prefixes.length; p++) {
                                         if (lowerContent.indexOf(prefixes[p]) === -1) continue;
-                                        // Find all path references matching this prefix
                                         var re = new RegExp(prefixes[p].replace('/', '\\/') + '[a-zA-Z0-9_\\-]+\\.[a-zA-Z0-9]+', 'g');
                                         var matches = content.match(re) || [];
                                         for (var m = 0; m < matches.length; m++) {
@@ -3152,7 +3162,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                             g.scope !== 'internal' &&
                                             !serverHashSet.has(g.hash) &&
                                             g.content.length > 0 &&
-                                            (g.content.length + (g.resource_bytes || 0)) <= MAX_PUSH_PACKAGE_SIZE
+                                            g.content.length <= MAX_PUSH_PACKAGE_SIZE
                                         );
                                         if (toPush.length > 0) {
                                             ws.send(JSON.stringify({
@@ -3160,7 +3170,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                                 games: toPush.map(g => ({
                                                     name: g.name,
                                                     content: g.content,
-                                                    resources: g.resources || {},
+                                                    resources: {},
                                                     content_hash: g.hash,
                                                     checksum: g.hash,
                                                     owner: g.owner,

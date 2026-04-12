@@ -369,7 +369,28 @@ function parseResourcesField(raw) {
 }
 
 function encodeResourcesField(resources) {
-  return JSON.stringify(normalizeResourcesMap(resources));
+  // Store only path manifest (list of paths), not full data blobs.
+  // Clients are the single source of truth for resource data,
+  // transferred P2P via the relay WebSocket.
+  return JSON.stringify(resourcePaths(resources));
+}
+
+function resourcePaths(resources) {
+  // Accept either a full {path: dataUri} map or an already-stripped path list.
+  if (Array.isArray(resources)) return resources.filter(p => typeof p === 'string' && p);
+  const normalized = normalizeResourcesMap(resources);
+  return Object.keys(normalized).sort();
+}
+
+function parseManifestField(raw) {
+  // Read DB field — may be old-format {path:data} object or new-format ["path",...] array
+  try {
+    if (!raw) return [];
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (Array.isArray(parsed)) return parsed.filter(p => typeof p === 'string' && p);
+    if (typeof parsed === 'object') return Object.keys(parsed).sort();
+    return [];
+  } catch (_) { return []; }
 }
 
 function resourceBytes(resources) {
@@ -380,10 +401,9 @@ function resourceBytes(resources) {
 }
 
 async function packageHash16(content, resources) {
-  return sha256hex16(JSON.stringify({
-    content: String(content || ''),
-    resources: normalizeResourcesMap(resources),
-  }));
+  // Hash based on content only — resources are additive metadata,
+  // not included in identity hash since relay doesn't store resource data.
+  return sha256hex16(String(content || ''));
 }
 
 function makeReleaseVersion() {
@@ -521,7 +541,7 @@ export class GameRoom {
       scope: row?.scope || 'external',
       version: row?.version || '',
       checksum: row?.checksum || row?.content_hash || '',
-      resources: parseResourcesField(row?.resources),
+      resource_paths: parseManifestField(row?.resources),
     };
   }
 
@@ -921,10 +941,10 @@ export class GameRoom {
 
         const body = await request.json().catch(() => ({}));
         const version = String(body.version || row.version || makeReleaseVersion());
-        const resources = parseResourcesField(row.resources);
-        const hash = await packageHash16(row.content || '', resources);
+        const paths = parseManifestField(row.resources);
+        const hash = await packageHash16(row.content || '');
         const updated = new Date().toISOString();
-        const size = Number(row.size || 0) > 0 ? Number(row.size) : (row.content || '').length + resourceBytes(resources);
+        const size = (row.content || '').length;
 
         this.sql.exec("DELETE FROM games WHERE owner = ? AND game_id = ? AND scope = 'external'", user, gameId);
         this.sql.exec(
@@ -932,7 +952,7 @@ export class GameRoom {
            (content_hash, name, content, updated, size, owner, game_id, scope, version, checksum, resources)
            VALUES (?, ?, ?, ?, ?, ?, ?, 'external', ?, ?, ?)` ,
           hash, String(row.name || gameId).slice(0, 100), row.content, updated, size,
-          user, gameId, version, hash, encodeResourcesField(resources)
+          user, gameId, version, hash, JSON.stringify(paths)
         );
         this.trimExternalPool();
         this.sql.exec("UPDATE internal_games SET published = 1, version = ?, updated = ? WHERE owner = ? AND game_id = ?", version, updated, user, gameId);
@@ -948,7 +968,7 @@ export class GameRoom {
             version,
             name: String(row.name || gameId).slice(0, 100),
             content: row.content,
-            resources,
+            resource_paths: paths,
             updated
           }]
         });
@@ -998,17 +1018,17 @@ export class GameRoom {
 
         const gameId = this.deriveGameId(src.name, body.game_id);
         const version = String(body.version || makeReleaseVersion());
-        const srcResources = parseResourcesField(src.resources);
-        const checksum = await packageHash16(src.content, srcResources);
+        const srcPaths = parseManifestField(src.resources);
+        const checksum = await packageHash16(src.content);
         const updated = new Date().toISOString();
-        const size = src.content.length + resourceBytes(srcResources);
+        const size = src.content.length;
 
         this.sql.exec(
           `INSERT OR REPLACE INTO internal_games
            (owner, game_id, name, content, content_hash, checksum, version, resources, forked_from_hash, updated, size)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           user, gameId, String(body.name || src.name).slice(0, 100), src.content,
-          checksum, checksum, version, encodeResourcesField(srcResources), sourceHash, updated, size
+          checksum, checksum, version, JSON.stringify(srcPaths), sourceHash, updated, size
         );
         return json({ ok: true, owner: user, game_id: gameId, forked_from_hash: sourceHash, checksum, version });
       }
@@ -1038,14 +1058,14 @@ export class GameRoom {
         if (!content || typeof content !== 'string') return json({ error: "missing content" }, 400);
         if (content.length > MAX_GAME_SIZE) return json({ error: "too large" }, 413);
 
-        const resources = (body.resources === undefined)
-          ? parseResourcesField(existing[0].resources)
-          : normalizeResourcesMap(body.resources);
-        const size = content.length + resourceBytes(resources);
-        if (size > MAX_GAME_PACKAGE_SIZE) return json({ error: "too large" }, 413);
+        const paths = (body.resources === undefined)
+          ? parseManifestField(existing[0].resources)
+          : resourcePaths(body.resources);
+        const size = content.length;
+        if (size > MAX_GAME_SIZE) return json({ error: "too large" }, 413);
 
-        // Compute new hash
-        const newHash = await packageHash16(content, resources);
+        // Compute new hash (content only, resources are P2P metadata)
+        const newHash = await packageHash16(content);
         const name = body.name || existing[0].name;
         const owner = normalizeSlug(body.owner || 'public', 'public');
         const gameId = this.deriveGameId(name, body.game_id);
@@ -1062,7 +1082,7 @@ export class GameRoom {
            (content_hash, name, content, updated, size, owner, game_id, scope, version, checksum, resources)
            VALUES (?, ?, ?, ?, ?, ?, ?, 'external', ?, ?, ?)` ,
           newHash, name.slice(0, 100), content, updated, size,
-          owner, gameId, version, newHash, encodeResourcesField(resources)
+          owner, gameId, version, newHash, JSON.stringify(paths)
         );
         this.trimExternalPool();
 
@@ -1078,7 +1098,7 @@ export class GameRoom {
             version,
             name: name.slice(0, 100),
             content,
-            resources,
+            resource_paths: paths,
             updated
           }]
         });
@@ -1126,12 +1146,11 @@ export class GameRoom {
         ).toArray()[0];
         const wasPublished = !!(prev && Number(prev.published) === 1);
         const willPublish = typeof body.published === 'boolean' ? body.published : wasPublished;
-        const resources = (body.resources === undefined)
-          ? parseResourcesField(prev && prev.resources)
-          : normalizeResourcesMap(body.resources);
-        const size = content.length + resourceBytes(resources);
-        if (size > MAX_GAME_PACKAGE_SIZE) return json({ error: 'too large' }, 413);
-        const checksum = await packageHash16(content, resources);
+        const paths = (body.resources === undefined)
+          ? parseManifestField(prev && prev.resources)
+          : resourcePaths(body.resources);
+        const size = content.length;
+        const checksum = await packageHash16(content);
 
         this.sql.exec(
           `INSERT OR REPLACE INTO internal_games
@@ -1141,7 +1160,7 @@ export class GameRoom {
              COALESCE((SELECT forked_from_hash FROM internal_games WHERE owner = ? AND game_id = ?), NULL),
              ?, ?)`,
           user, gameId, name, content, checksum, checksum, version, willPublish ? 1 : 0,
-          encodeResourcesField(resources), user, gameId, updated, size
+          JSON.stringify(paths), user, gameId, updated, size
         );
 
         if (willPublish) {
@@ -1150,7 +1169,7 @@ export class GameRoom {
             `INSERT INTO games
              (content_hash, name, content, updated, size, owner, game_id, scope, version, checksum, resources)
              VALUES (?, ?, ?, ?, ?, ?, ?, 'external', ?, ?, ?)`,
-            checksum, name, content, updated, size, user, gameId, version, checksum, encodeResourcesField(resources)
+            checksum, name, content, updated, size, user, gameId, version, checksum, JSON.stringify(paths)
           );
           this.trimExternalPool();
           const msg = JSON.stringify({
@@ -1164,7 +1183,7 @@ export class GameRoom {
               version,
               name,
               content,
-              resources,
+              resource_paths: paths,
               updated
             }]
           });
@@ -1188,7 +1207,8 @@ export class GameRoom {
           owner, gameId
         ).toArray()[0];
         if (!row) return json({ error: 'not found' }, 404);
-        row.resources = parseResourcesField(row.resources);
+        row.resource_paths = parseManifestField(row.resources);
+        delete row.resources;
         return json(row);
       }
 
@@ -1263,9 +1283,9 @@ export class GameRoom {
           if (!g.content_hash || typeof g.content_hash !== 'string') continue;
           if (g.content.length > MAX_GAME_SIZE) continue;
           if (g.content.length === 0) continue;
-          const resources = normalizeResourcesMap(g.resources || {});
-          const size = g.content.length + resourceBytes(resources);
-          if (size > MAX_GAME_PACKAGE_SIZE) continue;
+          const paths = resourcePaths(g.resources || {});
+          const size = g.content.length;
+          if (size > MAX_GAME_SIZE) continue;
           if (count >= MAX_TOTAL_GAMES) {
             // Hard safety cap: evict the oldest external row to make room.
             const oldest = this.sql.exec(
@@ -1277,13 +1297,12 @@ export class GameRoom {
           }
 
           // Verify content hash matches (don't trust client blindly)
-          const verifiedPackage = await packageHash16(g.content, resources);
-          const verifiedContentOnly = await sha256hex16(g.content);
-          if (verifiedPackage !== g.content_hash && verifiedContentOnly !== g.content_hash) continue;
+          const verifiedHash = await packageHash16(g.content);
+          if (verifiedHash !== g.content_hash) continue;
 
           // Check if already stored
           const exists = this.sql.exec(
-            "SELECT 1 FROM games WHERE content_hash = ?", verifiedPackage
+            "SELECT 1 FROM games WHERE content_hash = ?", verifiedHash
           ).toArray();
           if (exists.length > 0) continue;
 
@@ -1307,23 +1326,23 @@ export class GameRoom {
             `INSERT INTO games
              (content_hash, name, content, updated, size, owner, game_id, scope, version, checksum, resources)
              VALUES (?, ?, ?, ?, ?, ?, ?, 'external', ?, ?, ?)`,
-            verifiedPackage, g.name.slice(0, 100), g.content, updated, size,
-            owner, gameId, version, verifiedPackage, encodeResourcesField(resources)
+            verifiedHash, g.name.slice(0, 100), g.content, updated, size,
+            owner, gameId, version, verifiedHash, JSON.stringify(paths)
           );
           const trimmed = this.trimExternalPool();
           if (trimmed > 0) {
             count = Math.max(0, count - trimmed);
           }
           added.push({
-            content_hash: verifiedPackage,
-            checksum: verifiedPackage,
+            content_hash: verifiedHash,
+            checksum: verifiedHash,
             owner,
             game_id: gameId,
             scope: 'external',
             version,
             name: g.name.slice(0, 100),
             content: g.content,
-            resources,
+            resource_paths: paths,
             updated
           });
           count++;
