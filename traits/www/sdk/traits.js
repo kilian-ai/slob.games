@@ -2045,21 +2045,6 @@ export class Traits {
             if (!fullInstructions) {
                 fullInstructions = 'You are a concise, helpful voice assistant powered by slob.games. Keep responses short and conversational. You have access to function-calling tools that execute locally via WebAssembly.';
             }
-            // Browser-local continuity fallback: include recent local voice history for this session.
-            // This keeps context even when sys.chat is unavailable in WASM-only mode.
-            try {
-                const hist = _readLocalVoiceHistory(voiceSessionId);
-                if (hist.length > 0) {
-                    const recent = hist.slice(-10).map((m) => {
-                        const role = m.role === 'assistant' ? 'assistant' : 'user';
-                        const txt = String(m.content || '').replace(/\s+/g, ' ').trim();
-                        return `  ${role}: ${txt.slice(0, 240)}`;
-                    }).join('\n');
-                    if (recent) {
-                        fullInstructions += '\n\nRecent browser voice context (same persistent session):\n' + recent;
-                    }
-                }
-            } catch (_) {}
             // Canvas page prefix (visual context cue)
             if (currentPage === 'canvas') {
                 const canvasPrefix =
@@ -2285,7 +2270,7 @@ export class Traits {
                         }
                         _voiceLastUserTranscript = (msg.transcript || '').trim();
                         _appendLocalVoiceHistory(voiceSessionId, 'user', _voiceLastUserTranscript);
-                        try { await _self.call('sys.chat', ['append', voiceSessionId, 'user', _voiceLastUserTranscript]); } catch(_) {}
+                        try { await _self.call('sys.voice.history', ['append', 'user', _voiceLastUserTranscript]); } catch(_) {}
                     }
 
                     // ── Model response transcript ──
@@ -2295,7 +2280,7 @@ export class Traits {
                         }
                         if (msg.transcript) {
                             _appendLocalVoiceHistory(voiceSessionId, 'assistant', msg.transcript.trim());
-                            try { await _self.call('sys.chat', ['append', voiceSessionId, 'assistant', msg.transcript.trim()]); } catch(_) {}
+                            try { await _self.call('sys.voice.history', ['append', 'assistant', msg.transcript.trim()]); } catch(_) {}
                             _dispatchVoiceEvent('response', { text: msg.transcript.trim() });
                         }
                     }

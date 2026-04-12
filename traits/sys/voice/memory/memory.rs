@@ -1,4 +1,5 @@
 use serde_json::{json, Value};
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::Write;
 
 /// Max notes to keep (older ones must be explicitly removed).
@@ -78,6 +79,7 @@ pub fn read_memory_notes() -> Vec<String> {
 
 // ── Storage ──
 
+#[cfg(not(target_arch = "wasm32"))]
 fn memory_path() -> std::path::PathBuf {
     let base = if std::path::Path::new("/data").is_dir() {
         std::path::PathBuf::from("/data")
@@ -87,6 +89,7 @@ fn memory_path() -> std::path::PathBuf {
     base.join("voice_memory.json")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn load_notes() -> Vec<Value> {
     let path = memory_path();
     match std::fs::read_to_string(&path) {
@@ -95,12 +98,28 @@ fn load_notes() -> Vec<Value> {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+fn load_notes() -> Vec<Value> {
+    match kernel_logic::platform::vfs_read("voice/memory.json") {
+        Some(s) => serde_json::from_str(&s).unwrap_or_default(),
+        None => Vec::new(),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn save_notes(notes: &[Value]) {
     let path = memory_path();
     if let Ok(json) = serde_json::to_string_pretty(notes) {
         if let Ok(mut f) = std::fs::File::create(&path) {
             let _ = f.write_all(json.as_bytes());
         }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn save_notes(notes: &[Value]) {
+    if let Ok(json) = serde_json::to_string(notes) {
+        kernel_logic::platform::vfs_write("voice/memory.json", &json);
     }
 }
 

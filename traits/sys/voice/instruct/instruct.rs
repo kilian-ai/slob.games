@@ -107,41 +107,37 @@ pub fn build_instructions(agent: &str, session_id: Option<&str>) -> String {
         }
     }
 
-    // 3. Recent conversation history from sys.chat
-    if let Some(sid) = session_id {
-        if let Some(result) =
-            kernel_logic::platform::dispatch("sys.chat", &[json!("get"), json!(sid)])
-        {
-            if result.get("ok").and_then(|v| v.as_bool()) == Some(true) {
-                if let Some(messages) = result
-                    .pointer("/session/messages")
-                    .and_then(|v| v.as_array())
-                {
-                    let recent: Vec<&Value> = messages
-                        .iter()
-                        .rev()
-                        .take(6)
-                        .collect::<Vec<_>>()
-                        .into_iter()
-                        .rev()
-                        .collect();
-                    if !recent.is_empty() {
-                        let mut ctx = String::from("Recent conversation context (for continuity):\n");
-                        for msg in &recent {
-                            let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("?");
-                            let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
-                            let short = if content.len() > 200 {
-                                let mut end = 200;
-                                while !content.is_char_boundary(end) { end -= 1; }
-                                &content[..end]
-                            } else {
-                                content
-                            };
-                            ctx.push_str(&format!("  {}: {}\n", role, short));
-                        }
-                        parts.push(ctx);
-                    }
+    // 3. Recent conversation history from sys.voice.history (VFS-backed, works on WASM+native)
+    if let Some(result) =
+        kernel_logic::platform::dispatch("sys.voice.history", &[json!("get"), json!(20)])
+    {
+        if let Some(turns) = result.get("turns").and_then(|v| v.as_array()) {
+            let total = result
+                .get("total")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            if !turns.is_empty() {
+                let raw_count = 10usize.min(turns.len());
+                let omitted = total.saturating_sub(raw_count);
+                let mut ctx = String::from("Recent conversation history:\n");
+                if omitted > 0 {
+                    ctx.push_str(&format!("  [{} earlier turns omitted]\n", omitted));
                 }
+                for t in &turns[turns.len().saturating_sub(raw_count)..] {
+                    let role = t.get("role").and_then(|v| v.as_str()).unwrap_or("?");
+                    let text = t.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                    let short = if text.len() > 300 {
+                        let mut end = 300;
+                        while !text.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        &text[..end]
+                    } else {
+                        text
+                    };
+                    ctx.push_str(&format!("  {}: {}\n", role, short));
+                }
+                parts.push(ctx);
             }
         }
     }

@@ -1,0 +1,22 @@
+[trait]
+description = "Rolling voice transcript store — appended every turn, injected into the next session as conversation context"
+version = "v260411"
+author = "system"
+tags = ["sys", "voice", "history", "context", "memory"]
+
+[signature]
+params = [
+  { name = "action", type = "string", description = "append | get | clear", required = true, example = "get" },
+  { name = "role",   type = "string", description = "For append: user or assistant", required = false, example = "user" },
+  { name = "text",   type = "string", description = "For append: the transcript text", required = false },
+]
+
+[signature.returns]
+type = "map"
+description = "{ok: bool, turns?: [{role, text, ts}], total?: int, count?: int}"
+
+[implementation]
+language = "rust"
+source = "builtin"
+entry = "voice_history"
+wasm = true

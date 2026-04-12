@@ -1,0 +1,21 @@
+{
+  "trait": "sys.voice.history",
+  "description": "Voice transcript rolling store",
+  "features": [
+    {
+      "name": "Append and retrieve turns",
+      "description": "Appending a turn and getting it back returns the same content",
+      "tests": [
+        {
+          "name": "append then get returns the turn",
+          "steps": [
+            { "call": "sys.voice.history", "args": ["clear"] },
+            { "call": "sys.voice.history", "args": ["append", "user", "hello world"] },
+            { "call": "sys.voice.history", "args": ["get", 1] },
+            { "assert": "result.turns[0].text == 'hello world'" }
+          ]
+        }
+      ]
+    }
+  ]
+}

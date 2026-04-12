@@ -19,3 +19,4 @@ description = "{ok: bool, notes: [{id, text, created}], count: int}"
 language = "rust"
 source = "builtin"
 entry = "voice_memory"
+wasm = true
