@@ -490,6 +490,19 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
             }
         }
     };
+    const _generatedSpritePaths = new Set();
+    function _validateSpriteIntegration(html) {
+        const text = String(html || '');
+        const sprites = Array.from(_generatedSpritePaths);
+        if (!sprites.length) return { ok: true, missingSprites: [], hasLoader: true };
+        const missingSprites = sprites.filter(p => !text.includes(p));
+        const hasLoader = /traits\.loadVFSImage\s*\(|loadVFSImage\s*\(/.test(text);
+        return {
+            ok: missingSprites.length === 0 && hasLoader,
+            missingSprites,
+            hasLoader,
+        };
+    }
     const LLM_IMAGE_TOOL = {
         type: 'function',
         function: {
@@ -569,10 +582,25 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                         console.log('[Canvas/Agent/Browser] VFS read:', args.path, fileContent.length, 'chars');
                     } else if (args.action === 'write') {
                         let pvfs = {}; try { pvfs = JSON.parse(localStorage.getItem('traits.pvfs') || '{}'); } catch(_) {}
-                        pvfs[args.path] = args.content || '';
-                        try { localStorage.setItem('traits.pvfs', JSON.stringify(pvfs)); } catch(_) {}
                         lastContent = args.content || '';
                         const isCanvas = args.path === 'canvas/app.html' || String(args.path).endsWith('/app.html');
+                        if (isCanvas) {
+                            const chk = _validateSpriteIntegration(lastContent);
+                            if (!chk.ok) {
+                                toolResult = JSON.stringify({
+                                    ok: false,
+                                    error: 'Sprite integration incomplete. Generated sprites must be wired into canvas/app.html before write.',
+                                    missing_sprites: chk.missingSprites,
+                                    missing_loader: !chk.hasLoader,
+                                    required_fix: 'Use traits.loadVFSImage(path) and draw every generated sprite path listed above before calling sys_vfs write again.'
+                                });
+                                console.warn('[Canvas/Agent/Browser] Rejecting write: sprite integration incomplete', chk);
+                                messages.push({ role: 'tool', tool_call_id: tc.id, content: toolResult });
+                                continue;
+                            }
+                        }
+                        pvfs[args.path] = args.content || '';
+                        try { localStorage.setItem('traits.pvfs', JSON.stringify(pvfs)); } catch(_) {}
                         if (isCanvas && lastContent) {
                             const _sdk = window._traitsSDK;
                             if (_sdk) {
@@ -633,6 +661,7 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                             const imgResult = await _sdk.call('llm.image', imgArgs);
                             const r = imgResult?.result || imgResult;
                             if (r?.ok) {
+                                if (r.path) _generatedSpritePaths.add(String(r.path));
                                 // Also sync the generated image to localStorage pvfs
                                 if (r.path && r.format === 'data_url') {
                                     try {
@@ -643,7 +672,7 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                                 }
                                 toolResult = JSON.stringify({ ok: true, path: r.path, size: r.size, mode: r.mode,
                                     IMPORTANT: 'Image saved to VFS. You MUST now call sys_vfs write with the COMPLETE updated canvas/app.html that loads this image. The image is NOT visible until you rewrite the HTML.',
-                                    load_code: "async function loadVFSImage(path) { const r = await traits.call('sys.vfs', ['read', path]); const img = new Image(); img.src = r.content || r.result?.content || r; return img; }" });
+                                    load_code: "const img = await traits.loadVFSImage('" + String(r.path || 'sprites/example.png') + "');" });
                                 console.log('[Canvas/Agent/Browser] llm_image OK:', r.path);
                             } else {
                                 toolResult = JSON.stringify({ ok: false, error: r?.error || 'llm.image failed' });
@@ -657,9 +686,10 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                                 body: JSON.stringify({ args: [args.prompt || '', args.path || '', args.size || '', args.model || 'dall-e-2', args.mode || 'sprite'] })
                             });
                             const imgData = await imgResp.json();
+                            if (imgData?.ok && imgData.path) _generatedSpritePaths.add(String(imgData.path));
                             toolResult = JSON.stringify(imgData?.ok ? { ok: true, path: imgData.path, size: imgData.size, mode: imgData.mode,
                                 IMPORTANT: 'Image saved to VFS. You MUST now call sys_vfs write with the COMPLETE updated canvas/app.html that loads this image.',
-                                load_code: "async function loadVFSImage(path) { const r = await traits.call('sys.vfs', ['read', path]); const img = new Image(); img.src = r.content || r.result?.content || r; return img; }" }
+                                load_code: "const img = await traits.loadVFSImage('" + String(imgData.path || 'sprites/example.png') + "');" }
                                 : { ok: false, error: imgData?.error || 'llm.image failed' });
                         }
                     } catch(e) {

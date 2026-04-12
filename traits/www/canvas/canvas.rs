@@ -1156,9 +1156,28 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 return outCanvas;
                             }
                             function _loadVFSImage(path, opts) {
+                                function _extractContent(resp) {
+                                    if (typeof resp === 'string') return resp;
+                                    if (!resp || typeof resp !== 'object') return '';
+                                    var cands = [
+                                        resp.content,
+                                        resp.value,
+                                        resp.result && resp.result.content,
+                                        resp.result && resp.result.value,
+                                        resp.result && resp.result.result && resp.result.result.content,
+                                    ];
+                                    for (var i = 0; i < cands.length; i++) {
+                                        if (typeof cands[i] === 'string' && cands[i]) return cands[i];
+                                    }
+                                    return '';
+                                }
                                 return (sdk() && sdk().call('sys.vfs', ['read', path])).then(function(r) {
-                                    var src = (r && (r.content || (r.result && r.result.content))) || r;
+                                    var src = _extractContent(r);
                                     return new Promise(function(resolve, reject) {
+                                        if (typeof src !== 'string' || !src) {
+                                            reject(new Error('Invalid VFS image payload for ' + path));
+                                            return;
+                                        }
                                         var img = new Image();
                                         img.onload = function() {
                                             try { resolve(_cropSpriteImage(img, opts)); }
