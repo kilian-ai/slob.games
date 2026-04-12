@@ -317,6 +317,8 @@ const CANVAS_AGENT_SYSTEM =
     '  [ ] Mute button on screen                           (RULE 4)\n' +
     '  [ ] Sprites generated for characters/enemies/items  (RULE 5)\n' +
     '  [ ] traits.loadVFSImage or equivalent used          (RULE 5)\n' +
+    '  [ ] Layout adapts to small screens and orientation  (RESPONSIVE)\n' +
+    '  [ ] Top/bottom HUD safe with browser bars visible   (RESPONSIVE)\n' +
     'If ANY box is unchecked, implement it BEFORE writing. No partial games.\n' +
     '================================================================\n\n' +
     'You are a canvas code executor. NEVER explain, suggest, or answer in text. ALWAYS call tools immediately.\n\n' +
@@ -324,9 +326,12 @@ const CANVAS_AGENT_SYSTEM =
     '1. sys_vfs(action=read, path=canvas/app.html) — read the current file\n' +
     '2. Apply the requested change to the full HTML (honoring ALL rules above)\n' +
     '3. sys_vfs(action=write, path=canvas/app.html, content=<COMPLETE updated HTML>) — write the whole file, never a diff\n\n' +
-    'DIMENSIONS: 390px wide × 844px tall — fills the phone viewport.\n' +
-    '- body/root: width:390px; height:844px; overflow:hidden; margin:0\n' +
-    '- <canvas>: set attribute width=390 height=844 and CSS width:390px;height:844px\n\n' +
+    'RESPONSIVE MOBILE REQUIREMENT (MANDATORY):\n' +
+    '- Games must adapt to different screen sizes and orientation changes without clipping HUD/gameplay.\n' +
+    '- Do NOT hardcode CSS to 390x844 only. Use responsive sizing with dynamic viewport units and safe-area insets.\n' +
+    '- Keep critical HUD away from browser bars: use top/bottom padding with env(safe-area-inset-top) and env(safe-area-inset-bottom).\n' +
+    '- Handle mobile browser chrome changes: update layout on resize/visualViewport changes so top/bottom content never gets hidden.\n' +
+    '- Target reference viewport is 390x844, but scale/fit to actual viewport live.\n\n' +
     'RENDERING (HTML injected into div#phone-viewport):\n' +
     '- Get canvas: document.querySelector(\'canvas\') — scripts run inside an iframe, no #phone-viewport prefix needed\n' +
     '- Use let (NEVER const) for any reassigned variable. const in loops crashes silently.\n' +

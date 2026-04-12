@@ -21,6 +21,18 @@ pub fn canvas(_args: &[Value]) -> Value {
                         .canvas-header h1 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #8899a6; }
                         .canvas-header h1 .accent { color: var(--accent); text-shadow: 0 0 8px rgba(0,224,255,0.4); }
                         .canvas-header .actions { display: flex; gap: 8px; }
+                        .viewport-controls {
+                            display: flex; align-items: center; gap: 8px;
+                            color: #6f8190; font-size: 10px;
+                            text-transform: uppercase; letter-spacing: 0.04em;
+                        }
+                        .viewport-controls .vc-readout {
+                            color: #9bb6c7; min-width: 78px; text-align: right;
+                        }
+                        .viewport-controls input[type="range"] {
+                            width: 82px;
+                            accent-color: #00e0ff;
+                        }
                         .canvas-header button {
                             background: transparent; border: 1px solid #1e1e2e;
                             color: #8899a6; padding: 4px 12px; border-radius: 4px;
@@ -413,6 +425,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             #share-modal {
                                 left: 8px; right: 8px; bottom: 8px; width: auto;
                             }
+                            .viewport-controls { display: none !important; }
                         }
 
                         /* Hide mobile-only FAB items on desktop */
@@ -428,6 +441,12 @@ pub fn canvas(_args: &[Value]) -> Value {
                 div .canvas-header {
                     h1 { "slob.games " span .accent { "canvas" } }
                     div .actions {
+                        div .viewport-controls {
+                            span { "Viewport" }
+                            input #viewportWidth type="range" min="300" max="430" step="2" value="398" title="Viewport width" aria-label="Viewport width" {}
+                            input #viewportHeight type="range" min="560" max="920" step="4" value="844" title="Viewport height" aria-label="Viewport height" {}
+                            span #viewportReadout .vc-readout { "398x844" }
+                        }
                         select #game-select { option value="" disabled selected { "no games" } }
                         button #btnSave .save-btn { "Save" }
                         button #btnClear { "Clear" }
@@ -1043,7 +1062,53 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                         const phoneFrame    = document.getElementById('phone-frame');
                         const phoneViewport = document.getElementById('phone-viewport');
+                        const viewportWidth = document.getElementById('viewportWidth');
+                        const viewportHeight = document.getElementById('viewportHeight');
+                        const viewportReadout = document.getElementById('viewportReadout');
                         let _currentContent = '';
+
+                        function applyPhoneViewportSize(w, h) {
+                            const width = Math.max(300, Math.min(430, Number(w) || 398));
+                            const height = Math.max(560, Math.min(920, Number(h) || 844));
+                            if (phoneViewport) {
+                                phoneViewport.style.width = width + 'px';
+                                phoneViewport.style.height = height + 'px';
+                            }
+                            if (phoneFrame) {
+                                phoneFrame.style.width = (width + 32) + 'px';
+                            }
+                            if (viewportWidth) viewportWidth.value = String(width);
+                            if (viewportHeight) viewportHeight.value = String(height);
+                            if (viewportReadout) viewportReadout.textContent = width + 'x' + height;
+                            try { localStorage.setItem('traits.canvas.viewport', JSON.stringify({ w: width, h: height })); } catch(_) {}
+                            window.dispatchEvent(new Event('resize'));
+                        }
+
+                        (function initPhoneViewportSize() {
+                            let w = 398, h = 844;
+                            try {
+                                const raw = localStorage.getItem('traits.canvas.viewport');
+                                if (raw) {
+                                    const saved = JSON.parse(raw);
+                                    if (saved && typeof saved === 'object') {
+                                        if (saved.w != null) w = Number(saved.w) || w;
+                                        if (saved.h != null) h = Number(saved.h) || h;
+                                    }
+                                }
+                            } catch(_) {}
+                            applyPhoneViewportSize(w, h);
+                        })();
+
+                        if (viewportWidth) {
+                            viewportWidth.addEventListener('input', () => {
+                                applyPhoneViewportSize(viewportWidth.value, viewportHeight ? viewportHeight.value : 844);
+                            });
+                        }
+                        if (viewportHeight) {
+                            viewportHeight.addEventListener('input', () => {
+                                applyPhoneViewportSize(viewportWidth ? viewportWidth.value : 398, viewportHeight.value);
+                            });
+                        }
 
                         // Click on the phone frame focuses the iframe for keyboard input
                         phoneFrame.addEventListener('click', () => {
