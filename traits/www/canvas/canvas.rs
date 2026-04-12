@@ -601,12 +601,23 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 for (var n in byIdentity) {
                                     var ids = byIdentity[n];
                                     if (ids.length <= 1) continue;
-                                    // Sort: most content first, then newest updated
+                                    // Sort preference: internal edits first, then newest updated,
+                                    // then content length only as a final tiebreaker.
                                     ids.sort(function(a, b) {
-                                        var la = (col.games[a].content || '').length;
-                                        var lb = (col.games[b].content || '').length;
+                                        var ga = col.games[a] || {};
+                                        var gb = col.games[b] || {};
+                                        var sa = (ga.scope || ga._scope || 'internal');
+                                        var sb = (gb.scope || gb._scope || 'internal');
+                                        var ia = (sa === 'internal') ? 1 : 0;
+                                        var ib = (sb === 'internal') ? 1 : 0;
+                                        if (ib !== ia) return ib - ia;
+                                        var ua = String(ga.updated || '');
+                                        var ub = String(gb.updated || '');
+                                        if (ub !== ua) return ub.localeCompare(ua);
+                                        var la = (ga.content || '').length;
+                                        var lb = (gb.content || '').length;
                                         if (lb !== la) return lb - la;
-                                        return (col.games[b].updated || '').localeCompare(col.games[a].updated || '');
+                                        return String(b).localeCompare(String(a));
                                     });
                                     var keep = ids[0];
                                     for (var i = 1; i < ids.length; i++) {
@@ -661,17 +672,26 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     var ids = byName[nk];
                                     if (!ids || ids.length <= 1) continue;
 
-                                    // Prefer relay-identity entries, then larger content, then most recently updated.
+                                    // Prefer internal edits, then relay identity, then most recently updated,
+                                    // then content length only as a last tiebreaker.
                                     ids.sort(function(a, b) {
                                         var ga = games[a] || {};
                                         var gb = games[b] || {};
+                                        var sca = (ga.scope || ga._scope || 'internal');
+                                        var scb = (gb.scope || gb._scope || 'internal');
+                                        var ia = (sca === 'internal') ? 1 : 0;
+                                        var ib = (scb === 'internal') ? 1 : 0;
+                                        if (ib !== ia) return ib - ia;
                                         var sa = ((ga._sync_owner || ga.owner) && (ga._sync_game_id || ga.game_id)) ? 1 : 0;
                                         var sb = ((gb._sync_owner || gb.owner) && (gb._sync_game_id || gb.game_id)) ? 1 : 0;
                                         if (sb !== sa) return sb - sa;
+                                        var ua = String(ga.updated || '');
+                                        var ub = String(gb.updated || '');
+                                        if (ub !== ua) return ub.localeCompare(ua);
                                         var la = (ga.content || '').length;
                                         var lb = (gb.content || '').length;
                                         if (lb !== la) return lb - la;
-                                        return String(gb.updated || '').localeCompare(String(ga.updated || ''));
+                                        return String(b).localeCompare(String(a));
                                     });
 
                                     var keep = ids[0];
