@@ -327,15 +327,20 @@ const CANVAS_AGENT_SYSTEM =
     '- No external dependencies — inline all CSS and JS\n\n' +
     'SPRITE / IMAGE GENERATION — llm_image tool:\n' +
     '- Call llm_image BEFORE writing canvas/app.html to generate sprites the game needs.\n' +
-    '- Typical workflow: 1) Read existing HTML, 2) Call llm_image for each needed sprite, 3) Write HTML that references the generated VFS paths.\n' +
-    '- Modes: sprite (single game sprite), sheet (2x2 character ref — front/back/left/right), icon (UI icon), bg (panoramic background), tile (seamless texture).\n' +
+    '- CRITICAL WORKFLOW: 1) Read existing HTML, 2) Call llm_image for each needed sprite, 3) You MUST call sys_vfs write with the COMPLETE updated HTML that loads the generated images. Images are NOT visible until you rewrite the HTML file.\n' +
+    '- Modes: sprite (single game sprite), sheet (2x2 character ref), icon, bg (background), tile (seamless texture).\n' +
     '- Just describe the subject — style is auto-added per mode. e.g. llm_image(prompt="spaceship", mode="sprite")\n' +
-    '- Load generated images in game JS:\n' +
-    '    const resp = await traits.call(\'sys.vfs\', [\'read\', \'sprites/spaceship.png\']);\n' +
-    '    const img = new Image(); img.src = resp.content;\n' +
+    '- To load a generated image in game JS, add this helper and use it:\n' +
+    '    async function loadVFSImage(path) {\n' +
+    '      const r = await traits.call("sys.vfs", ["read", path]);\n' +
+    '      const img = new Image();\n' +
+    '      return new Promise(resolve => { img.onload = () => resolve(img); img.src = r.content || r.result?.content || r; });\n' +
+    '    }\n' +
+    '    // Example: const bgImg = await loadVFSImage("backgrounds/sky.png");\n' +
     '- For character sheets (mode=sheet), slice the 2x2 grid into 4 directional sprites in JS.\n' +
     '- Use llm_image for characters, enemies, items, backgrounds — anything that looks poor as code-drawn shapes.\n' +
-    '- Do NOT use llm_image for simple shapes, solid colors, or text — draw those with Canvas2D.\n\n' +
+    '- Do NOT use llm_image for simple shapes, solid colors, or text — draw those with Canvas2D.\n' +
+    '- NEVER respond with just text after generating an image. ALWAYS follow up with sys_vfs write to update the HTML.\n\n' +
     'STYLE: Dark bg #0a0a0a, bright accents (#00ff88, #ff6b35, #4fc3f7), smooth 60fps.\n' +
     'Canvas scripts can call: traits.call(path,args), traits.echo(text), traits.audio(action,...).'
 
@@ -484,7 +489,7 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
         type: 'function',
         function: {
             name: 'llm_image',
-            description: 'Generate a game image/sprite via OpenAI and save to VFS. Returns the VFS path. Call BEFORE writing canvas/app.html so you can reference the generated image paths in your code. Load generated images in game JS via: const resp = await traits.call(\'sys.vfs\', [\'read\', path]); img.src = resp.content;',
+            description: 'Generate a game image/sprite via OpenAI and save to VFS. Returns the VFS path. IMPORTANT: After calling this, you MUST call sys_vfs write to update canvas/app.html with code that loads the image. The image is NOT visible until the HTML references it.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -632,7 +637,8 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                                     } catch(_) {}
                                 }
                                 toolResult = JSON.stringify({ ok: true, path: r.path, size: r.size, mode: r.mode,
-                                    usage: "Load in game JS: const resp = await traits.call('sys.vfs', ['read', '" + r.path + "']); img.src = resp.content;" });
+                                    IMPORTANT: 'Image saved to VFS. You MUST now call sys_vfs write with the COMPLETE updated canvas/app.html that loads this image. The image is NOT visible until you rewrite the HTML.',
+                                    load_code: "async function loadVFSImage(path) { const r = await traits.call('sys.vfs', ['read', path]); const img = new Image(); img.src = r.content || r.result?.content || r; return img; }" });
                                 console.log('[Canvas/Agent/Browser] llm_image OK:', r.path);
                             } else {
                                 toolResult = JSON.stringify({ ok: false, error: r?.error || 'llm.image failed' });
@@ -647,7 +653,8 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                             });
                             const imgData = await imgResp.json();
                             toolResult = JSON.stringify(imgData?.ok ? { ok: true, path: imgData.path, size: imgData.size, mode: imgData.mode,
-                                usage: "Load in game JS: const resp = await traits.call('sys.vfs', ['read', '" + imgData.path + "']); img.src = resp.content;" }
+                                IMPORTANT: 'Image saved to VFS. You MUST now call sys_vfs write with the COMPLETE updated canvas/app.html that loads this image.',
+                                load_code: "async function loadVFSImage(path) { const r = await traits.call('sys.vfs', ['read', path]); const img = new Image(); img.src = r.content || r.result?.content || r; return img; }" }
                                 : { ok: false, error: imgData?.error || 'llm.image failed' });
                         }
                     } catch(e) {
