@@ -189,7 +189,7 @@ const AUTH_COOLDOWN_MS = 60_000; // 60 seconds
 function cors() {
   return {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
+    "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type,Authorization",
   };
 }
@@ -455,7 +455,7 @@ export class GameRoom {
     if (!gameCols.includes('checksum')) this.sql.exec("ALTER TABLE games ADD COLUMN checksum TEXT NOT NULL DEFAULT ''");
     if (!gameCols.includes('resources')) this.sql.exec("ALTER TABLE games ADD COLUMN resources TEXT NOT NULL DEFAULT '{}'");
     if (!gameCols.includes('forked_from_hash')) this.sql.exec("ALTER TABLE games ADD COLUMN forked_from_hash TEXT");
-if (!gameCols.includes('published')) this.sql.exec("ALTER TABLE games ADD COLUMN published INTEGER NOT NULL DEFAULT 1");
+    if (!gameCols.includes('published')) this.sql.exec("ALTER TABLE games ADD COLUMN published INTEGER NOT NULL DEFAULT 1");
 
     // Migrate internal_games → games (one-time), then stop using internal_games
     try {
@@ -550,6 +550,12 @@ if (!gameCols.includes('published')) this.sql.exec("ALTER TABLE games ADD COLUMN
       checksum: row?.checksum || row?.content_hash || '',
       resource_paths: parseManifestField(_raw),
     };
+  }
+
+  broadcast(message) {
+    for (const sock of this.state.getWebSockets()) {
+      try { sock.send(message); } catch (_) {}
+    }
   }
 
   getExternalPoolLimit() {
@@ -875,7 +881,7 @@ if (!gameCols.includes('published')) this.sql.exec("ALTER TABLE games ADD COLUMN
                   s.score AS highscore, s.player AS highscore_player
            FROM games g
            LEFT JOIN scores s ON s.game_hash = g.content_hash
-           WHERE g.scope = 'external'
+           WHERE g.scope = 'external' AND g.published = 1
            ORDER BY g.name ASC`
         ).toArray().map((r) => this.normalizeExternalGameRow(r));
         return json(rows);
@@ -884,7 +890,7 @@ if (!gameCols.includes('published')) this.sql.exec("ALTER TABLE games ADD COLUMN
       // GET /games.toml — export external game manifests as TOML
       if (url.pathname === '/games.toml' && request.method === 'GET') {
         const rows = this.sql.exec(
-          "SELECT content_hash, name, size, updated, owner, game_id, version, checksum FROM games WHERE scope = 'external' ORDER BY owner ASC, game_id ASC"
+          "SELECT content_hash, name, size, updated, owner, game_id, version, checksum FROM games WHERE scope = 'external' AND published = 1 ORDER BY owner ASC, game_id ASC"
         ).toArray().map((r) => this.normalizeExternalGameRow(r));
         const out = rows.map((g) => {
           return [
@@ -1202,7 +1208,7 @@ if (!gameCols.includes('published')) this.sql.exec("ALTER TABLE games ADD COLUMN
         const wanted = data.hashes.slice(0, 50);
         const ph = wanted.map(() => '?').join(',');
         const rows = this.sql.exec(
-          `SELECT content_hash, name, content, updated, owner, game_id, scope, version, checksum, resources FROM games WHERE content_hash IN (${ph})`,
+          `SELECT content_hash, name, content, updated, owner, game_id, scope, version, checksum, resources FROM games WHERE content_hash IN (${ph}) AND published = 1`,
           ...wanted
         ).toArray().map((r) => this.normalizeExternalGameRow(r));
         if (rows.length > 0) {

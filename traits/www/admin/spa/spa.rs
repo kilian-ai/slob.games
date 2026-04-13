@@ -571,8 +571,19 @@ var _relayGames = null; // cached relay response
 async function fetchRelayGames() {
   var games = [];
   try {
-    var r1 = await fetch(relayApiBase() + '/games');
-    if (r1.ok) games = await r1.json();
+    var token = getAuthToken();
+    if (token) {
+      var rAuth = await fetch(relayApiBase() + '/internal/games', {
+        headers: authHeaders()
+      });
+      if (rAuth.ok) {
+        games = await rAuth.json();
+      }
+    }
+    if (!games.length) {
+      var r1 = await fetch(relayApiBase() + '/games');
+      if (r1.ok) games = await r1.json();
+    }
   } catch(_) {}
   _relayGames = { games: games };
   return _relayGames;
