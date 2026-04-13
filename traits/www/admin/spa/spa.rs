@@ -485,6 +485,9 @@ function esc(v) {
   d.textContent = String(v == null ? '' : v);
   return d.innerHTML;
 }
+function escJs(v) {
+  return String(v == null ? '' : v).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
 function byId(id) { return document.getElementById(id); }
 
 function callTrait(path, args) {
@@ -739,6 +742,155 @@ function upsertInternalRelayGameToLocal(owner, gameId, data) {
   }
 }
 
+function normalizeRevisionResources(resources) {
+  var src = (resources && typeof resources === 'object') ? resources : {};
+  var out = {};
+  var keys = Object.keys(src);
+  for (var i = 0; i < keys.length; i++) {
+    var p = String(keys[i] || '').trim();
+    if (!p || p === 'canvas/app.html' || p === 'canvas/games.json') continue;
+    if (p.indexOf('..') !== -1 || p.charAt(0) === '/') continue;
+    var v = src[p];
+    if (typeof v !== 'string' || !v) continue;
+    out[p] = v;
+  }
+  return out;
+}
+
+function revisionGameKey(owner, gameId) {
+  return String((owner || 'local') + '/' + (gameId || 'untitled')).toLowerCase();
+}
+
+function closeRevisionDropdown() {
+  var m = byId('revisionDropdown');
+  if (m && m.parentNode) m.parentNode.removeChild(m);
+}
+
+async function openRevisionDropdown(ev, owner, gameId, name) {
+  closeRevisionDropdown();
+  var key = revisionGameKey(owner, gameId);
+  var res = await callTrait('sys.game_vcs', ['list', key]);
+  var r = (res && res.result) || res || {};
+  var revisions = r.revisions || [];
+
+  var menu = document.createElement('div');
+  menu.id = 'revisionDropdown';
+  menu.style.position = 'fixed';
+  menu.style.zIndex = '9999';
+  menu.style.minWidth = '340px';
+  menu.style.maxHeight = '280px';
+  menu.style.overflowY = 'auto';
+  menu.style.background = '#101522';
+  menu.style.border = '1px solid #26324f';
+  menu.style.borderRadius = '10px';
+  menu.style.boxShadow = '0 14px 36px rgba(0,0,0,.5)';
+  var rect = (ev && ev.target && ev.target.getBoundingClientRect) ? ev.target.getBoundingClientRect() : { left: 80, top: 80, bottom: 100 };
+  menu.style.left = Math.max(12, Math.min(window.innerWidth - 360, rect.left)) + 'px';
+  menu.style.top = Math.min(window.innerHeight - 300, rect.bottom + 8) + 'px';
+
+  var header = '<div style="padding:8px 10px;border-bottom:1px solid #1d2942;color:#8fa3c7;font-size:11px;">' +
+    esc(name || (owner + '/' + gameId)) + ' revisions (' + revisions.length + ')</div>';
+  var body = '';
+  if (!revisions.length) {
+    body = '<div style="padding:10px;color:#7f8a9e;font-size:12px;">No revisions yet. Revisions are created when the game is saved/synced.</div>';
+  } else {
+    for (var i = 0; i < revisions.length; i++) {
+      var it = revisions[i] || {};
+      var rid = escJs(it.id || '');
+      var ver = esc(it.version || '—');
+      var created = esc(ago(it.created));
+      var bytes = formatSize(Number(it.length || 0));
+      body += '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid #18243b;">';
+      body += '<button class="btn-play" style="padding:4px 8px;font-size:11px" onclick="restoreRevision(\'' + escJs(owner) + '\',\'' + escJs(gameId) + '\',\'' + rid + '\')">restore</button>';
+      body += '<div style="flex:1;min-width:0">';
+      body += '<div style="font-size:12px;color:#d4deef;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">v' + ver + ' <span style="opacity:.6">' + bytes + '</span></div>';
+      body += '<div style="font-size:10px;color:#8193b4">' + created + ' • ' + esc((it.id || '').slice(-16)) + '</div>';
+      body += '</div>';
+      body += '<button class="danger" style="padding:4px 8px;font-size:11px" onclick="deleteRevision(\'' + escJs(owner) + '\',\'' + escJs(gameId) + '\',\'' + rid + '\', event)">X</button>';
+      body += '</div>';
+    }
+  }
+  menu.innerHTML = header + body;
+  document.body.appendChild(menu);
+
+  setTimeout(function() {
+    document.addEventListener('click', function onDocClick(e) {
+      var m = byId('revisionDropdown');
+      if (!m) {
+        document.removeEventListener('click', onDocClick);
+        return;
+      }
+      if (!m.contains(e.target)) {
+        closeRevisionDropdown();
+        document.removeEventListener('click', onDocClick);
+      }
+    });
+  }, 0);
+}
+
+async function restoreRevision(owner, gameId, revisionId) {
+  try {
+    var key = revisionGameKey(owner, gameId);
+    var out = await callTrait('sys.game_vcs', ['checkout', key, revisionId]);
+    var payload = (out && out.result) || out || {};
+    var rev = payload.revision || {};
+    var content = String(rev.content || '');
+    if (!content) {
+      alert('Revision has no content');
+      return;
+    }
+    var resources = normalizeRevisionResources(rev.resources || {});
+    applyRelayResourcesToPvfs(resources);
+
+    var put = await fetch('https://relay.slob.games/sync/internal/game/' + encodeURIComponent(gameId), {
+      method: 'PUT',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        name: rev.name || gameId,
+        content: content,
+        version: rev.version || '',
+        resources: resources,
+      })
+    });
+    if (!put.ok) {
+      var er = null;
+      try { er = await put.json(); } catch (_) {}
+      alert((er && er.error) || ('Restore failed: HTTP ' + put.status));
+      return;
+    }
+    var data = await put.json().catch(function(){ return {}; });
+    upsertInternalRelayGameToLocal(owner, gameId, {
+      owner: owner,
+      game_id: gameId,
+      name: rev.name || gameId,
+      content: content,
+      version: rev.version || data.version || '',
+      content_hash: data.content_hash || data.checksum || '',
+      checksum: data.checksum || data.content_hash || '',
+      published: data.published !== undefined ? !!data.published : true,
+      resources: resources,
+      updated: new Date().toISOString()
+    });
+
+    _relayGames = null;
+    closeRevisionDropdown();
+    await renderGames();
+  } catch(e) {
+    alert('Restore request failed');
+  }
+}
+
+async function deleteRevision(owner, gameId, revisionId, ev) {
+  if (ev && ev.stopPropagation) ev.stopPropagation();
+  try {
+    var key = revisionGameKey(owner, gameId);
+    await callTrait('sys.game_vcs', ['delete', key, revisionId]);
+    await openRevisionDropdown(ev || { target: document.body }, owner, gameId, owner + '/' + gameId);
+  } catch(_) {
+    alert('Delete revision failed');
+  }
+}
+
 function formatSize(bytes) {
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -801,7 +953,7 @@ function renderRelayGames(data, el, summary) {
     html += '<div class="game-name" style="cursor:pointer" onclick="playRelayGame(\'' + esc(ge.owner || '') + '\',\'' + esc(ge.game_id || '') + '\')">' + ename + '</div>';
     html += '<div class="game-meta">';
     html += '<span>' + eowner + '</span>';
-    html += '<span>v' + ever + '</span>';
+    html += '<span style="cursor:pointer;text-decoration:underline;text-decoration-style:dotted" onclick="openRevisionDropdown(event,\'' + escJs(ge.owner || '') + '\',\'' + escJs(ge.game_id || '') + '\',\'' + escJs(ge.name || 'untitled') + '\')">v' + ever + '</span>';
     html += '<span>' + esize + '</span>';
     html += '<span>' + ago(ge.updated) + '</span>';
     var isPub = ge.published !== undefined ? !!ge.published : true;
@@ -1185,6 +1337,9 @@ window.buildGame = buildGame;
 window.deleteGame = deleteGame;
 window.deleteRelayGame = deleteRelayGame;
 window.togglePublish = togglePublish;
+window.openRevisionDropdown = openRevisionDropdown;
+window.restoreRevision = restoreRevision;
+window.deleteRevision = deleteRevision;
 window.playGame = playGame;
 window.buildGame = buildGame;
 window.deleteGame = deleteGame;

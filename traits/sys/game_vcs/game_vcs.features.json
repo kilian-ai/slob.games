@@ -1,0 +1,15 @@
+{
+  "module": "traits/sys/game_vcs/game_vcs.rs",
+  "tests": [
+    {
+      "name": "list requires key",
+      "command": "./target/release/traits call sys.game_vcs list 2>/dev/null",
+      "expect_json_contains": { "ok": false }
+    },
+    {
+      "name": "commit then list",
+      "command": "./target/release/traits call sys.game_vcs commit demo/game '<html>x</html>' 'Demo' 'v1' '{}' >/dev/null && ./target/release/traits call sys.game_vcs list demo/game",
+      "expect_json_contains": { "ok": true }
+    }
+  ]
+}

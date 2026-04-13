@@ -913,6 +913,144 @@ pub fn canvas(_args: &[Value]) -> Value {
                         const gameSelect = document.getElementById('game-select');
                         const phoneGameLabel = document.getElementById('phoneGameLabel');
 
+                        function _escHtml(v) {
+                            var d = document.createElement('div');
+                            d.textContent = String(v == null ? '' : v);
+                            return d.innerHTML;
+                        }
+                        function _escJs(v) {
+                            return String(v == null ? '' : v).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                        }
+                        function _revisionKeyForGame(g, id) {
+                            var owner = String((g && (g._sync_owner || g.owner)) || 'local').trim().toLowerCase() || 'local';
+                            var gid = String((g && (g._sync_game_id || g.game_id)) || _slugifyGameId((g && g.name) || id || 'untitled')).trim().toLowerCase();
+                            return owner + '/' + gid;
+                        }
+
+                        function _closeRevisionMenu() {
+                            var m = document.getElementById('canvasRevisionDropdown');
+                            if (m && m.parentNode) m.parentNode.removeChild(m);
+                        }
+
+                        async function _openRevisionMenu(ev) {
+                            var col = readGamesCollection();
+                            if (!col.active || !col.games[col.active]) return;
+                            var g = col.games[col.active] || {};
+                            var key = _revisionKeyForGame(g, col.active);
+                            var sdk = window._traitsSDK;
+                            if (!sdk) return;
+                            var out = await sdk.call('sys.game_vcs', ['list', key]);
+                            var payload = (out && out.result) || out || {};
+                            var revs = payload.revisions || [];
+
+                            _closeRevisionMenu();
+                            var menu = document.createElement('div');
+                            menu.id = 'canvasRevisionDropdown';
+                            menu.style.position = 'fixed';
+                            menu.style.zIndex = '9999';
+                            menu.style.minWidth = '320px';
+                            menu.style.maxHeight = '280px';
+                            menu.style.overflowY = 'auto';
+                            menu.style.background = '#101522';
+                            menu.style.border = '1px solid #27344d';
+                            menu.style.borderRadius = '10px';
+                            menu.style.boxShadow = '0 16px 36px rgba(0,0,0,.55)';
+                            var r = (ev && ev.target && ev.target.getBoundingClientRect) ? ev.target.getBoundingClientRect() : { left: 20, bottom: 60 };
+                            menu.style.left = Math.max(8, Math.min(window.innerWidth - 336, r.left)) + 'px';
+                            menu.style.top = Math.min(window.innerHeight - 290, r.bottom + 8) + 'px';
+
+                            var html = '';
+                            html += '<div style="padding:8px 10px;border-bottom:1px solid #1d2942;color:#89a0c8;font-size:11px">';
+                            html += _escHtml((g.name || 'untitled') + ' revisions (' + revs.length + ')');
+                            html += '</div>';
+                            if (!revs.length) {
+                                html += '<div style="padding:10px;color:#7d8ba3;font-size:12px">No revisions yet. Save/sync to create one.</div>';
+                            } else {
+                                for (var i = 0; i < revs.length; i++) {
+                                    var it = revs[i] || {};
+                                    var rid = _escJs(it.id || '');
+                                    html += '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid #18243b">';
+                                    html += '<button class="btn-play" style="padding:4px 8px;font-size:11px" onclick="window._canvasRestoreRevision(\'' + rid + '\')">restore</button>';
+                                    html += '<div style="flex:1;min-width:0">';
+                                    html += '<div style="font-size:12px;color:#d8e1f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">v' + _escHtml(it.version || '—') + '</div>';
+                                    html += '<div style="font-size:10px;color:#7f91b2">' + _escHtml(String(it.created || '')) + '</div>';
+                                    html += '</div>';
+                                    html += '<button class="danger" style="padding:4px 8px;font-size:11px" onclick="window._canvasDeleteRevision(\'' + rid + '\')">X</button>';
+                                    html += '</div>';
+                                }
+                            }
+                            menu.innerHTML = html;
+                            document.body.appendChild(menu);
+
+                            setTimeout(function() {
+                                document.addEventListener('click', function onDoc(e2) {
+                                    var mm = document.getElementById('canvasRevisionDropdown');
+                                    if (!mm) { document.removeEventListener('click', onDoc); return; }
+                                    if (!mm.contains(e2.target) && e2.target !== phoneGameLabel) {
+                                        _closeRevisionMenu();
+                                        document.removeEventListener('click', onDoc);
+                                    }
+                                });
+                            }, 0);
+                        }
+
+                        async function _restoreRevisionById(revisionId) {
+                            var col = readGamesCollection();
+                            if (!col.active || !col.games[col.active]) return;
+                            var g = col.games[col.active] || {};
+                            var key = _revisionKeyForGame(g, col.active);
+                            var sdk = window._traitsSDK;
+                            if (!sdk) return;
+                            var out = await sdk.call('sys.game_vcs', ['checkout', key, revisionId]);
+                            var payload = (out && out.result) || out || {};
+                            var rev = payload.revision || {};
+                            var content = String(rev.content || '');
+                            if (!content) return;
+
+                            var resources = (rev.resources && typeof rev.resources === 'object') ? rev.resources : {};
+                            try {
+                                var raw = localStorage.getItem('traits.pvfs') || '{}';
+                                var files = JSON.parse(raw);
+                                for (var rp in resources) {
+                                    if (!Object.prototype.hasOwnProperty.call(resources, rp)) continue;
+                                    if (!rp || rp === 'canvas/app.html' || rp === 'canvas/games.json') continue;
+                                    if (rp.indexOf('..') !== -1 || rp.charAt(0) === '/') continue;
+                                    if (typeof resources[rp] === 'string' && resources[rp]) files[rp] = resources[rp];
+                                }
+                                files['canvas/app.html'] = content;
+
+                                var cur = files['canvas/games.json'] ? JSON.parse(files['canvas/games.json']) : { active: null, games: {} };
+                                if (cur.active && cur.games[cur.active]) {
+                                    cur.games[cur.active].content = content;
+                                    cur.games[cur.active].name = rev.name || cur.games[cur.active].name || 'untitled';
+                                    cur.games[cur.active].version = rev.version || cur.games[cur.active].version || '';
+                                    cur.games[cur.active].updated = new Date().toISOString();
+                                }
+                                files['canvas/games.json'] = JSON.stringify(cur);
+                                localStorage.setItem('traits.pvfs', JSON.stringify(files));
+                            } catch (_) {}
+
+                            _currentContent = '';
+                            renderCanvas(content);
+                            renderProjectBar();
+                            _closeRevisionMenu();
+                            await _syncActiveToRelayInternal({ immediate: true });
+                        }
+
+                        async function _deleteRevisionById(revisionId) {
+                            var col = readGamesCollection();
+                            if (!col.active || !col.games[col.active]) return;
+                            var g = col.games[col.active] || {};
+                            var key = _revisionKeyForGame(g, col.active);
+                            var sdk = window._traitsSDK;
+                            if (!sdk) return;
+                            await sdk.call('sys.game_vcs', ['delete', key, revisionId]);
+                            _closeRevisionMenu();
+                        }
+
+                        window._canvasRestoreRevision = _restoreRevisionById;
+                        window._canvasDeleteRevision = _deleteRevisionById;
+
                         function renderActiveGameBadge() {
                             if (!phoneGameLabel) return;
                             const col = readGamesCollection();
@@ -920,6 +1058,13 @@ pub fn canvas(_args: &[Value]) -> Value {
                             const nm = (a && a.name) ? String(a.name) : 'untitled';
                             const ver = (a && a.version) ? String(a.version) : '—';
                             phoneGameLabel.textContent = nm + ' v' + ver;
+                            phoneGameLabel.style.cursor = 'pointer';
+                        }
+
+                        if (phoneGameLabel) {
+                            phoneGameLabel.addEventListener('click', function(ev) {
+                                _openRevisionMenu(ev).catch(function(){});
+                            });
                         }
 
                         function renderProjectBar() {
@@ -1055,6 +1200,17 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                                     const gameId = active._sync_game_id || active.game_id || _slugifyGameId(active.name || activeId);
                                     const pkg = _collectGameResourcesForContent(active.content || '', 2 * 1024 * 1024);
+                                    try {
+                                        var key = _revisionKeyForGame(active, activeId);
+                                        await window._traitsSDK.call('sys.game_vcs', [
+                                            'commit',
+                                            key,
+                                            active.content || '',
+                                            active.name || 'untitled',
+                                            active.version || '',
+                                            JSON.stringify(pkg.resources || {})
+                                        ]);
+                                    } catch (_) {}
                                     const contentOnlyHash = await _shortContentHash(active.content || '');
                                     const syncKey = [activeId, gameId, active.name || '', active.updated || '', contentOnlyHash, Object.keys(pkg.resources).length].join('|');
                                     if (syncKey === __lastRelayInternalSyncKey) return true;

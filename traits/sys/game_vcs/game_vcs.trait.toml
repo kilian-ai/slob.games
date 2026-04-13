@@ -1,0 +1,24 @@
+[trait]
+description = "Game revision control (basic git-like): commit, list, checkout, delete snapshots including assets"
+version = "v260413"
+author = "system"
+tags = ["sys", "games", "revision", "version-control", "wasm"]
+
+[signature]
+params = [
+  { name = "action", type = "string", description = "Action: commit, list, checkout, delete", required = true },
+  { name = "game_key", type = "string", description = "Stable game identity key, e.g. owner/game-id", required = false },
+  { name = "arg1", type = "string", description = "Action-specific argument", required = false },
+  { name = "arg2", type = "string", description = "Action-specific argument", required = false },
+  { name = "arg3", type = "string", description = "Action-specific argument", required = false },
+]
+
+[signature.returns]
+type = "map"
+description = "Result map with ok and action-specific data"
+
+[implementation]
+language = "rust"
+source = "builtin"
+entry = "game_vcs"
+wasm = true
