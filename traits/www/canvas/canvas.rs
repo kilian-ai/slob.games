@@ -1006,6 +1006,22 @@ pub fn canvas(_args: &[Value]) -> Value {
                             var key = _revisionKeyForGame(g, col.active);
                             var sdk = window._traitsSDK;
                             if (!sdk) return;
+
+                            // Snapshot current content before restoring so the user can get back to it.
+                            // sys.game_vcs deduplicates if content is identical to the latest snapshot.
+                            var curContent = String(g.content || '');
+                            if (curContent) {
+                                try {
+                                    var pkg = _collectGameResourcesForContent(curContent, 2 * 1024 * 1024);
+                                    await sdk.call('sys.game_vcs', [
+                                        'commit', key, curContent,
+                                        g.name || 'untitled',
+                                        g.version || '',
+                                        JSON.stringify(pkg.resources || {})
+                                    ]);
+                                } catch (_) {}
+                            }
+
                             var out = await sdk.call('sys.game_vcs', ['checkout', key, revisionId]);
                             var payload = (out && out.result) || out || {};
                             var rev = payload.revision || {};
