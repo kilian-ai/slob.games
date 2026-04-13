@@ -2486,23 +2486,27 @@ class Traits {
                                 _voiceDc.send(JSON.stringify({ type: 'response.create' }));
                             }
 
-                            _runCanvasAgent(_self, request).then(truncated => {
-                                let parsed = null;
-                                try { parsed = JSON.parse(truncated); } catch(_) { parsed = null; }
-                                const ok = !!(parsed && parsed.ok && !parsed.error);
-                                console.log('[Voice/Canvas] ✓ Agent finished:', ok ? 'ok' : 'error');
-                                if (_voiceDc && _voiceDc.readyState === 'open') {
-                                    const completionText = ok
-                                        ? 'Canvas agent finished. The implementation tasks are now done and auto-saved. Briefly summarize the concrete changes you made.'
-                                        : 'Canvas update failed. Explain the error and ask whether to retry with a simpler request.';
-                                    _voiceDc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: completionText }] } }));
-                                    _voiceDc.send(JSON.stringify({ type: 'response.create' }));
-                                }
-                                if (opts.onToolResult) opts.onToolResult(funcName, truncated);
-                                _dispatchVoiceEvent('tool_result', { name: funcName, result: truncated });
-                            }).catch(e => {
+                            let truncated = '';
+                            try {
+                                truncated = await _runCanvasAgent(_self, request);
+                            } catch (e) {
                                 console.error('[Voice/Canvas] ✗ _runCanvasAgent rejected:', e);
-                            });
+                                truncated = JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) });
+                            }
+
+                            let parsed = null;
+                            try { parsed = JSON.parse(truncated); } catch(_) { parsed = null; }
+                            const ok = !!(parsed && parsed.ok && !parsed.error);
+                            console.log('[Voice/Canvas] ✓ Agent finished:', ok ? 'ok' : 'error');
+                            if (_voiceDc && _voiceDc.readyState === 'open') {
+                                const completionText = ok
+                                    ? 'Canvas agent finished. The implementation tasks are now done and auto-saved. Briefly summarize the concrete changes you made.'
+                                    : 'Canvas update failed. Explain the error and ask whether to retry with a simpler request.';
+                                _voiceDc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: completionText }] } }));
+                                _voiceDc.send(JSON.stringify({ type: 'response.create' }));
+                            }
+                            if (opts.onToolResult) opts.onToolResult(funcName, truncated);
+                            _dispatchVoiceEvent('tool_result', { name: funcName, result: truncated });
                             return false; // manages own response.create
                         }
 
