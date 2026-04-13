@@ -3185,6 +3185,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                                         id,
                                         name: g.name || 'untitled',
                                         content: g.content,
+                                        resources: pkg.resources || {},
+                                        resource_bytes: pkg.bytes || 0,
                                         resource_paths: Object.keys(pkg.resources).sort(),
                                         hash,
                                         owner: g.owner || localUsername(),

@@ -360,8 +360,9 @@ function normalizeResourcesMap(input) {
 function parseResourcesField(raw) {
   try {
     if (!raw) return {};
-    if (typeof raw === 'string') return normalizeResourcesMap(JSON.parse(raw));
-    if (typeof raw === 'object') return normalizeResourcesMap(raw);
+    const parsed = (typeof raw === 'string') ? JSON.parse(raw) : raw;
+    if (Array.isArray(parsed)) return {};
+    if (typeof parsed === 'object') return normalizeResourcesMap(parsed);
     return {};
   } catch (_) {
     return {};
@@ -369,10 +370,9 @@ function parseResourcesField(raw) {
 }
 
 function encodeResourcesField(resources) {
-  // Store only path manifest (list of paths), not full data blobs.
-  // Clients are the single source of truth for resource data,
-  // transferred P2P via the relay WebSocket.
-  return JSON.stringify(resourcePaths(resources));
+  // Store full normalized map so resources are durable and available
+  // to late-joining clients even when no peer is online.
+  return JSON.stringify(normalizeResourcesMap(resources));
 }
 
 function resourcePaths(resources) {
@@ -401,8 +401,7 @@ function resourceBytes(resources) {
 }
 
 async function packageHash16(content, resources) {
-  // Hash based on content only — resources are additive metadata,
-  // not included in identity hash since relay doesn't store resource data.
+  // Hash stays content-based for stable identity/versioning semantics.
   return sha256hex16(String(content || ''));
 }
 
@@ -537,19 +536,24 @@ export class GameRoom {
     return normalizeSlug(explicit || name, 'untitled');
   }
 
-  normalizeExternalGameRow(row) {
+  normalizeExternalGameRow(row, includeResources = false) {
     const owner = normalizeSlug(row?.owner || 'public', 'public');
     const gameId = this.deriveGameId(row?.name || row?.content_hash || 'untitled', row?.game_id || '');
     const { resources: _raw, ...rest } = (row || {});
-    return {
+    const resources = parseResourcesField(_raw);
+    const mapKeys = Object.keys(resources);
+    const paths = mapKeys.length ? mapKeys.sort() : parseManifestField(_raw);
+    const out = {
       ...rest,
       owner,
       game_id: gameId,
       scope: row?.scope || 'external',
       version: row?.version || '',
       checksum: row?.checksum || row?.content_hash || '',
-      resource_paths: parseManifestField(_raw),
+      resource_paths: paths,
     };
+    if (includeResources) out.resources = resources;
+    return out;
   }
 
   broadcast(message) {
@@ -952,7 +956,7 @@ export class GameRoom {
             user, gameId
           ).toArray()[0];
           if (full) {
-            const norm = this.normalizeExternalGameRow(full);
+            const norm = this.normalizeExternalGameRow(full, true);
             this.broadcast(JSON.stringify({ type: 'sync', games: [norm] }));
           }
         }
@@ -974,7 +978,7 @@ export class GameRoom {
 
         const gameId = this.deriveGameId(src.name, body.game_id);
         const version = String(body.version || makeReleaseVersion());
-        const srcPaths = parseManifestField(src.resources);
+        const srcResources = parseResourcesField(src.resources);
         const checksum = await packageHash16(src.content);
         const updated = new Date().toISOString();
         const size = src.content.length;
@@ -985,7 +989,7 @@ export class GameRoom {
            (content_hash, name, content, updated, size, owner, game_id, scope, version, checksum, resources, forked_from_hash)
            VALUES (?, ?, ?, ?, ?, ?, ?, 'external', ?, ?, ?, ?)`,
           checksum, String(body.name || src.name).slice(0, 100), src.content,
-          updated, size, user, gameId, version, checksum, JSON.stringify(srcPaths), sourceHash
+          updated, size, user, gameId, version, checksum, encodeResourcesField(srcResources), sourceHash
         );
         return json({ ok: true, owner: user, game_id: gameId, forked_from_hash: sourceHash, checksum, version });
       }
@@ -996,7 +1000,7 @@ export class GameRoom {
         if (!hash) return json({ error: "missing hash" }, 400);
         const rows = this.sql.exec(
           "SELECT content_hash, name, content, updated, owner, game_id, scope, version, checksum, resources FROM games WHERE content_hash = ?", hash
-        ).toArray().map((r) => this.normalizeExternalGameRow(r));
+        ).toArray().map((r) => this.normalizeExternalGameRow(r, true));
         if (rows.length === 0) return json({ error: "not found" }, 404);
         return json(rows[0]);
       }
@@ -1015,11 +1019,17 @@ export class GameRoom {
         if (!content || typeof content !== 'string') return json({ error: "missing content" }, 400);
         if (content.length > MAX_GAME_SIZE) return json({ error: "too large" }, 413);
 
-        const paths = (body.resources === undefined)
-          ? parseManifestField(existing[0].resources)
-          : resourcePaths(body.resources);
+        const existingResources = parseResourcesField(existing[0].resources);
+        const incomingResources = (body.resources === undefined)
+          ? existingResources
+          : parseResourcesField(body.resources);
+        const paths = resourcePaths(incomingResources);
+        const resourcePayloadBytes = resourceBytes(incomingResources);
+        const packageSize = content.length + resourcePayloadBytes;
+        if (packageSize > MAX_GAME_PACKAGE_SIZE) {
+          return json({ error: "package too large" }, 413);
+        }
         const size = content.length;
-        if (size > MAX_GAME_SIZE) return json({ error: "too large" }, 413);
 
         // Compute new hash (content only, resources are P2P metadata)
         const newHash = await packageHash16(content);
@@ -1039,7 +1049,7 @@ export class GameRoom {
            (content_hash, name, content, updated, size, owner, game_id, scope, version, checksum, resources)
            VALUES (?, ?, ?, ?, ?, ?, ?, 'external', ?, ?, ?)` ,
           newHash, name.slice(0, 100), content, updated, size,
-          owner, gameId, version, newHash, JSON.stringify(paths)
+          owner, gameId, version, newHash, encodeResourcesField(incomingResources)
         );
         this.trimExternalPool();
 
@@ -1055,6 +1065,7 @@ export class GameRoom {
             version,
             name: name.slice(0, 100),
             content,
+              resources: incomingResources,
             resource_paths: paths,
             updated
           }]
@@ -1101,9 +1112,14 @@ export class GameRoom {
           "SELECT resources, forked_from_hash, published FROM games WHERE owner = ? AND game_id = ?",
           user, gameId
         ).toArray()[0];
-        const paths = (body.resources === undefined)
-          ? parseManifestField(prev && prev.resources)
-          : resourcePaths(body.resources);
+        const prevResources = parseResourcesField(prev && prev.resources);
+        const resourcesMap = (body.resources === undefined)
+          ? prevResources
+          : parseResourcesField(body.resources);
+        const paths = resourcePaths(resourcesMap);
+        const resourcePayloadBytes = resourceBytes(resourcesMap);
+        const packageSize = content.length + resourcePayloadBytes;
+        if (packageSize > MAX_GAME_PACKAGE_SIZE) return json({ error: 'package too large' }, 413);
         const prevPublished = prev ? (prev.published ?? 1) : 1;
         const size = content.length;
         const checksum = await packageHash16(content);
@@ -1114,7 +1130,7 @@ export class GameRoom {
            (content_hash, name, content, updated, size, owner, game_id, scope, version, checksum, resources, forked_from_hash, published)
            VALUES (?, ?, ?, ?, ?, ?, ?, 'external', ?, ?, ?, ?, ?)`,
           checksum, name, content, updated, size, user, gameId, version, checksum,
-          JSON.stringify(paths), (prev && prev.forked_from_hash) || null, prevPublished
+          encodeResourcesField(resourcesMap), (prev && prev.forked_from_hash) || null, prevPublished
         );
         this.trimExternalPool();
 
@@ -1131,6 +1147,7 @@ export class GameRoom {
               version,
               name,
               content,
+              resources: resourcesMap,
               resource_paths: paths,
               updated
             }]
@@ -1155,8 +1172,9 @@ export class GameRoom {
           owner, gameId
         ).toArray()[0];
         if (!row) return json({ error: 'not found' }, 404);
-        row.resource_paths = parseManifestField(row.resources);
-        delete row.resources;
+        const resources = parseResourcesField(row.resources);
+        row.resource_paths = Object.keys(resources).sort();
+        row.resources = resources;
         return json(row);
       }
 
@@ -1210,7 +1228,7 @@ export class GameRoom {
         const rows = this.sql.exec(
           `SELECT content_hash, name, content, updated, owner, game_id, scope, version, checksum, resources FROM games WHERE content_hash IN (${ph}) AND published = 1`,
           ...wanted
-        ).toArray().map((r) => this.normalizeExternalGameRow(r));
+        ).toArray().map((r) => this.normalizeExternalGameRow(r, true));
         if (rows.length > 0) {
           ws.send(JSON.stringify({ type: 'games', games: rows }));
         }
