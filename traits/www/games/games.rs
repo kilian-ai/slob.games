@@ -87,9 +87,14 @@ const JS: &str = r##"
   }
 
   function setActiveGame(id){
-    var col=readGamesCollection();
+    var pvfs=JSON.parse(localStorage.getItem('traits.pvfs')||'{}');
+    var col=pvfs['canvas/games.json']?JSON.parse(pvfs['canvas/games.json']):{active:'',games:{}};
     col.active=id;
-    writeGamesCollection(col);
+    if(col.games[id]&&col.games[id].content){
+      pvfs['canvas/app.html']=col.games[id].content;
+    }
+    pvfs['canvas/games.json']=JSON.stringify(col);
+    localStorage.setItem('traits.pvfs',JSON.stringify(pvfs));
   }
 
   function goCanvas(){
