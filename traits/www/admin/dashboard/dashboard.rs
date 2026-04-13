@@ -309,18 +309,14 @@ function renderGames() {
   var el = document.getElementById('gamesTable');
   var status = document.getElementById('gamesStatus');
 
-  // Merge external + internal into a unified list with scope tag
+  // All games in a unified list
   var all = [];
   for (var i = 0; i < gamesData.external.length; i++) {
     var g = gamesData.external[i];
-    all.push({ owner: g.owner || 'public', game_id: g.game_id || '', name: g.name, size: g.size, updated: g.updated, scope: g.scope || 'external', fullHash: g.content_hash || '', hash: (g.content_hash || '').slice(0, 8), version: g.version || '', published: true, highscore: g.highscore || 0, highscore_player: g.highscore_player || '' });
-  }
-  for (var j = 0; j < gamesData.internal.length; j++) {
-    var ig = gamesData.internal[j];
-    all.push({ owner: ig.owner, game_id: ig.game_id, name: ig.name, size: ig.size, updated: ig.updated, scope: 'internal', fullHash: ig.content_hash || '', hash: (ig.content_hash || '').slice(0, 8), version: ig.version || '', published: !!ig.published, forked: ig.forked_from_hash ? true : false, highscore: ig.highscore || 0, highscore_player: ig.highscore_player || '' });
+    all.push({ owner: g.owner || 'public', game_id: g.game_id || '', name: g.name, size: g.size, updated: g.updated, fullHash: g.content_hash || '', hash: (g.content_hash || '').slice(0, 8), version: g.version || '', forked: !!g.forked_from_hash, highscore: g.highscore || 0, highscore_player: g.highscore_player || '' });
   }
 
-  status.textContent = all.length + ' game' + (all.length === 1 ? '' : 's') + ' (' + gamesData.external.length + ' external, ' + gamesData.internal.length + ' internal)';
+  status.textContent = all.length + ' game' + (all.length === 1 ? '' : 's');
 
   if (!all.length) { el.innerHTML = '<p class="note">No games found.</p>'; return; }
 
@@ -338,16 +334,13 @@ function renderGames() {
       var ow = owners[oi];
       var gs = byOwner[ow];
       h += '<div class="group-header">' + esc(ow) + ' (' + gs.length + ')</div>';
-      h += '<table><tr><th>Identity</th><th>Name</th><th>Scope</th><th>Version</th><th>Pub</th><th>HS</th><th>Size</th><th>Updated</th><th></th></tr>';
+      h += '<table><tr><th>Identity</th><th>Name</th><th>Version</th><th>HS</th><th>Size</th><th>Updated</th><th></th></tr>';
       for (var gi = 0; gi < gs.length; gi++) {
         var gm = gs[gi];
         var identity = esc(gm.owner + '/' + gm.game_id);
-        var scopeTag = gm.scope === 'internal' ? '🏠' : '🌐';
         var gh = encodeURIComponent(gm.fullHash);
-        h += '<tr><td><code>' + identity + '</code></td><td><span style="cursor:pointer;color:var(--accent);text-decoration:underline" onclick="playAdminGame(\'' + esc(gm.scope) + '\',\'' + encodeURIComponent(gm.owner) + '\',\'' + encodeURIComponent(gm.game_id || '') + '\',\'' + gh + '\')">' + esc(gm.name) + '</span></td>';
-        h += '<td>' + scopeTag + ' ' + esc(gm.scope) + '</td>';
+        h += '<tr><td><code>' + identity + '</code></td><td><span style="cursor:pointer;color:var(--accent);text-decoration:underline" onclick="playAdminGame(\'' + encodeURIComponent(gm.owner) + '\',\'' + encodeURIComponent(gm.game_id || '') + '\',\'' + gh + '\')">' + esc(gm.name) + '</span></td>';
         h += '<td>' + esc(gm.version || '—') + '</td>';
-        h += '<td>' + (gm.scope === 'internal' ? (gm.published ? 'yes' : 'no') : 'yes') + '</td>';
         h += '<td>' + (gm.highscore ? '<span title="' + esc(gm.highscore_player || '') + '">' + gm.highscore + '</span>' : '<span style="opacity:0.3">—</span>') + '</td>';
         h += '<td>' + formatSize(gm.size) + '</td>';
         h += '<td title="' + esc(gm.updated) + '">' + ago(gm.updated) + '</td>';
@@ -368,16 +361,13 @@ function renderGames() {
       return String(b.updated || '').localeCompare(String(a.updated || ''));
     });
     var h2 = '';
-    h2 += '<table><tr><th>Owner/ID</th><th>Name</th><th>Scope</th><th>Version</th><th>Pub</th><th>HS</th><th>Size</th><th>Updated</th><th></th></tr>';
+    h2 += '<table><tr><th>Owner/ID</th><th>Name</th><th>Version</th><th>HS</th><th>Size</th><th>Updated</th><th></th></tr>';
     for (var ni = 0; ni < byNameList.length; ni++) {
       var gm2 = byNameList[ni];
-      var scopeTag2 = gm2.scope === 'internal' ? '🏠' : '🌐';
       var gh2 = encodeURIComponent(gm2.fullHash);
       h2 += '<tr><td><code>' + esc(gm2.owner + '/' + gm2.game_id) + '</code></td>';
-      h2 += '<td><span style="cursor:pointer;color:var(--accent);text-decoration:underline" onclick="playAdminGame(\'' + esc(gm2.scope) + '\',\'' + encodeURIComponent(gm2.owner) + '\',\'' + encodeURIComponent(gm2.game_id || '') + '\',\'' + gh2 + '\')">' + esc(gm2.name) + '</span></td>';
-      h2 += '<td>' + scopeTag2 + ' ' + esc(gm2.scope) + '</td>';
+      h2 += '<td><span style="cursor:pointer;color:var(--accent);text-decoration:underline" onclick="playAdminGame(\'' + encodeURIComponent(gm2.owner) + '\',\'' + encodeURIComponent(gm2.game_id || '') + '\',\'' + gh2 + '\')">' + esc(gm2.name) + '</span></td>';
       h2 += '<td>' + esc(gm2.version || '—') + '</td>';
-      h2 += '<td>' + (gm2.scope === 'internal' ? (gm2.published ? 'yes' : 'no') : 'yes') + '</td>';
       h2 += '<td>' + (gm2.highscore ? '<span title="' + esc(gm2.highscore_player || '') + '">' + gm2.highscore + '</span>' : '<span style="opacity:0.3">—</span>') + '</td>';
       h2 += '<td>' + formatSize(gm2.size) + '</td>';
       h2 += '<td title="' + esc(gm2.updated) + '">' + ago(gm2.updated) + '</td>';
@@ -408,9 +398,8 @@ function goCanvasRoute() {
   window.dispatchEvent(new PopStateEvent('popstate', { state: { route: '/' } }));
 }
 
-async function playAdminGame(scope, ownerEnc, gameIdEnc, hashEnc) {
+async function playAdminGame(ownerEnc, gameIdEnc, hashEnc) {
   try {
-    var scopeVal = decodeURIComponent(scope || 'external');
     var owner = decodeURIComponent(ownerEnc || '');
     var gameId = decodeURIComponent(gameIdEnc || '');
     var hash = decodeURIComponent(hashEnc || '');
@@ -418,23 +407,12 @@ async function playAdminGame(scope, ownerEnc, gameIdEnc, hashEnc) {
     var name = '';
     var version = '';
 
-    if (scopeVal === 'internal') {
-      var r1 = await fetch(API + '/internal/game/' + encodeURIComponent(gameId) + '?owner=' + encodeURIComponent(owner), {
-        headers: { 'Authorization': 'Bearer ' + token }
-      });
-      var d1 = await r1.json();
-      if (!r1.ok || !d1.content) throw new Error(d1.error || 'Could not load internal game');
-      content = d1.content;
-      name = d1.name || gameId || 'Game';
-      version = d1.version || '';
-    } else {
-      var r2 = await fetch(API + '/game/' + encodeURIComponent(hash));
-      var d2 = await r2.json();
-      if (!r2.ok || !d2.content) throw new Error(d2.error || 'Could not load external game');
-      content = d2.content;
-      name = d2.name || 'Game';
-      version = d2.version || '';
-    }
+    var r = await fetch(API + '/game/' + encodeURIComponent(hash));
+    var d = await r.json();
+    if (!r.ok || !d.content) throw new Error(d.error || 'Could not load game');
+    content = d.content;
+    name = d.name || gameId || 'Game';
+    version = d.version || '';
 
     await callTrait('sys.canvas', ['new', name, version]);
     await callTrait('sys.canvas', ['set', content]);

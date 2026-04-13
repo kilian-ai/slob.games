@@ -405,22 +405,6 @@ a { color: #00e0ff; }
   color: #00e0ff;
 }
 .btn-build:hover { background: rgba(0,224,255,0.2); }
-.btn-publish {
-  background: rgba(90,101,112,0.14);
-  border-color: rgba(90,101,112,0.28);
-  color: #a8b4bf;
-}
-.btn-publish:hover {
-  background: rgba(90,101,112,0.24);
-}
-.btn-published {
-  background: rgba(0,255,136,0.18);
-  border-color: rgba(0,255,136,0.38);
-  color: #00ff88;
-}
-.btn-published:hover {
-  background: rgba(0,255,136,0.28);
-}
 .no-games {
   padding: 24px; text-align: center;
   color: var(--muted);
@@ -585,22 +569,12 @@ function authHeaders() {
 var _relayGames = null; // cached relay response
 
 async function fetchRelayGames() {
-  var token = getAuthToken();
-  var internal = [];
-  var external = [];
+  var games = [];
   try {
     var r1 = await fetch(relayApiBase() + '/games');
-    if (r1.ok) external = await r1.json();
+    if (r1.ok) games = await r1.json();
   } catch(_) {}
-  if (token) {
-    try {
-      var r2 = await fetch('https://relay.slob.games/sync/internal/games', {
-        headers: authHeaders()
-      });
-      if (r2.ok) internal = await r2.json();
-    } catch(_) {}
-  }
-  _relayGames = { internal: internal, external: external };
+  _relayGames = { games: games };
   return _relayGames;
 }
 
@@ -783,7 +757,7 @@ async function renderGames() {
     try { data = await fetchRelayGames(); } catch(_) {}
   }
 
-  var hasRelay = data && (data.internal.length > 0 || data.external.length > 0);
+  var hasRelay = data && (data.games || []).length > 0;
 
   if (hasRelay) {
     renderRelayGames(data, el, summary);
@@ -793,153 +767,41 @@ async function renderGames() {
 }
 
 function renderRelayGames(data, el, summary) {
-  var relayInternal = (data.internal || []).slice();
-  var localInternal = localInternalGamesForSettings();
-  var merged = {};
-  for (var i0 = 0; i0 < relayInternal.length; i0++) {
-    var rg = relayInternal[i0] || {};
-    var rk = String((rg.owner || '?') + '|' + (rg.game_id || '?')).toLowerCase();
-    merged[rk] = Object.assign({}, rg, { _local_only: false });
-  }
-  for (var i1 = 0; i1 < localInternal.length; i1++) {
-    var lg = localInternal[i1] || {};
-    var lk = String((lg.owner || '?') + '|' + (lg.game_id || '?')).toLowerCase();
-    if (!merged[lk]) merged[lk] = lg;
-  }
-
-  var internal = Object.values(merged).sort(function(a, b) {
-    return String(a.name || '').localeCompare(String(b.name || ''));
-  });
-  var external = (data.external || []).slice().sort(function(a, b) {
+  var games = (data.games || []).slice().sort(function(a, b) {
     return String(a.name || '').localeCompare(String(b.name || ''));
   });
   if (summary) {
-    summary.textContent = 'Internal: ' + internal.length + ' · External: ' + external.length + ' (relay)';
+    summary.textContent = games.length + ' game(s) on relay';
   }
-  if (!internal.length && !external.length) {
+  if (!games.length) {
     el.innerHTML = '<div class="no-games">No games on relay yet.</div>';
     return;
   }
   var html = '';
-  if (internal.length) {
-    html += '<div style="margin-bottom:6px;color:var(--accent);font-size:11px;text-transform:uppercase;letter-spacing:.1em">Internal</div>';
-    for (var i = 0; i < internal.length; i++) {
-      var g = internal[i];
-      var name = esc(g.name || 'untitled');
-      var size = formatSize(g.size || 0);
-      var identity = esc((g.owner || '?') + '/' + (g.game_id || '?'));
-      var hash = (g.content_hash || '').slice(0, 8);
-      var ver = esc(g.version || '—');
-      var pub = !!g.published;
-      html += '<div class="game-row">';
-      html += '<div class="game-info">';
-      html += '<div class="game-name" style="cursor:pointer" onclick="' + (g._local_only
-        ? ('playGame(\'' + esc(g._local_id || '') + '\')')
-        : ('playRelayGame(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\')')) + '">' + name + '</div>';
-      html += '<div class="game-meta">';
-      html += '<span>' + identity + '</span>';
-      html += '<span>v' + ver + '</span>';
-      html += '<span>' + size + '</span>';
-      html += '<span>' + ago(g.updated) + '</span>';
-      html += '<span>' + (g._local_only ? 'pending sync' : (pub ? 'published' : 'private')) + '</span>';
-      html += '<span style="opacity:0.5">#' + hash + '</span>';
-      html += '</div></div>';
-      html += '<div class="game-actions">';
-      html += '<button class="btn-play" onclick="' + (g._local_only
-        ? ('playGame(\'' + esc(g._local_id || '') + '\')')
-        : ('playRelayGame(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\')')) + '">Play</button>';
-      if (!g._local_only) {
-        html += '<button class="' + (pub ? 'btn-published' : 'btn-publish') + '" onclick="togglePublishInternal(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\',' + (pub ? 'false' : 'true') + ')">' + (pub ? 'Published' : 'Publish') + '</button>';
-        html += '<button class="danger" onclick="deleteRelayGame(\'' + esc(g.owner) + '\',\'' + esc(g.game_id) + '\',\'' + name.replace(/'/g, "\\'") + '\')">Del</button>';
-      }
-      html += '</div></div>';
-    }
-  }
-  if (external.length) {
-    html += '<div style="margin:12px 0 6px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.1em">External (public)</div>';
-    for (var j = 0; j < external.length; j++) {
-      var ge = external[j];
-      var ename = esc(ge.name || 'untitled');
-      var esize = formatSize(ge.size || 0);
-      var ehash = (ge.content_hash || '').slice(0, 8);
-      var ever = esc(ge.version || '—');
-      html += '<div class="game-row">';
-      html += '<div class="game-info">';
-      html += '<div class="game-name" style="cursor:pointer" onclick="playExternalGame(\'' + esc(ge.content_hash) + '\')">' + ename + '</div>';
-      html += '<div class="game-meta">';
-      html += '<span>v' + ever + '</span>';
-      html += '<span>' + esize + '</span>';
-      html += '<span>' + ago(ge.updated) + '</span>';
-      html += '<span style="opacity:0.5">#' + ehash + '</span>';
-      html += '</div></div>';
-      html += '<div class="game-actions">';
-      html += '<button class="btn-play" onclick="playExternalGame(\'' + esc(ge.content_hash) + '\')">Play</button>';
-      html += '</div></div>';
-    }
+  for (var j = 0; j < games.length; j++) {
+    var ge = games[j];
+    var ename = esc(ge.name || 'untitled');
+    var esize = formatSize(ge.size || 0);
+    var ehash = (ge.content_hash || '').slice(0, 8);
+    var ever = esc(ge.version || '—');
+    var eowner = esc((ge.owner || '') + '/' + (ge.game_id || ''));
+    html += '<div class="game-row">';
+    html += '<div class="game-info">';
+    html += '<div class="game-name" style="cursor:pointer" onclick="playRelayGame(\'' + esc(ge.owner || '') + '\',\'' + esc(ge.game_id || '') + '\')">' + ename + '</div>';
+    html += '<div class="game-meta">';
+    html += '<span>' + eowner + '</span>';
+    html += '<span>v' + ever + '</span>';
+    html += '<span>' + esize + '</span>';
+    html += '<span>' + ago(ge.updated) + '</span>';
+    html += '<span style="color:#00ff88">published</span>';
+    html += '<span style="opacity:0.5">#' + ehash + '</span>';
+    html += '</div></div>';
+    html += '<div class="game-actions">';
+    html += '<button class="btn-play" onclick="playRelayGame(\'' + esc(ge.owner || '') + '\',\'' + esc(ge.game_id || '') + '\')">Play</button>';
+    html += '<button class="danger" onclick="deleteRelayGame(\'' + esc(ge.owner || '') + '\',\'' + esc(ge.game_id || '') + '\',\'' + ename.replace(/'/g, "\\'") + '\')">Del</button>';
+    html += '</div></div>';
   }
   el.innerHTML = html;
-}
-
-async function togglePublishInternal(owner, gameId, publish) {
-  function _gamesMsg(msg) {
-    var gs = byId('gamesSummary');
-    if (gs) gs.textContent = msg;
-  }
-  try {
-    var path = 'https://relay.slob.games/sync/internal/game/' + encodeURIComponent(gameId) + '/publish';
-    var body = null;
-    if (publish) {
-      try {
-        var ver = await callTrait('sys.version', ['hhmmss']);
-        var v = (ver && (ver.version || (ver.result && ver.result.version))) || '';
-        if (v) body = { version: v };
-      } catch (_) {}
-
-      // Ensure publish uses latest local internal content (if present), then relay distributes from there.
-      try {
-        var col = readGamesCollection();
-        var games = (col && col.games) || {};
-        var localMatch = null;
-        for (var gid in games) {
-          if (!Object.prototype.hasOwnProperty.call(games, gid)) continue;
-          var lg = games[gid] || {};
-          var so = String(lg._sync_owner || lg.owner || '').toLowerCase();
-          var sg = String(lg._sync_game_id || lg.game_id || '').toLowerCase();
-          if (so === String(owner || '').toLowerCase() && sg === String(gameId || '').toLowerCase()) {
-            localMatch = lg;
-            break;
-          }
-        }
-        if (localMatch && localMatch.content) {
-          var putBody = {
-            name: localMatch.name || gameId,
-            content: localMatch.content,
-            version: (body && body.version) || localMatch.version || ''
-          };
-          await fetch('https://relay.slob.games/sync/internal/game/' + encodeURIComponent(gameId), {
-            method: 'PUT',
-            headers: authHeaders(),
-            body: JSON.stringify(putBody)
-          });
-        }
-      } catch (_) {}
-    }
-    var r = await fetch(path, {
-      method: publish ? 'PUT' : 'DELETE',
-      headers: authHeaders(),
-      body: body ? JSON.stringify(body) : undefined
-    });
-    var data = await r.json().catch(function(){ return {}; });
-    if (!r.ok) {
-      _gamesMsg(data.error || 'Publish toggle failed');
-      return;
-    }
-    _relayGames = null;
-    await renderGames();
-    _gamesMsg(publish ? 'Game published.' : 'Game set to private.');
-  } catch (_) {
-    _gamesMsg('Publish toggle request failed');
-  }
 }
 
 function renderLocalGames(el, summary) {
@@ -1292,7 +1154,6 @@ window.playExternalGame = playExternalGame;
 window.buildGame = buildGame;
 window.deleteGame = deleteGame;
 window.deleteRelayGame = deleteRelayGame;
-window.togglePublishInternal = togglePublishInternal;
 window.playGame = playGame;
 window.buildGame = buildGame;
 window.deleteGame = deleteGame;

@@ -454,25 +454,30 @@ export class GameRoom {
     if (!gameCols.includes('version')) this.sql.exec("ALTER TABLE games ADD COLUMN version TEXT NOT NULL DEFAULT ''");
     if (!gameCols.includes('checksum')) this.sql.exec("ALTER TABLE games ADD COLUMN checksum TEXT NOT NULL DEFAULT ''");
     if (!gameCols.includes('resources')) this.sql.exec("ALTER TABLE games ADD COLUMN resources TEXT NOT NULL DEFAULT '{}'");
+    if (!gameCols.includes('forked_from_hash')) this.sql.exec("ALTER TABLE games ADD COLUMN forked_from_hash TEXT");
 
-    this.sql.exec(`CREATE TABLE IF NOT EXISTS internal_games (
-      owner TEXT NOT NULL,
-      game_id TEXT NOT NULL,
-      name TEXT NOT NULL,
-      content TEXT NOT NULL,
-      content_hash TEXT NOT NULL,
-      checksum TEXT NOT NULL,
-      version TEXT NOT NULL,
-      published INTEGER NOT NULL DEFAULT 0,
-      forked_from_hash TEXT,
-      updated TEXT NOT NULL,
-      size INTEGER NOT NULL,
-      PRIMARY KEY (owner, game_id)
-    )`);
-    const internalCols = this.sql.exec("PRAGMA table_info(internal_games)").toArray().map(r => r.name);
-    if (!internalCols.includes('published')) this.sql.exec("ALTER TABLE internal_games ADD COLUMN published INTEGER NOT NULL DEFAULT 0");
-    if (!internalCols.includes('resources')) this.sql.exec("ALTER TABLE internal_games ADD COLUMN resources TEXT NOT NULL DEFAULT '{}'");
-    this.sql.exec("CREATE INDEX IF NOT EXISTS idx_internal_games_owner ON internal_games(owner)");
+    // Migrate internal_games → games (one-time), then stop using internal_games
+    try {
+      const hasTbl = this.sql.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='internal_games'").toArray();
+      if (hasTbl.length) {
+        const rows = this.sql.exec("SELECT * FROM internal_games").toArray();
+        for (const r of rows) {
+          const exists = this.sql.exec("SELECT 1 FROM games WHERE owner = ? AND game_id = ?", r.owner, r.game_id).toArray();
+          if (!exists.length && r.content) {
+            const paths = parseManifestField(r.resources);
+            this.sql.exec("DELETE FROM games WHERE content_hash = ?", r.content_hash);
+            this.sql.exec(
+              `INSERT INTO games (content_hash, name, content, updated, size, owner, game_id, scope, version, checksum, resources, forked_from_hash)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'external', ?, ?, ?, ?)`,
+              r.content_hash, r.name, r.content, r.updated, r.size || r.content.length,
+              r.owner, r.game_id, r.version || '', r.checksum || r.content_hash,
+              JSON.stringify(paths), r.forked_from_hash || null
+            );
+          }
+        }
+        this.sql.exec("DROP TABLE IF EXISTS internal_games");
+      }
+    } catch(_) {}
 
     this.sql.exec(`CREATE TABLE IF NOT EXISTS users (
       username TEXT PRIMARY KEY,
@@ -731,20 +736,13 @@ export class GameRoom {
         const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
         if (role !== 'admin') return json({ error: "admin required" }, 403);
         const external = this.sql.exec(
-          `SELECT g.content_hash, g.name, g.size, g.updated, g.owner, g.game_id, g.scope, g.version,
+          `SELECT g.content_hash, g.name, g.size, g.updated, g.owner, g.game_id, g.scope, g.version, g.forked_from_hash,
                   s.score AS highscore, s.player AS highscore_player
            FROM games g
            LEFT JOIN scores s ON s.game_hash = g.content_hash
            ORDER BY g.owner ASC, g.name ASC`
         ).toArray();
-        const internal = this.sql.exec(
-          `SELECT ig.owner, ig.game_id, ig.name, ig.content_hash, ig.size, ig.updated, ig.version, ig.published, ig.forked_from_hash,
-                  s.score AS highscore, s.player AS highscore_player
-           FROM internal_games ig
-           LEFT JOIN scores s ON s.game_hash = ig.content_hash
-           ORDER BY ig.owner ASC, ig.game_id ASC`
-        ).toArray();
-        return json({ external, internal });
+        return json({ external, internal: [] });
       }
 
       // DELETE /admin/users/:username — delete a user (admin only, cannot delete self)
@@ -796,10 +794,8 @@ export class GameRoom {
         if (role !== 'admin') return json({ error: "admin required" }, 403);
         const hash = decodeURIComponent(adminGameDelete[1]);
         const ext = this.sql.exec("SELECT content_hash FROM games WHERE content_hash = ?", hash).toArray()[0];
-        const intl = this.sql.exec("SELECT content_hash FROM internal_games WHERE content_hash = ?", hash).toArray()[0];
-        if (!ext && !intl) return json({ error: "game not found" }, 404);
-        if (ext) this.sql.exec("DELETE FROM games WHERE content_hash = ?", hash);
-        if (intl) this.sql.exec("DELETE FROM internal_games WHERE content_hash = ?", hash);
+        if (!ext) return json({ error: "game not found" }, 404);
+        this.sql.exec("DELETE FROM games WHERE content_hash = ?", hash);
         this.broadcast(JSON.stringify({ type: 'game-deleted', content_hash: hash }));
         return json({ ok: true, deleted: hash });
       }
@@ -816,10 +812,8 @@ export class GameRoom {
         const newOwner = (body.owner || '').trim();
         if (!newOwner) return json({ error: "owner required" }, 400);
         const ext = this.sql.exec("SELECT content_hash FROM games WHERE content_hash = ?", hash).toArray()[0];
-        const intl = this.sql.exec("SELECT owner, game_id FROM internal_games WHERE content_hash = ?", hash).toArray()[0];
-        if (!ext && !intl) return json({ error: "game not found" }, 404);
-        if (ext) this.sql.exec("UPDATE games SET owner = ? WHERE content_hash = ?", newOwner, hash);
-        if (intl) this.sql.exec("UPDATE internal_games SET owner = ? WHERE owner = ? AND game_id = ?", newOwner, intl.owner, intl.game_id);
+        if (!ext) return json({ error: "game not found" }, 404);
+        this.sql.exec("UPDATE games SET owner = ? WHERE content_hash = ?", newOwner, hash);
         return json({ ok: true, hash, owner: newOwner });
       }
 
@@ -911,100 +905,23 @@ export class GameRoom {
         });
       }
 
-      // GET /internal/games — list authenticated user's internal games (with high score)
+      // GET /internal/games — list authenticated user's games (with high score)
       if (url.pathname === "/internal/games" && request.method === "GET") {
         const user = await this.authUser(request);
         if (!user) return json({ error: "auth required" }, 401);
         const rows = this.sql.exec(
-          `SELECT ig.owner, ig.game_id, ig.name, ig.content_hash, ig.checksum, ig.version, ig.published, ig.size, ig.updated, ig.forked_from_hash,
+          `SELECT g.owner, g.game_id, g.name, g.content_hash, g.checksum, g.version, g.size, g.updated, g.forked_from_hash,
                   s.score AS highscore, s.player AS highscore_player
-           FROM internal_games ig
-           LEFT JOIN scores s ON s.game_hash = ig.content_hash
-           WHERE ig.owner = ?
-           ORDER BY ig.updated DESC`,
+           FROM games g
+           LEFT JOIN scores s ON s.game_hash = g.content_hash
+           WHERE g.owner = ?
+           ORDER BY g.updated DESC`,
           user
         ).toArray();
         return json(rows);
       }
 
-      // PUT /internal/game/:gameId/publish — mark internal game public and upsert external row
-      if (url.pathname.startsWith('/internal/game/') && url.pathname.endsWith('/publish') && request.method === 'PUT') {
-        const user = await this.authUser(request);
-        if (!user) return json({ error: 'auth required' }, 401);
-        const gameId = normalizeSlug(url.pathname.slice('/internal/game/'.length, -'/publish'.length), '');
-        if (!gameId) return json({ error: 'missing game id' }, 400);
-
-        const row = this.sql.exec(
-          "SELECT owner, game_id, name, content, content_hash, checksum, version, resources, updated, size FROM internal_games WHERE owner = ? AND game_id = ?",
-          user, gameId
-        ).toArray()[0];
-        if (!row) return json({ error: 'not found' }, 404);
-
-        const body = await request.json().catch(() => ({}));
-        const version = String(body.version || row.version || makeReleaseVersion());
-        const paths = parseManifestField(row.resources);
-        const hash = await packageHash16(row.content || '');
-        const updated = new Date().toISOString();
-        const size = (row.content || '').length;
-
-        this.sql.exec("DELETE FROM games WHERE owner = ? AND game_id = ? AND scope = 'external'", user, gameId);
-        this.sql.exec(
-          `INSERT INTO games
-           (content_hash, name, content, updated, size, owner, game_id, scope, version, checksum, resources)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'external', ?, ?, ?)` ,
-          hash, String(row.name || gameId).slice(0, 100), row.content, updated, size,
-          user, gameId, version, hash, JSON.stringify(paths)
-        );
-        this.trimExternalPool();
-        this.sql.exec("UPDATE internal_games SET published = 1, version = ?, updated = ? WHERE owner = ? AND game_id = ?", version, updated, user, gameId);
-
-        const msg = JSON.stringify({
-          type: 'sync',
-          games: [{
-            content_hash: hash,
-            checksum: hash,
-            owner: user,
-            game_id: gameId,
-            scope: 'external',
-            version,
-            name: String(row.name || gameId).slice(0, 100),
-            content: row.content,
-            resource_paths: paths,
-            updated
-          }]
-        });
-        for (const sock of this.state.getWebSockets()) {
-          try { sock.send(msg); } catch (_) {}
-        }
-
-        return json({ ok: true, owner: user, game_id: gameId, published: true, content_hash: hash, version });
-      }
-
-      // DELETE /internal/game/:gameId/publish — make internal game private and remove external row
-      if (url.pathname.startsWith('/internal/game/') && url.pathname.endsWith('/publish') && request.method === 'DELETE') {
-        const user = await this.authUser(request);
-        if (!user) return json({ error: 'auth required' }, 401);
-        const gameId = normalizeSlug(url.pathname.slice('/internal/game/'.length, -'/publish'.length), '');
-        if (!gameId) return json({ error: 'missing game id' }, 400);
-
-        const extRows = this.sql.exec(
-          "SELECT content_hash FROM games WHERE owner = ? AND game_id = ? AND scope = 'external'",
-          user, gameId
-        ).toArray();
-        this.sql.exec("DELETE FROM games WHERE owner = ? AND game_id = ? AND scope = 'external'", user, gameId);
-        this.sql.exec("UPDATE internal_games SET published = 0 WHERE owner = ? AND game_id = ?", user, gameId);
-
-        for (const r of extRows) {
-          const delMsg = JSON.stringify({ type: 'game-deleted', content_hash: r.content_hash });
-          for (const sock of this.state.getWebSockets()) {
-            try { sock.send(delMsg); } catch (_) {}
-          }
-        }
-
-        return json({ ok: true, owner: user, game_id: gameId, published: false });
-      }
-
-      // POST /internal/fork — fork external game into authenticated user's internal room
+      // POST /internal/fork — fork a game into authenticated user's collection
       if (url.pathname === "/internal/fork" && request.method === "POST") {
         const user = await this.authUser(request);
         if (!user) return json({ error: "auth required" }, 401);
@@ -1024,12 +941,13 @@ export class GameRoom {
         const updated = new Date().toISOString();
         const size = src.content.length;
 
+        this.sql.exec("DELETE FROM games WHERE owner = ? AND game_id = ?", user, gameId);
         this.sql.exec(
-          `INSERT OR REPLACE INTO internal_games
-           (owner, game_id, name, content, content_hash, checksum, version, resources, forked_from_hash, updated, size)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          user, gameId, String(body.name || src.name).slice(0, 100), src.content,
-          checksum, checksum, version, JSON.stringify(srcPaths), sourceHash, updated, size
+          `INSERT INTO games
+           (content_hash, name, content, updated, size, owner, game_id, scope, version, checksum, resources, forked_from_hash)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'external', ?, ?, ?, ?)`,
+          checksum, String(body.name || src.name).slice(0, 100), src.content,
+          updated, size, user, gameId, version, checksum, JSON.stringify(srcPaths), sourceHash
         );
         return json({ ok: true, owner: user, game_id: gameId, forked_from_hash: sourceHash, checksum, version });
       }
@@ -1126,8 +1044,8 @@ export class GameRoom {
         return json({ ok: true, deleted: hash });
       }
 
-      // PUT /internal/game/:gameId — update authenticated user's internal game
-      if (url.pathname.startsWith('/internal/game/') && !url.pathname.endsWith('/publish') && request.method === 'PUT') {
+      // PUT /internal/game/:gameId — save authenticated user's game
+      if (url.pathname.startsWith('/internal/game/') && request.method === 'PUT') {
         const user = await this.authUser(request);
         if (!user) return json({ error: 'auth required' }, 401);
         const gameId = normalizeSlug(url.pathname.slice('/internal/game/'.length), '');
@@ -1142,61 +1060,48 @@ export class GameRoom {
         const updated = new Date().toISOString();
 
         const prev = this.sql.exec(
-          "SELECT published, resources FROM internal_games WHERE owner = ? AND game_id = ?",
+          "SELECT resources, forked_from_hash FROM games WHERE owner = ? AND game_id = ?",
           user, gameId
         ).toArray()[0];
-        const wasPublished = !!(prev && Number(prev.published) === 1);
-        const willPublish = typeof body.published === 'boolean' ? body.published : wasPublished;
         const paths = (body.resources === undefined)
           ? parseManifestField(prev && prev.resources)
           : resourcePaths(body.resources);
         const size = content.length;
         const checksum = await packageHash16(content);
 
+        this.sql.exec("DELETE FROM games WHERE owner = ? AND game_id = ?", user, gameId);
         this.sql.exec(
-          `INSERT OR REPLACE INTO internal_games
-           (owner, game_id, name, content, content_hash, checksum, version, published, resources, forked_from_hash, updated, size)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?,
-             ?,
-             COALESCE((SELECT forked_from_hash FROM internal_games WHERE owner = ? AND game_id = ?), NULL),
-             ?, ?)`,
-          user, gameId, name, content, checksum, checksum, version, willPublish ? 1 : 0,
-          JSON.stringify(paths), user, gameId, updated, size
+          `INSERT INTO games
+           (content_hash, name, content, updated, size, owner, game_id, scope, version, checksum, resources, forked_from_hash)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'external', ?, ?, ?, ?)`,
+          checksum, name, content, updated, size, user, gameId, version, checksum,
+          JSON.stringify(paths), (prev && prev.forked_from_hash) || null
         );
+        this.trimExternalPool();
 
-        if (willPublish) {
-          this.sql.exec("DELETE FROM games WHERE owner = ? AND game_id = ? AND scope = 'external'", user, gameId);
-          this.sql.exec(
-            `INSERT INTO games
-             (content_hash, name, content, updated, size, owner, game_id, scope, version, checksum, resources)
-             VALUES (?, ?, ?, ?, ?, ?, ?, 'external', ?, ?, ?)`,
-            checksum, name, content, updated, size, user, gameId, version, checksum, JSON.stringify(paths)
-          );
-          this.trimExternalPool();
-          const msg = JSON.stringify({
-            type: 'sync',
-            games: [{
-              content_hash: checksum,
-              checksum,
-              owner: user,
-              game_id: gameId,
-              scope: 'external',
-              version,
-              name,
-              content,
-              resource_paths: paths,
-              updated
-            }]
-          });
-          for (const sock of this.state.getWebSockets()) {
-            try { sock.send(msg); } catch (_) {}
-          }
+        const msg = JSON.stringify({
+          type: 'sync',
+          games: [{
+            content_hash: checksum,
+            checksum,
+            owner: user,
+            game_id: gameId,
+            scope: 'external',
+            version,
+            name,
+            content,
+            resource_paths: paths,
+            updated
+          }]
+        });
+        for (const sock of this.state.getWebSockets()) {
+          try { sock.send(msg); } catch (_) {}
         }
 
         return json({ ok: true, owner: user, game_id: gameId, content_hash: checksum, checksum, version });
       }
 
-      // GET /internal/game/:gameId — get full content of authenticated user's internal game
+      // GET /internal/game/:gameId — get full content of authenticated user's game
       if (url.pathname.startsWith('/internal/game/') && request.method === 'GET') {
         const user = await this.authUser(request);
         if (!user) return json({ error: 'auth required' }, 401);
@@ -1204,7 +1109,7 @@ export class GameRoom {
         if (!gameId) return json({ error: 'missing game id' }, 400);
         const owner = url.searchParams.get('owner') || user;
         const row = this.sql.exec(
-          "SELECT owner, game_id, name, content, content_hash, checksum, version, published, resources, size, updated, forked_from_hash FROM internal_games WHERE owner = ? AND game_id = ?",
+          "SELECT owner, game_id, name, content, content_hash, checksum, version, resources, size, updated, forked_from_hash FROM games WHERE owner = ? AND game_id = ?",
           owner, gameId
         ).toArray()[0];
         if (!row) return json({ error: 'not found' }, 404);
@@ -1213,19 +1118,18 @@ export class GameRoom {
         return json(row);
       }
 
-      // DELETE /internal/game/:gameId — delete authenticated user's internal game
+      // DELETE /internal/game/:gameId — delete authenticated user's game
       if (url.pathname.startsWith('/internal/game/') && request.method === 'DELETE') {
         const user = await this.authUser(request);
         if (!user) return json({ error: 'auth required' }, 401);
         const gameId = normalizeSlug(url.pathname.slice('/internal/game/'.length), '');
         if (!gameId) return json({ error: 'missing game id' }, 400);
         const owner = url.searchParams.get('owner') || user;
-        // Only allow deleting own games (or admin can delete any)
         const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
         if (owner !== user && role !== 'admin') return json({ error: 'forbidden' }, 403);
-        const exists = this.sql.exec("SELECT 1 FROM internal_games WHERE owner = ? AND game_id = ?", owner, gameId).toArray()[0];
+        const exists = this.sql.exec("SELECT 1 FROM games WHERE owner = ? AND game_id = ?", owner, gameId).toArray()[0];
         if (!exists) return json({ error: 'not found' }, 404);
-        this.sql.exec("DELETE FROM internal_games WHERE owner = ? AND game_id = ?", owner, gameId);
+        this.sql.exec("DELETE FROM games WHERE owner = ? AND game_id = ?", owner, gameId);
         return json({ ok: true, deleted: gameId });
       }
 
@@ -1272,93 +1176,8 @@ export class GameRoom {
       }
 
       case 'push': {
-        // Client pushes new games
-        if (!Array.isArray(data.games) || data.games.length === 0) return;
-        const countRow = this.sql.exec("SELECT COUNT(*) as c FROM games").toArray();
-        let count = countRow[0]?.c || 0;
-        const added = [];
-
-        for (const g of data.games.slice(0, 20)) { // max 20 per push
-          if (!g.content || typeof g.content !== 'string') continue;
-          if (!g.name || typeof g.name !== 'string') continue;
-          if (!g.content_hash || typeof g.content_hash !== 'string') continue;
-          if (g.content.length > MAX_GAME_SIZE) continue;
-          if (g.content.length === 0) continue;
-          const paths = resourcePaths(g.resources || {});
-          const size = g.content.length;
-          if (size > MAX_GAME_SIZE) continue;
-          if (count >= MAX_TOTAL_GAMES) {
-            // Hard safety cap: evict the oldest external row to make room.
-            const oldest = this.sql.exec(
-              "SELECT content_hash FROM games WHERE scope = 'external' ORDER BY updated ASC, rowid ASC LIMIT 1"
-            ).toArray()[0];
-            if (!oldest) break;
-            this.sql.exec("DELETE FROM games WHERE content_hash = ?", oldest.content_hash);
-            count = Math.max(0, count - 1);
-          }
-
-          // Verify content hash matches (don't trust client blindly)
-          const verifiedHash = await packageHash16(g.content);
-          if (verifiedHash !== g.content_hash) continue;
-
-          // Check if already stored
-          const exists = this.sql.exec(
-            "SELECT 1 FROM games WHERE content_hash = ?", verifiedHash
-          ).toArray();
-          if (exists.length > 0) continue;
-
-          const owner = normalizeSlug(g.owner || 'public', 'public');
-          const gameId = this.deriveGameId(g.name, g.game_id);
-          const version = String(g.version || makeReleaseVersion());
-
-          this.sql.exec("DELETE FROM games WHERE name = ? AND scope = 'external'", g.name.slice(0, 100));
-          // Keep only one current version per identity (<owner>/<game_id>) in external pool.
-          const sameIdentity = this.sql.exec(
-            "SELECT content_hash FROM games WHERE owner = ? AND game_id = ? AND scope = 'external'",
-            owner, gameId
-          ).toArray();
-          for (const row of sameIdentity) {
-            this.sql.exec("DELETE FROM games WHERE content_hash = ?", row.content_hash);
-            count = Math.max(0, count - 1);
-          }
-
-          const updated = new Date().toISOString();
-          this.sql.exec(
-            `INSERT INTO games
-             (content_hash, name, content, updated, size, owner, game_id, scope, version, checksum, resources)
-             VALUES (?, ?, ?, ?, ?, ?, ?, 'external', ?, ?, ?)`,
-            verifiedHash, g.name.slice(0, 100), g.content, updated, size,
-            owner, gameId, version, verifiedHash, JSON.stringify(paths)
-          );
-          const trimmed = this.trimExternalPool();
-          if (trimmed > 0) {
-            count = Math.max(0, count - trimmed);
-          }
-          added.push({
-            content_hash: verifiedHash,
-            checksum: verifiedHash,
-            owner,
-            game_id: gameId,
-            scope: 'external',
-            version,
-            name: g.name.slice(0, 100),
-            content: g.content,
-            resource_paths: paths,
-            updated
-          });
-          count++;
-        }
-
-        // Broadcast new games to all OTHER connected clients
-        if (added.length > 0) {
-          const msg = JSON.stringify({ type: 'sync', games: added });
-          for (const sock of this.state.getWebSockets()) {
-            if (sock !== ws) {
-              try { sock.send(msg); } catch (_) {}
-            }
-          }
-        }
-        ws.send(JSON.stringify({ type: 'ack', added: added.length }));
+        // Anonymous push disabled — all games managed via auth'd REST API
+        ws.send(JSON.stringify({ type: 'ack', added: 0 }));
         break;
       }
 

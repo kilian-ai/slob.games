@@ -3157,30 +3157,37 @@ pub fn canvas(_args: &[Value]) -> Value {
                                             ws.send(JSON.stringify({ type: 'need', hashes: need }));
                                         }
 
-                                        // Push games server doesn't have
-                                        const toPush = local.filter(g =>
-                                            g.scope !== 'internal' &&
-                                            !serverHashSet.has(g.hash) &&
-                                            g.content.length > 0 &&
-                                            g.content.length <= MAX_PUSH_PACKAGE_SIZE
-                                        );
-                                        if (toPush.length > 0) {
-                                            ws.send(JSON.stringify({
-                                                type: 'push',
-                                                games: toPush.map(g => ({
-                                                    name: g.name,
-                                                    content: g.content,
-                                                    resources: {},
-                                                    content_hash: g.hash,
-                                                    checksum: g.hash,
-                                                    owner: g.owner,
-                                                    game_id: g.game_id,
-                                                    scope: g.scope || 'internal',
-                                                    version: g.version || ''
-                                                }))
-                                            }));
-                                            toPush.forEach(g => serverHashSet.add(g.hash));
-                                        }
+                                        // Prune stale external games the server no longer has
+                                        try {
+                                            const raw = localStorage.getItem('traits.pvfs') || '{}';
+                                            const files = JSON.parse(raw);
+                                            const col = files['canvas/games.json']
+                                                ? JSON.parse(files['canvas/games.json'])
+                                                : { active: null, games: {} };
+                                            var pruned = 0;
+                                            for (var pid in col.games) {
+                                                if (!col.games.hasOwnProperty(pid)) continue;
+                                                var pg = col.games[pid];
+                                                if ((pg.scope || pg._scope || 'internal') !== 'external') continue;
+                                                // Find this game's content hash from local scan
+                                                var pgHash = local.find(function(l) { return l.id === pid; });
+                                                if (pgHash && !serverHashSet.has(pgHash.hash)) {
+                                                    if (col.active === pid) {
+                                                        // Switch active to another game
+                                                        var alt = Object.keys(col.games).find(function(k) { return k !== pid; });
+                                                        col.active = alt || null;
+                                                    }
+                                                    delete col.games[pid];
+                                                    pruned++;
+                                                }
+                                            }
+                                            if (pruned > 0) {
+                                                console.log('[sync] pruned', pruned, 'stale external game(s)');
+                                                files['canvas/games.json'] = JSON.stringify(col);
+                                                localStorage.setItem('traits.pvfs', JSON.stringify(files));
+                                                renderProjectBar();
+                                            }
+                                        } catch (_) {}
                                     }
 
                                     if (data.type === 'games') {
