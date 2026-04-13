@@ -48,14 +48,47 @@ a{color:var(--accent);text-decoration:none}
 a:hover{text-decoration:underline}
 
 /* ── Shell nav ── */
-#shell-nav{position:sticky;top:0;z-index:9999;background:rgba(8,8,14,0.97);backdrop-filter:blur(12px);border-bottom:1px solid rgba(0,224,255,0.1);padding:0 2rem;display:flex;align-items:center;height:48px;gap:2rem;font-family:'Courier New',Menlo,monospace}
-#shell-nav .logo{font-weight:800;font-size:1rem;letter-spacing:0.06em;cursor:pointer;text-transform:uppercase;color:#8899a6}
-#shell-nav .logo span{color:var(--accent);-webkit-text-fill-color:var(--accent);text-shadow:0 0 10px rgba(0,224,255,0.5),0 0 30px rgba(0,224,255,0.12)}
-#shell-nav .links{display:flex;gap:1.25rem;font-size:0.78rem;text-transform:uppercase;letter-spacing:0.08em}
-#shell-nav .links a{color:var(--muted);transition:all 0.2s;cursor:pointer;padding:14px 0;border-bottom:2px solid transparent;margin-bottom:-1px}
-#shell-nav .links a:hover{color:var(--accent);text-shadow:0 0 8px rgba(0,224,255,0.4);text-decoration:none}
-#shell-nav .links a.active{color:var(--accent);border-bottom-color:var(--accent);text-shadow:0 0 8px rgba(0,224,255,0.4);text-decoration:none}
-#shell-nav .status{margin-left:auto;font-size:0.7rem;color:var(--muted);letter-spacing:0.04em;text-transform:uppercase}
+#shell-nav{position:sticky;top:0;z-index:9999;background:rgba(8,8,14,0.97);backdrop-filter:blur(12px);border-bottom:1px solid rgba(0,224,255,0.1);padding:0 1rem;display:flex;align-items:center;height:48px;font-family:'Courier New',Menlo,monospace}
+.nav-avatar{width:30px;height:30px;border-radius:50%;background:#1a1a2e;border:1.5px solid rgba(0,224,255,0.15);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;transition:border-color 0.2s;overflow:hidden}
+.nav-avatar:hover{border-color:var(--accent)}
+.nav-avatar span{color:var(--muted);font-size:0.7rem;font-weight:700;text-transform:uppercase}
+.nav-avatar.logged-in{border-color:var(--green)}
+.nav-avatar.logged-in span{color:var(--green)}
+.nav-brand{display:flex;align-items:center;gap:0;margin-left:0.75rem}
+.nav-brand .nav-item{font-weight:800;font-size:0.85rem;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);cursor:pointer;padding:14px 0.1rem;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all 0.2s;text-decoration:none}
+.nav-brand .nav-item:hover{color:var(--accent);text-shadow:0 0 8px rgba(0,224,255,0.4);text-decoration:none}
+.nav-brand .nav-item.active{color:var(--accent);border-bottom-color:var(--accent);text-shadow:0 0 10px rgba(0,224,255,0.5),0 0 30px rgba(0,224,255,0.12)}
+.nav-dot{color:var(--muted);font-size:0.9rem;font-weight:800;opacity:0.4;user-select:none;padding:0 0.35rem}
+.nav-right{margin-left:auto;display:flex;align-items:center;gap:0.75rem}
+.nav-settings{background:none;border:none;color:var(--muted);cursor:pointer;padding:6px;border-radius:6px;display:flex;align-items:center;justify-content:center;transition:all 0.2s}
+.nav-settings:hover,.nav-settings.active{color:var(--accent);background:rgba(0,224,255,0.06)}
+.nav-settings svg{display:block}
+#shell-nav .status{font-size:0.65rem;color:var(--muted);letter-spacing:0.04em;text-transform:uppercase;display:flex;align-items:center;gap:4px}
+
+/* ── Auth modal ── */
+#auth-modal{display:none;position:fixed;inset:0;z-index:10001;background:rgba(0,0,0,0.65);backdrop-filter:blur(6px);align-items:center;justify-content:center}
+#auth-modal.open{display:flex}
+.auth-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:2rem;width:340px;max-width:90vw;position:relative}
+.auth-card h3{font-size:0.95rem;margin-bottom:1.25rem;color:var(--fg);font-family:'Courier New',Menlo,monospace;text-transform:uppercase;letter-spacing:0.06em}
+.auth-tabs{display:flex;gap:0;margin-bottom:1.5rem;border-bottom:1px solid var(--border)}
+.auth-tab{background:none;border:none;color:var(--muted);cursor:pointer;font-size:0.75rem;text-transform:uppercase;letter-spacing:0.06em;padding:6px 12px;border-bottom:2px solid transparent;font-family:'Courier New',Menlo,monospace;transition:color 0.2s}
+.auth-tab:hover{color:var(--fg)}
+.auth-tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.auth-field{margin-bottom:1rem}
+.auth-field label{display:block;font-size:0.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:0.3rem;font-family:'Courier New',Menlo,monospace}
+.auth-field input{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:0.5rem 0.7rem;color:var(--fg);font-size:0.85rem;font-family:system-ui,sans-serif}
+.auth-field input:focus{outline:none;border-color:var(--accent)}
+.auth-submit{width:100%;padding:0.55rem;border:none;border-radius:6px;background:var(--accent);color:#000;font-weight:700;cursor:pointer;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.06em;margin-top:0.25rem;font-family:'Courier New',Menlo,monospace}
+.auth-submit:hover{opacity:0.9}
+.auth-submit:disabled{opacity:0.5;cursor:not-allowed}
+.auth-error{color:#f44;font-size:0.78rem;margin-top:0.5rem;min-height:1.2em}
+.auth-close{position:absolute;top:0.75rem;right:1rem;background:none;border:none;color:var(--muted);cursor:pointer;font-size:1.3rem;line-height:1}
+.auth-close:hover{color:var(--fg)}
+.auth-profile{text-align:center;padding:1rem 0}
+.auth-profile .avatar-lg{width:56px;height:56px;border-radius:50%;background:#1a1a2e;border:2px solid var(--green);display:inline-flex;align-items:center;justify-content:center;font-size:1.5rem;color:var(--green);font-weight:800;font-family:'Courier New',Menlo,monospace;text-transform:uppercase;margin-bottom:0.75rem}
+.auth-profile p{color:var(--fg);font-size:0.9rem;margin-bottom:1rem}
+.auth-logout{width:100%;padding:0.5rem;border:1px solid var(--border);border-radius:6px;background:none;color:var(--muted);cursor:pointer;font-size:0.78rem;font-family:'Courier New',Menlo,monospace;text-transform:uppercase;letter-spacing:0.04em;transition:all 0.2s}
+.auth-logout:hover{border-color:#f44;color:#f44}
 .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px;vertical-align:middle}
 .dot.ok{background:var(--green);box-shadow:0 0 6px rgba(0,255,136,0.5)}
 .dot.loading{background:var(--accent);animation:pulse 1s infinite}
@@ -86,8 +119,9 @@ a:hover{text-decoration:underline}
 @keyframes spin{to{transform:rotate(360deg)}}
 
 @media(max-width:640px){
-  #shell-nav{padding:0 1rem;gap:0.75rem}
-  #shell-nav .links{gap:0.75rem;font-size:0.72rem}
+  #shell-nav{padding:0 0.75rem}
+  .nav-brand{margin-left:0.5rem}
+  .nav-brand .nav-item{font-size:0.78rem}
 }
 @media(max-width:768px) and (pointer:coarse){
   #page-frame{min-height:100vh}
@@ -104,8 +138,8 @@ a:hover{text-decoration:underline}
     <p>AI-powered game canvas platform. Build, play, and share games in the browser — runs entirely in WASM, no server required.</p>
     <h2>Pages</h2>
     <ul>
-      <li><a href="https://slob.games/#/canvas">Canvas</a></li>
-      <li><a href="https://slob.games/#/playground">Playground</a></li>
+      <li><a href="https://slob.games/#/">Play</a></li>
+      <li><a href="https://slob.games/#/games">Games</a></li>
     </ul>
   </div>
 </noscript>
@@ -116,18 +150,57 @@ a:hover{text-decoration:underline}
 </div>
 
 <nav id="shell-nav" style="display:none">
-  <div class="logo" data-href="/"><span>slob</span>.games</div>
-  <div class="links">
-    <a data-href="/" class="active">Play</a>
-    <a data-href="/build">Build</a>
-    <a data-href="/settings">Settings</a>
-    <a data-href="/dashboard" id="navAdmin" style="display:none">Admin</a>
+  <div class="nav-avatar" id="navAvatar" title="Sign in">
+    <span id="avatarLetter">?</span>
   </div>
-  <div class="status">
-    <span class="dot loading" id="statusDot"></span>
-    <span id="statusText">loading…</span>
+  <div class="nav-brand">
+    <a data-href="/" class="nav-item active">SLOB</a>
+    <span class="nav-dot">&middot;</span>
+    <a data-href="/games" class="nav-item">GAMES</a>
+  </div>
+  <a data-href="/dashboard" id="navAdmin" class="nav-item" style="display:none;color:var(--muted);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.08em;margin-left:0.5rem;font-weight:800">Admin</a>
+  <div class="nav-right">
+    <div class="status">
+      <span class="dot loading" id="statusDot"></span>
+      <span id="statusText">loading…</span>
+    </div>
+    <button class="nav-settings" id="navSettings" data-href="/settings" title="Settings">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+    </button>
   </div>
 </nav>
+
+<div id="auth-modal">
+  <div class="auth-card">
+    <button class="auth-close" id="authClose">&times;</button>
+    <div id="authLoggedOut">
+      <div class="auth-tabs">
+        <button class="auth-tab active" data-tab="login">Login</button>
+        <button class="auth-tab" data-tab="register">Register</button>
+      </div>
+      <form id="authLoginForm">
+        <div class="auth-field"><label>Username</label><input type="text" id="authLoginUser" autocomplete="username" required></div>
+        <div class="auth-field"><label>Password</label><input type="password" id="authLoginPass" autocomplete="current-password" required></div>
+        <button type="submit" class="auth-submit">Login</button>
+        <div class="auth-error" id="authLoginError"></div>
+      </form>
+      <form id="authRegForm" style="display:none">
+        <div class="auth-field"><label>Username</label><input type="text" id="authRegUser" autocomplete="username" required></div>
+        <div class="auth-field"><label>Email</label><input type="email" id="authRegEmail" autocomplete="email" required></div>
+        <div class="auth-field"><label>Password</label><input type="password" id="authRegPass" autocomplete="new-password" required minlength="6"></div>
+        <button type="submit" class="auth-submit">Register</button>
+        <div class="auth-error" id="authRegError"></div>
+      </form>
+    </div>
+    <div id="authLoggedIn" style="display:none">
+      <div class="auth-profile">
+        <div class="avatar-lg" id="authAvatarLg">?</div>
+        <p>Signed in as <strong id="authUsername">&mdash;</strong></p>
+        <button class="auth-logout" id="authLogout">Sign Out</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <div id="page-frame"></div>
 
@@ -149,7 +222,7 @@ a:hover{text-decoration:underline}
 const ROUTES = {
   '/':           'www.canvas',
   '/canvas':     'www.canvas',
-  '/build':      'www.playground',
+  '/games':      'www.games',
   '/playground': 'www.playground',
   '/wasm':       'www.wasm',
   '/admin':      'www.admin.spa',
@@ -383,7 +456,7 @@ async function injectPage(fullHtml, route) {
   TC.scan(frame);
 
   // Update nav active state
-  $$('#shell-nav .links a').forEach(a => {
+  $$('#shell-nav [data-href]').forEach(a => {
     a.classList.toggle('active', a.dataset.href === route);
   });
 
@@ -844,6 +917,7 @@ async function boot() {
 
   // Check user role for permission-gated nav items
   _checkUserRole();
+  _initAuth();
 
   // Route to initial page
   const route = currentRouteFromLocation();
@@ -870,6 +944,112 @@ async function _checkUserRole() {
       }
     }
   } catch(_) {}
+}
+
+// ── Auth modal + avatar ──
+function _initAuth() {
+  const avatarEl = document.getElementById('navAvatar');
+  const letterEl = document.getElementById('avatarLetter');
+  const modal = document.getElementById('auth-modal');
+
+  function refreshAvatar() {
+    const user = (localStorage.getItem('traits.env.SLOB_USERNAME') || '').trim();
+    const token = (localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '').trim();
+    if (user && token) {
+      letterEl.textContent = user.charAt(0).toUpperCase();
+      avatarEl.classList.add('logged-in');
+      avatarEl.title = user;
+    } else {
+      letterEl.textContent = '?';
+      avatarEl.classList.remove('logged-in');
+      avatarEl.title = 'Sign in';
+    }
+  }
+
+  avatarEl.addEventListener('click', () => {
+    const user = (localStorage.getItem('traits.env.SLOB_USERNAME') || '').trim();
+    const token = (localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '').trim();
+    if (user && token) {
+      document.getElementById('authLoggedIn').style.display = '';
+      document.getElementById('authLoggedOut').style.display = 'none';
+      document.getElementById('authUsername').textContent = user;
+      document.getElementById('authAvatarLg').textContent = user.charAt(0).toUpperCase();
+    } else {
+      document.getElementById('authLoggedIn').style.display = 'none';
+      document.getElementById('authLoggedOut').style.display = '';
+    }
+    modal.classList.add('open');
+  });
+
+  document.getElementById('authClose').addEventListener('click', () => modal.classList.remove('open'));
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('open'); });
+
+  // Tab switching
+  modal.querySelectorAll('.auth-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      modal.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      const isLogin = tab.dataset.tab === 'login';
+      document.getElementById('authLoginForm').style.display = isLogin ? '' : 'none';
+      document.getElementById('authRegForm').style.display = isLogin ? 'none' : '';
+    });
+  });
+
+  // Login
+  document.getElementById('authLoginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('.auth-submit');
+    const err = document.getElementById('authLoginError');
+    btn.disabled = true; err.textContent = '';
+    try {
+      const res = await fetch('https://relay.slob.games/auth/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: document.getElementById('authLoginUser').value.trim(), password: document.getElementById('authLoginPass').value })
+      });
+      const data = await res.json();
+      if (data.ok && data.token) {
+        localStorage.setItem('traits.secret.SLOB_USER_TOKEN', data.token);
+        localStorage.setItem('traits.env.SLOB_USERNAME', data.username || document.getElementById('authLoginUser').value.trim());
+        if (window._traitsSDK && window._traitsSDK.setSecret) window._traitsSDK.setSecret('SLOB_USER_TOKEN', data.token);
+        refreshAvatar(); modal.classList.remove('open'); _checkUserRole();
+      } else { err.textContent = data.error || 'Login failed'; }
+    } catch(ex) { err.textContent = 'Network error'; }
+    btn.disabled = false;
+  });
+
+  // Register
+  document.getElementById('authRegForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('.auth-submit');
+    const err = document.getElementById('authRegError');
+    btn.disabled = true; err.textContent = '';
+    try {
+      const res = await fetch('https://relay.slob.games/auth/register', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: document.getElementById('authRegUser').value.trim(), email: document.getElementById('authRegEmail').value.trim(), password: document.getElementById('authRegPass').value })
+      });
+      const data = await res.json();
+      if (data.ok && data.token) {
+        localStorage.setItem('traits.secret.SLOB_USER_TOKEN', data.token);
+        localStorage.setItem('traits.env.SLOB_USERNAME', data.username || document.getElementById('authRegUser').value.trim());
+        if (window._traitsSDK && window._traitsSDK.setSecret) window._traitsSDK.setSecret('SLOB_USER_TOKEN', data.token);
+        refreshAvatar(); modal.classList.remove('open'); _checkUserRole();
+      } else { err.textContent = data.error || 'Registration failed'; }
+    } catch(ex) { err.textContent = 'Network error'; }
+    btn.disabled = false;
+  });
+
+  // Logout
+  document.getElementById('authLogout').addEventListener('click', () => {
+    localStorage.removeItem('traits.secret.SLOB_USER_TOKEN');
+    localStorage.removeItem('traits.env.SLOB_USERNAME');
+    localStorage.removeItem('traits.env.SLOB_USER_ROLE');
+    refreshAvatar(); modal.classList.remove('open');
+    const adminLink = document.getElementById('navAdmin');
+    if (adminLink) adminLink.style.display = 'none';
+  });
+
+  refreshAvatar();
 }
 
 boot();

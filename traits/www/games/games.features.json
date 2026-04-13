@@ -1,0 +1,15 @@
+{
+  "trait": "www.games",
+  "features": [
+    {
+      "name": "renders game browser page",
+      "examples": [
+        {
+          "args": [],
+          "expected_type": "string",
+          "contains": "<title>slob.games"
+        }
+      ]
+    }
+  ]
+}
