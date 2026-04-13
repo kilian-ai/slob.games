@@ -1205,17 +1205,6 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                                     const gameId = active._sync_game_id || active.game_id || _slugifyGameId(active.name || activeId);
                                     const pkg = _collectGameResourcesForContent(active.content || '', 2 * 1024 * 1024);
-                                    try {
-                                        var key = _revisionKeyForGame(active, activeId);
-                                        await window._traitsSDK.call('sys.game_vcs', [
-                                            'commit',
-                                            key,
-                                            active.content || '',
-                                            active.name || 'untitled',
-                                            active.version || '',
-                                            JSON.stringify(pkg.resources || {})
-                                        ]);
-                                    } catch (_) {}
                                     const contentOnlyHash = await _shortContentHash(active.content || '');
                                     const syncKey = [activeId, gameId, active.name || '', active.updated || '', contentOnlyHash, Object.keys(pkg.resources).length].join('|');
                                     if (syncKey === __lastRelayInternalSyncKey) return true;
@@ -1838,6 +1827,25 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 __lastPersistedContent = text;
                                 await sdk.call('sys.canvas', ['set', text]);
                                 await _autoNameActiveGame(text);
+
+                                // Snapshot: commit a local revision on every meaningful save.
+                                // sys.game_vcs deduplicates if content is identical to latest.
+                                try {
+                                    const col = readGamesCollection();
+                                    const aid = col.active;
+                                    const ag = aid ? (col.games || {})[aid] : null;
+                                    if (ag) {
+                                        const key = _revisionKeyForGame(ag, aid);
+                                        const pkg = _collectGameResourcesForContent(text, 2 * 1024 * 1024);
+                                        await sdk.call('sys.game_vcs', [
+                                            'commit', key, text,
+                                            ag.name || 'untitled',
+                                            ag.version || '',
+                                            JSON.stringify(pkg.resources || {})
+                                        ]);
+                                    }
+                                } catch (_) {}
+
                                 _syncActiveToRelayInternal({ immediate: immediateRelaySync }).catch(() => {});
                             } catch(_) {}
                         }
