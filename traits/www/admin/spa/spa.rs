@@ -793,7 +793,9 @@ function renderRelayGames(data, el, summary) {
     html += '<span>v' + ever + '</span>';
     html += '<span>' + esize + '</span>';
     html += '<span>' + ago(ge.updated) + '</span>';
-    html += '<span style="color:#00ff88">published</span>';
+    var isPub = ge.published !== undefined ? !!ge.published : true;
+    var pubLabel = isPub ? '<span style="color:#00ff88;cursor:pointer" onclick="togglePublish(\'' + esc(ge.owner || '') + '\',\'' + esc(ge.game_id || '') + '\')">published</span>' : '<span style="color:#ff6666;cursor:pointer" onclick="togglePublish(\'' + esc(ge.owner || '') + '\',\'' + esc(ge.game_id || '') + '\')">draft</span>';
+    html += pubLabel;
     html += '<span style="opacity:0.5">#' + ehash + '</span>';
     html += '</div></div>';
     html += '<div class="game-actions">';
@@ -950,6 +952,23 @@ async function deleteRelayGame(owner, gameId, name) {
       alert(data.error || 'Delete failed');
     }
   } catch(e) { alert('Delete request failed'); }
+}
+
+async function togglePublish(owner, gameId) {
+  try {
+    var r = await fetch('https://relay.slob.games/sync/internal/game/' + encodeURIComponent(gameId) + '/publish', {
+      method: 'PATCH',
+      headers: authHeaders()
+    });
+    if (r.ok) {
+      _relayGames = null;
+      await renderGames();
+    } else {
+      var data = null;
+      try { data = await r.json(); } catch (_) {}
+      alert((data && data.error) || 'Toggle failed');
+    }
+  } catch(e) { alert('Toggle request failed'); }
 }
 
 // ═══════════════════════════════════════════════════════════════
