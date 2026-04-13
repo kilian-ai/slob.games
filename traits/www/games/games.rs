@@ -97,6 +97,17 @@ const JS: &str = r##"
     localStorage.setItem('traits.pvfs',JSON.stringify(pvfs));
   }
 
+  async function activateAndGoCanvas(id){
+    var sdk=window._traitsSDK;
+    if(sdk){
+      try{await sdk.call('sys.canvas',['activate',id])}
+      catch(_){setActiveGame(id)}
+    }else{
+      setActiveGame(id);
+    }
+    goCanvas();
+  }
+
   function goCanvas(){
     window.dispatchEvent(new CustomEvent('traits-spa-action',{detail:{spa_action:'navigate',route:'/'}}));
   }
@@ -145,7 +156,7 @@ const JS: &str = r##"
       +'<div class="gactions"><button class="btn-del" data-del="1">delete</button></div>'
       +'<div class="play-icon">\u25b6</div>';
     div.querySelector('[data-del]').addEventListener('click',function(e){e.stopPropagation();deleteLocalGame(g.id,g.name)});
-    div.addEventListener('click',function(){setActiveGame(g.id);goCanvas()});
+    div.addEventListener('click',function(){activateAndGoCanvas(g.id)});
     return div;
   }
 
@@ -255,7 +266,7 @@ const JS: &str = r##"
       col.games[id]={name:name,content:data.content,scope:'external',version:'',created:new Date().toISOString(),updated:new Date().toISOString()};
       col.active=id;
       writeGamesCollection(col);
-      goCanvas();
+      await activateAndGoCanvas(id);
     }catch(e){console.error('Failed to load game:',e)}
   }
 
