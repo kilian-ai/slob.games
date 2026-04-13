@@ -969,10 +969,15 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 for (var i = 0; i < revs.length; i++) {
                                     var it = revs[i] || {};
                                     var rid = _escJs(it.id || '');
-                                    html += '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid #18243b">';
-                                    html += '<button class="btn-play" style="padding:4px 8px;font-size:11px" onclick="window._canvasRestoreRevision(\'' + rid + '\')">restore</button>';
+                                    var isCurr = (i === 0);
+                                    html += '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid #18243b' + (isCurr ? ';background:rgba(76,175,138,.05)' : '') + '">';
+                                    if (isCurr) {
+                                        html += '<button class="btn-play" style="padding:4px 8px;font-size:11px;opacity:.35;cursor:default" disabled>restore</button>';
+                                    } else {
+                                        html += '<button class="btn-play" style="padding:4px 8px;font-size:11px" onclick="window._canvasRestoreRevision(\'' + rid + '\')">restore</button>';
+                                    }
                                     html += '<div style="flex:1;min-width:0">';
-                                    html += '<div style="font-size:12px;color:#d8e1f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">v' + _escHtml(it.version || '—') + '</div>';
+                                    html += '<div style="font-size:12px;color:#d8e1f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">v' + _escHtml(it.version || '—') + (isCurr ? ' <span style="color:#4caf8a;font-size:10px">● current</span>' : '') + '</div>';
                                     html += '<div style="font-size:10px;color:#7f91b2">' + _escHtml(String(it.created || '')) + '</div>';
                                     html += '</div>';
                                     html += '<button class="danger" style="padding:4px 8px;font-size:11px" onclick="window._canvasDeleteRevision(\'' + rid + '\')">X</button>';

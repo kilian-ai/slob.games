@@ -800,10 +800,15 @@ async function openRevisionDropdown(ev, owner, gameId, name) {
       var ver = esc(it.version || '—');
       var created = esc(ago(it.created));
       var bytes = formatSize(Number(it.length || 0));
-      body += '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid #18243b;">';
-      body += '<button class="btn-play" style="padding:4px 8px;font-size:11px" onclick="restoreRevision(\'' + escJs(owner) + '\',\'' + escJs(gameId) + '\',\'' + rid + '\')">restore</button>';
+      var isCurr = (i === 0);
+      body += '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid #18243b' + (isCurr ? ';background:rgba(76,175,138,.05)' : '') + ';">';
+      if (isCurr) {
+        body += '<button class="btn-play" style="padding:4px 8px;font-size:11px;opacity:.35;cursor:default" disabled>restore</button>';
+      } else {
+        body += '<button class="btn-play" style="padding:4px 8px;font-size:11px" onclick="restoreRevision(\'' + escJs(owner) + '\',\'' + escJs(gameId) + '\',\'' + rid + '\')">restore</button>';
+      }
       body += '<div style="flex:1;min-width:0">';
-      body += '<div style="font-size:12px;color:#d4deef;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">v' + ver + ' <span style="opacity:.6">' + bytes + '</span></div>';
+      body += '<div style="font-size:12px;color:#d4deef;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">v' + ver + (isCurr ? ' <span style="color:#4caf8a;font-size:10px">● current</span>' : '') + ' <span style="opacity:.6">' + bytes + '</span></div>';
       body += '<div style="font-size:10px;color:#8193b4">' + created + ' • ' + esc((it.id || '').slice(-16)) + '</div>';
       body += '</div>';
       body += '<button class="danger" style="padding:4px 8px;font-size:11px" onclick="deleteRevision(\'' + escJs(owner) + '\',\'' + escJs(gameId) + '\',\'' + rid + '\', event)">X</button>';
