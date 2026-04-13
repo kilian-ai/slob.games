@@ -1820,7 +1820,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                             } catch (_) {}
                         }
 
-                        async function persistActiveContent(content) {
+                        async function persistActiveContent(content, opts) {
+                            opts = opts || {};
+                            const immediateRelaySync = !!opts.immediateRelaySync;
                             const text = String(content || '');
                             if (!text || text === __lastPersistedContent) return;
                             try {
@@ -1829,7 +1831,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 __lastPersistedContent = text;
                                 await sdk.call('sys.canvas', ['set', text]);
                                 await _autoNameActiveGame(text);
-                                _syncActiveToRelayInternal({ immediate: false }).catch(() => {});
+                                _syncActiveToRelayInternal({ immediate: immediateRelaySync }).catch(() => {});
                             } catch(_) {}
                         }
 
@@ -1859,12 +1861,13 @@ pub fn canvas(_args: &[Value]) -> Value {
                         // Listen for live updates from voice/SDK
                         window.addEventListener('traits-canvas-update', (e) => {
                             const content = e.detail?.content;
+                            const immediateRelaySync = !!e.detail?.immediateRelaySync;
                             if (content !== undefined) {
                                 __lastContent = content;
                                 renderCanvas(content);
                                 renderProjectBar();
                                 // Safety net: ensure updates are persisted continuously.
-                                persistActiveContent(content);
+                                persistActiveContent(content, { immediateRelaySync: immediateRelaySync });
                             } else {
                                 // Re-read from games.json via VFS
                                 const active = getActiveGameContent();

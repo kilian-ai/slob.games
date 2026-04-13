@@ -460,7 +460,7 @@ async function _runCanvasAgent(sdk, request) {
                     if (title) await sdk.call('sys.canvas', ['rename', title.trim()]).catch(() => {});
                 }
             } catch(_) {}
-            window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content } }));
+            window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content, immediateRelaySync: true } }));
         }
         return JSON.stringify(r?.ok ? { ok: true, response: r.response || 'Done' } : { error: r?.error || 'agent failed' });
     } catch(e) {
@@ -647,7 +647,7 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                                 } catch(e) { console.warn('[Canvas/Agent/Browser] games.json sync error:', e); }
                             }
                             console.log('[Canvas/Agent/Browser] Firing traits-canvas-update, len:', lastContent.length);
-                            window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content: lastContent } }));
+                            window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content: lastContent, immediateRelaySync: true } }));
                         }
                         toolResult = '{"ok":true}';
                     }
