@@ -570,6 +570,7 @@ function authHeaders() {
 }
 
 var _relayGames = null; // cached relay response
+var _relayGamesAt = 0;
 
 async function fetchRelayGames() {
   var games = [];
@@ -589,6 +590,7 @@ async function fetchRelayGames() {
     }
   } catch(_) {}
   _relayGames = { games: games };
+  _relayGamesAt = Date.now();
   return _relayGames;
 }
 
@@ -677,8 +679,10 @@ function localInternalGamesForSettings() {
   } catch(_) { return []; }
 }
 
-function upsertInternalRelayGameToLocal(owner, gameId, data) {
+function upsertInternalRelayGameToLocal(owner, gameId, data, opts) {
   try {
+    opts = opts || {};
+    var preferRelayContent = !!opts.preferRelayContent;
     var raw = localStorage.getItem('traits.pvfs') || '{}';
     var files = JSON.parse(raw);
     var col = files['canvas/games.json']
@@ -703,11 +707,11 @@ function upsertInternalRelayGameToLocal(owner, gameId, data) {
       }
     }
 
-    // CRITICAL: If local game exists with content that differs from relay version,
-    // preserve the local content (user may have edited it locally).
-    // Only sync name/metadata from relay, not content.
+    // Preserve local edits by default; explicit relay actions can force remote content.
     var localContent = (existingGame && existingGame.content) || '';
-    var contentToUse = localContent && localContent !== data.content ? localContent : (data.content || '');
+    var contentToUse = preferRelayContent
+      ? (data.content || '')
+      : (localContent && localContent !== data.content ? localContent : (data.content || ''));
     var resources = normalizeRelayResources(data.resources);
     for (var rp in resources) {
       if (Object.prototype.hasOwnProperty.call(resources, rp)) {
@@ -875,7 +879,7 @@ async function restoreRevision(owner, gameId, revisionId) {
       published: data.published !== undefined ? !!data.published : true,
       resources: resources,
       updated: new Date().toISOString()
-    });
+    }, { preferRelayContent: true });
 
     _relayGames = null;
     closeRevisionDropdown();
@@ -921,7 +925,7 @@ async function renderGames() {
 
   // Try relay first
   var data = _relayGames;
-  if (!data) {
+  if (!data || (Date.now() - _relayGamesAt) > 4000) {
     try { data = await fetchRelayGames(); } catch(_) {}
   }
 
@@ -953,9 +957,12 @@ function renderRelayGames(data, el, summary) {
     var ehash = (ge.content_hash || '').slice(0, 8);
     var ever = esc(ge.version || '—');
     var eowner = esc((ge.owner || '') + '/' + (ge.game_id || ''));
+      var playFn = ge.scope === 'external'
+        ? ('playExternalGame(\'' + esc(ge.content_hash || '') + '\')')
+        : ('playRelayGame(\'' + esc(ge.owner || '') + '\',\'' + esc(ge.game_id || '') + '\')');
     html += '<div class="game-row">';
     html += '<div class="game-info">';
-    html += '<div class="game-name" style="cursor:pointer" onclick="playRelayGame(\'' + esc(ge.owner || '') + '\',\'' + esc(ge.game_id || '') + '\')">' + ename + '</div>';
+      html += '<div class="game-name" style="cursor:pointer" onclick="' + playFn + '">' + ename + '</div>';
     html += '<div class="game-meta">';
     html += '<span>' + eowner + '</span>';
     html += '<span style="cursor:pointer;text-decoration:underline;text-decoration-style:dotted" onclick="openRevisionDropdown(event,\'' + escJs(ge.owner || '') + '\',\'' + escJs(ge.game_id || '') + '\',\'' + escJs(ge.name || 'untitled') + '\')">v' + ever + '</span>';
@@ -967,7 +974,7 @@ function renderRelayGames(data, el, summary) {
     html += '<span style="opacity:0.5">#' + ehash + '</span>';
     html += '</div></div>';
     html += '<div class="game-actions">';
-    html += '<button class="btn-play" onclick="playRelayGame(\'' + esc(ge.owner || '') + '\',\'' + esc(ge.game_id || '') + '\')">Play</button>';
+      html += '<button class="btn-play" onclick="' + playFn + '">Play</button>';
     html += '<button class="danger" onclick="deleteRelayGame(\'' + esc(ge.owner || '') + '\',\'' + esc(ge.game_id || '') + '\',\'' + ename.replace(/'/g, "\\'") + '\')">Del</button>';
     html += '</div></div>';
   }
@@ -1039,17 +1046,12 @@ function playRelayGame(owner, gameId) {
   }).then(function(r) { return r.json(); }).then(function(data) {
     if (!data.content) { alert('Could not load game'); return; }
     applyRelayResourcesToPvfs(data.resources);
-    var localId = upsertInternalRelayGameToLocal(owner, gameId, data);
-    var isNewGame = !localId;
+    var localId = upsertInternalRelayGameToLocal(owner, gameId, data, { preferRelayContent: true });
     var activate = localId
       ? callTrait('sys.canvas', ['activate', localId])
       : callTrait('sys.canvas', ['new', data.name || gameId, data.version || '']);
     activate.then(function() {
-      // CRITICAL: Only call 'set' for NEW games. Existing games already have their content
-      // from activate or upsert. Calling 'set' would overwrite locally-edited content.
-      var finish = isNewGame
-        ? callTrait('sys.canvas', ['set', data.content])
-        : Promise.resolve();
+      var finish = callTrait('sys.canvas', ['set', data.content]);
       finish.then(function() {
         window.dispatchEvent(new CustomEvent('traits-canvas-projects-changed'));
         if (location.protocol === 'file:') {

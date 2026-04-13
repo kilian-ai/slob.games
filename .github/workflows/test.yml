@@ -41,6 +41,15 @@ jobs:
           cd traits/kernel/wasm
           wasm-pack build --target web --release
 
+      - name: Check release snapshot generation
+        run: |
+          mkdir -p /tmp/revisions
+          python3 scripts/create_release_snapshot.py \
+            --site-root . \
+            --output-dir /tmp/revisions \
+            --git-sha test-sha
+          test -f /tmp/revisions/latest.json
+
   doc:
     name: Documentation
     runs-on: ubuntu-latest
