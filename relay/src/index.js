@@ -501,6 +501,14 @@ export class GameRoom {
       player TEXT NOT NULL DEFAULT '',
       updated TEXT NOT NULL
     )`);
+
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS resource_cache (
+      game_hash TEXT NOT NULL,
+      path TEXT NOT NULL,
+      value TEXT NOT NULL,
+      updated TEXT NOT NULL,
+      PRIMARY KEY (game_hash, path)
+    )`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS user_secrets (
       username TEXT NOT NULL,
       key TEXT NOT NULL,
@@ -554,6 +562,26 @@ export class GameRoom {
     };
     if (includeResources) out.resources = resources;
     return out;
+  }
+
+  cacheResourcesForGame(gameHash, resources) {
+    const hash = String(gameHash || '').trim();
+    if (!hash) return 0;
+    const normalized = normalizeResourcesMap(resources);
+    const entries = Object.entries(normalized);
+    if (!entries.length) return 0;
+    const updated = new Date().toISOString();
+    let wrote = 0;
+    for (const [path, value] of entries) {
+      this.sql.exec(
+        `INSERT INTO resource_cache (game_hash, path, value, updated)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(game_hash, path) DO UPDATE SET value=excluded.value, updated=excluded.updated`,
+        hash, path, value, updated
+      );
+      wrote++;
+    }
+    return wrote;
   }
 
   broadcast(message) {
@@ -991,6 +1019,7 @@ export class GameRoom {
           checksum, String(body.name || src.name).slice(0, 100), src.content,
           updated, size, user, gameId, version, checksum, encodeResourcesField(srcResources), sourceHash
         );
+        this.cacheResourcesForGame(checksum, srcResources);
         return json({ ok: true, owner: user, game_id: gameId, forked_from_hash: sourceHash, checksum, version });
       }
 
@@ -1051,6 +1080,7 @@ export class GameRoom {
           newHash, name.slice(0, 100), content, updated, size,
           owner, gameId, version, newHash, encodeResourcesField(incomingResources)
         );
+        this.cacheResourcesForGame(newHash, incomingResources);
         this.trimExternalPool();
 
         // Broadcast updated game to all connected WebSocket clients
@@ -1132,6 +1162,7 @@ export class GameRoom {
           checksum, name, content, updated, size, user, gameId, version, checksum,
           encodeResourcesField(resourcesMap), (prev && prev.forked_from_hash) || null, prevPublished
         );
+        this.cacheResourcesForGame(checksum, resourcesMap);
         this.trimExternalPool();
 
         // Only broadcast to other clients if the game is published
@@ -1288,12 +1319,41 @@ export class GameRoom {
       }
 
       case 'need-resources': {
-        // P2P resource request — forward to all OTHER clients
-        if (!Array.isArray(data.paths) || data.paths.length === 0) return;
+        // Resource request — serve from durable cache first, then forward misses to peers.
+        const nonce = data.nonce || '';
+        const items = Array.isArray(data.items) ? data.items.slice(0, 64) : [];
+        const legacyPaths = Array.isArray(data.paths) ? data.paths.slice(0, 50) : [];
+        const hits = [];
+        const misses = [];
+
+        if (items.length > 0) {
+          for (const item of items) {
+            const hash = String(item && item.game_hash || '').trim();
+            const path = String(item && item.path || '').trim();
+            if (!hash || !path) continue;
+            const row = this.sql.exec(
+              "SELECT value FROM resource_cache WHERE game_hash = ? AND path = ?",
+              hash, path
+            ).toArray()[0];
+            if (row && typeof row.value === 'string' && row.value) {
+              hits.push({ game_hash: hash, path, value: row.value });
+            } else {
+              misses.push({ game_hash: hash, path });
+            }
+          }
+        }
+
+        if (hits.length > 0) {
+          ws.send(JSON.stringify({ type: 'have-resources', nonce, items: hits }));
+        }
+
+        if (misses.length === 0 && legacyPaths.length === 0) return;
+
         const fwd = JSON.stringify({
           type: 'need-resources',
-          paths: data.paths.slice(0, 50),
-          nonce: data.nonce || '',
+          nonce,
+          items: misses,
+          paths: legacyPaths,
         });
         for (const sock of this.state.getWebSockets()) {
           if (sock !== ws) try { sock.send(fwd); } catch (_) {}
@@ -1302,8 +1362,23 @@ export class GameRoom {
       }
 
       case 'have-resources': {
-        // P2P resource response — forward to all OTHER clients
-        if (!data.nonce || typeof data.resources !== 'object') return;
+        // P2P resource response — persist to durable cache and forward to others.
+        if (!data.nonce) return;
+        const items = Array.isArray(data.items) ? data.items : [];
+        if (items.length > 0) {
+          const grouped = {};
+          for (const item of items) {
+            const hash = String(item && item.game_hash || '').trim();
+            const path = String(item && item.path || '').trim();
+            const value = String(item && item.value || '');
+            if (!hash || !path || !value) continue;
+            if (!grouped[hash]) grouped[hash] = {};
+            grouped[hash][path] = value;
+          }
+          for (const hash of Object.keys(grouped)) {
+            this.cacheResourcesForGame(hash, grouped[hash]);
+          }
+        }
         // Limit forwarded payload to ~900KB to stay under WS frame limits
         const raw = JSON.stringify(data);
         if (raw.length > 900_000) return;

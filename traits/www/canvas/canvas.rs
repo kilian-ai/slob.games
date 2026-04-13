@@ -3319,12 +3319,13 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 var files = _readPvfsFiles();
                                 for (var i = 0; i < games.length; i++) {
                                     var g = games[i];
+                                    var gameHash = String(g.content_hash || g._sync_hash || g.checksum || '').trim();
                                     // Check resource_paths manifest from relay
                                     if (Array.isArray(g.resource_paths)) {
                                         for (var rp = 0; rp < g.resource_paths.length; rp++) {
                                             var p2 = g.resource_paths[rp];
-                                            if (p2 && !files[p2] && allMissing.indexOf(p2) === -1) {
-                                                allMissing.push(p2);
+                                            if (p2 && !files[p2] && !allMissing.some(function(x){ return x.path === p2 && x.game_hash === gameHash; })) {
+                                                allMissing.push({ game_hash: gameHash, path: p2 });
                                             }
                                         }
                                     }
@@ -3339,8 +3340,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                                         var matches = content.match(re) || [];
                                         for (var m = 0; m < matches.length; m++) {
                                             var path = matches[m];
-                                            if (!files[path] && allMissing.indexOf(path) === -1) {
-                                                allMissing.push(path);
+                                            if (!files[path] && !allMissing.some(function(x){ return x.path === path && x.game_hash === gameHash; })) {
+                                                allMissing.push({ game_hash: gameHash, path: path });
                                             }
                                         }
                                     }
@@ -3350,7 +3351,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 console.log('[p2p] requesting', allMissing.length, 'missing resource(s)');
                                 ws.send(JSON.stringify({
                                     type: 'need-resources',
-                                    paths: allMissing.slice(0, 50),
+                                    items: allMissing.slice(0, 50),
                                     nonce: _p2pNonce,
                                 }));
                             }
@@ -3369,48 +3370,64 @@ pub fn canvas(_args: &[Value]) -> Value {
                             // Respond to a need-resources request from another client
                             function _handleNeedResources(data) {
                                 if (!ws || ws.readyState !== WebSocket.OPEN) return;
-                                if (!Array.isArray(data.paths) || !data.paths.length || !data.nonce) return;
+                                var items = Array.isArray(data.items) ? data.items : [];
+                                var legacyPaths = Array.isArray(data.paths) ? data.paths : [];
+                                if ((!items.length && !legacyPaths.length) || !data.nonce) return;
                                 var files = _readPvfsFiles();
-                                var found = {};
+                                var found = [];
                                 var bytes = 0;
                                 var CHUNK_LIMIT = 800000; // stay under 900KB relay limit
-                                for (var i = 0; i < data.paths.length; i++) {
-                                    var p = String(data.paths[i] || '').trim();
+                                var reqs = items.length ? items : legacyPaths.map(function(p){ return { game_hash: '', path: p }; });
+                                for (var i = 0; i < reqs.length; i++) {
+                                    var req = reqs[i] || {};
+                                    var p = String(req.path || '').trim();
                                     if (!p || p.indexOf('..') !== -1 || p.startsWith('/')) continue;
                                     var val = files[p];
                                     if (typeof val !== 'string' || !val) continue;
                                     if (bytes + val.length > CHUNK_LIMIT) {
                                         // Send what we have so far, then start a new chunk
-                                        if (Object.keys(found).length > 0) {
+                                        if (found.length > 0) {
                                             ws.send(JSON.stringify({
                                                 type: 'have-resources',
                                                 nonce: data.nonce,
-                                                resources: found,
+                                                items: found,
                                             }));
-                                            console.log('[p2p] sent', Object.keys(found).length, 'resource(s)');
+                                            console.log('[p2p] sent', found.length, 'resource(s)');
                                         }
-                                        found = {};
+                                        found = [];
                                         bytes = 0;
                                         // If single file exceeds limit, send it alone
                                         if (val.length > CHUNK_LIMIT) continue;
                                     }
-                                    found[p] = val;
+                                    found.push({ game_hash: String(req.game_hash || '').trim(), path: p, value: val });
                                     bytes += val.length;
                                 }
-                                if (Object.keys(found).length > 0) {
+                                if (found.length > 0) {
                                     ws.send(JSON.stringify({
                                         type: 'have-resources',
                                         nonce: data.nonce,
-                                        resources: found,
+                                        items: found,
                                     }));
-                                    console.log('[p2p] sent', Object.keys(found).length, 'resource(s)');
+                                    console.log('[p2p] sent', found.length, 'resource(s)');
                                 }
                             }
 
                             // Apply received resources from another client
                             function _handleHaveResources(data) {
-                                if (!data.resources || typeof data.resources !== 'object') return;
-                                var wrote = _applySyncedResourcesToPvfs(data.resources, 4 * 1024 * 1024);
+                                var resources = {};
+                                if (Array.isArray(data.items)) {
+                                    for (var i = 0; i < data.items.length; i++) {
+                                        var item = data.items[i] || {};
+                                        var path = String(item.path || '').trim();
+                                        var value = String(item.value || '');
+                                        if (!path || !value) continue;
+                                        resources[path] = value;
+                                    }
+                                } else if (data.resources && typeof data.resources === 'object') {
+                                    resources = data.resources;
+                                }
+                                if (!resources || typeof resources !== 'object' || Object.keys(resources).length === 0) return;
+                                var wrote = _applySyncedResourcesToPvfs(resources, 4 * 1024 * 1024);
                                 if (wrote > 0) {
                                     console.log('[p2p] received', wrote, 'resource(s)');
                                     // If active game uses these resources, refresh render
@@ -3419,7 +3436,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     if (active && active.content) {
                                         var content = active.content;
                                         var gotAny = false;
-                                        for (var p in data.resources) {
+                                        for (var p in resources) {
                                             if (content.indexOf(p) !== -1) { gotAny = true; break; }
                                         }
                                         if (gotAny) renderCanvas(content);
