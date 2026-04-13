@@ -3307,6 +3307,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             let _syncing = false; // prevent re-entrant sync from storage events
                             let serverHashSet = new Set(); // track what relay already has
                             var _p2pNonce = ''; // tracks our active need-resources request
+                            var _resourceResyncTimer = null;
 
                             // ── P2P Resource Sync ──
 
@@ -3443,6 +3444,10 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     console.log('[sync] connected');
                                     // After catalog sync settles, check for missing resources
                                     setTimeout(_checkAllGamesForMissingResources, 4000);
+                                    if (_resourceResyncTimer) clearInterval(_resourceResyncTimer);
+                                    _resourceResyncTimer = setInterval(function(){
+                                        _checkAllGamesForMissingResources();
+                                    }, 15000);
                                 };
 
                                 ws.onmessage = async (e) => {
@@ -3604,7 +3609,15 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     }
                                 };
 
-                                ws.onclose = () => { ws = null; window.__syncWs = null; scheduleReconnect(); };
+                                ws.onclose = () => {
+                                    ws = null;
+                                    window.__syncWs = null;
+                                    if (_resourceResyncTimer) {
+                                        clearInterval(_resourceResyncTimer);
+                                        _resourceResyncTimer = null;
+                                    }
+                                    scheduleReconnect();
+                                };
                                 ws.onerror = () => {};
                             }
 
