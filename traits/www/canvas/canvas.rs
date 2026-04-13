@@ -61,7 +61,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                         #game-select option { background: #0c0c16; color: #8899a6; }
 
                         #canvas-container {
-                            width: 100%; height: calc(100vh - 49px);
+                            width: 100%; height: calc(100vh - 97px);
                             padding: 0 20px; position: relative;
                             display: flex; justify-content: center; align-items: center;
                             overflow: hidden; box-sizing: border-box;
