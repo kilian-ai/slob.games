@@ -439,7 +439,6 @@ pub fn canvas(_args: &[Value]) -> Value {
             }
             body {
                 div .canvas-header {
-                    h1 { "slob.games " span .accent { "canvas" } }
                     div .actions {
                         div .viewport-controls {
                             span { "Viewport" }
