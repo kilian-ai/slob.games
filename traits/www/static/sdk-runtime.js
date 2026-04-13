@@ -2439,13 +2439,15 @@ class Traits {
 
                     // ── Model response transcript ──
                     else if (type === 'response.audio_transcript.done') {
-                        if (opts.onResponse && msg.transcript) {
-                            opts.onResponse(msg.transcript.trim());
-                        }
                         if (msg.transcript) {
-                            _appendLocalVoiceHistory(voiceSessionId, 'assistant', msg.transcript.trim());
-                            try { await _self.call('sys.voice.history', ['append', 'assistant', msg.transcript.trim()]); } catch(_) {}
-                            _dispatchVoiceEvent('response', { text: msg.transcript.trim() });
+                            let spoken = msg.transcript.trim();
+                            if (_canvasAgentRunning) {
+                                spoken = 'Still updating the game. I will confirm when it is fully finished and synced.';
+                            }
+                            if (opts.onResponse) opts.onResponse(spoken);
+                            _appendLocalVoiceHistory(voiceSessionId, 'assistant', spoken);
+                            try { await _self.call('sys.voice.history', ['append', 'assistant', spoken]); } catch(_) {}
+                            _dispatchVoiceEvent('response', { text: spoken });
                         }
                     }
 
