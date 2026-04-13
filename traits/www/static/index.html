@@ -1002,7 +1002,7 @@ function _initAuth() {
     const err = document.getElementById('authLoginError');
     btn.disabled = true; err.textContent = '';
     try {
-      const res = await fetch('https://relay.slob.games/auth/login', {
+      const res = await fetch('https://relay.slob.games/sync/auth/login', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: document.getElementById('authLoginUser').value.trim(), password: document.getElementById('authLoginPass').value })
       });
@@ -1024,7 +1024,7 @@ function _initAuth() {
     const err = document.getElementById('authRegError');
     btn.disabled = true; err.textContent = '';
     try {
-      const res = await fetch('https://relay.slob.games/auth/register', {
+      const res = await fetch('https://relay.slob.games/sync/auth/register', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: document.getElementById('authRegUser').value.trim(), email: document.getElementById('authRegEmail').value.trim(), password: document.getElementById('authRegPass').value })
       });
