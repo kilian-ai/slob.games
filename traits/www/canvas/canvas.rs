@@ -1515,6 +1515,87 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     });
                                 });
                             }
+                            function _extractVfsContent(resp) {
+                                if (typeof resp === 'string') return resp;
+                                if (!resp || typeof resp !== 'object') return '';
+                                var cands = [
+                                    resp.content,
+                                    resp.value,
+                                    resp.result && resp.result.content,
+                                    resp.result && resp.result.value,
+                                    resp.result && resp.result.result && resp.result.result.content,
+                                ];
+                                for (var i = 0; i < cands.length; i++) {
+                                    if (typeof cands[i] === 'string' && cands[i]) return cands[i];
+                                }
+                                return '';
+                            }
+                            function _normalizeVfsPath(url) {
+                                var s = String(url || '').trim();
+                                if (!s) return '';
+                                if (s.charAt(0) === '#') return '';
+                                if (/^(data:|blob:|https?:|wss?:|file:|about:|javascript:)/i.test(s)) return '';
+                                if (s.indexOf('//') === 0) return '';
+                                var q = s.indexOf('?');
+                                if (q >= 0) s = s.slice(0, q);
+                                var h = s.indexOf('#');
+                                if (h >= 0) s = s.slice(0, h);
+                                if (s.indexOf('./') === 0) s = s.slice(2);
+                                while (s.indexOf('/') === 0) s = s.slice(1);
+                                while (s.indexOf('../') === 0) s = s.slice(3);
+                                if (!s || s.indexOf('..') !== -1) return '';
+                                return s;
+                            }
+                            function _guessMime(path) {
+                                var p = String(path || '').toLowerCase();
+                                if (/\.png$/.test(p)) return 'image/png';
+                                if (/\.(jpg|jpeg)$/.test(p)) return 'image/jpeg';
+                                if (/\.gif$/.test(p)) return 'image/gif';
+                                if (/\.webp$/.test(p)) return 'image/webp';
+                                if (/\.svg$/.test(p)) return 'image/svg+xml';
+                                if (/\.json$/.test(p)) return 'application/json';
+                                if (/\.txt$/.test(p)) return 'text/plain';
+                                if (/\.atlas$/.test(p)) return 'text/plain';
+                                if (/\.mp3$/.test(p)) return 'audio/mpeg';
+                                if (/\.wav$/.test(p)) return 'audio/wav';
+                                if (/\.ogg$/.test(p)) return 'audio/ogg';
+                                return 'application/octet-stream';
+                            }
+                            function _installVfsFetchShim() {
+                                if (!window.fetch || window.__traitsVfsFetchShim) return;
+                                window.__traitsVfsFetchShim = true;
+                                var _origFetch = window.fetch.bind(window);
+                                window.fetch = function(input, init) {
+                                    try {
+                                        var reqMethod = '';
+                                        var rawUrl = '';
+                                        if (typeof input === 'string') {
+                                            rawUrl = input;
+                                            reqMethod = (init && init.method) || 'GET';
+                                        } else if (input && typeof input === 'object') {
+                                            rawUrl = input.url || '';
+                                            reqMethod = input.method || (init && init.method) || 'GET';
+                                        }
+                                        reqMethod = String(reqMethod || 'GET').toUpperCase();
+                                        if (reqMethod !== 'GET') return _origFetch(input, init);
+                                        var path = _normalizeVfsPath(rawUrl);
+                                        if (!path) return _origFetch(input, init);
+                                        return Promise.resolve(sdk() && sdk().call('sys.vfs', ['read', path])).then(function(res) {
+                                            var payload = _extractVfsContent(res);
+                                            if (!payload) return _origFetch(input, init);
+                                            if (/^data:/i.test(payload)) return _origFetch(payload);
+                                            return new Response(payload, {
+                                                status: 200,
+                                                headers: { 'Content-Type': _guessMime(path) }
+                                            });
+                                        }).catch(function() {
+                                            return _origFetch(input, init);
+                                        });
+                                    } catch (_) {
+                                        return _origFetch(input, init);
+                                    }
+                                };
+                            }
                             window.traits = {
                                 call:   function(p,a)   {
                                     var callArgs = a || [];
@@ -1569,6 +1650,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             if (!window.loadVFSImage) {
                                 window.loadVFSImage = function(path, opts) { return window.traits.loadVFSImage(path, opts); };
                             }
+                            _installVfsFetchShim();
                             var _qs = document.querySelector.bind(document);
                             document.querySelector = function(s) {
                                 return _qs(s.replace(/^#phone-viewport\s+/,'').replace(/^#canvas-container\s+/,''));
