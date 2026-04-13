@@ -69,6 +69,13 @@ fn ensure_internal_active(col: &mut Value) -> Option<String> {
     }
     forked["updated"] = json!(ts);
 
+    // Remove the old external entry — the fork replaces it entirely.
+    // Prevents duplicate game entries (the relay will get the updated
+    // content via sync, and dedupeLocalGames handles any echoes).
+    if let Some(games) = col["games"].as_object_mut() {
+        games.remove(&active_id);
+    }
+
     col["games"][&new_id] = forked;
     col["active"] = json!(new_id.clone());
     Some(new_id)

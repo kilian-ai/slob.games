@@ -429,36 +429,12 @@ async function _runCanvasAgent(sdk, request) {
             try { const pvfs = JSON.parse(localStorage.getItem('traits.pvfs') || '{}'); content = pvfs['canvas/app.html'] || ''; } catch(_) {}
         }
         if (content) {
-            // Sync to games.json via WASM sys.canvas set (detect new game by title)
+            // Persist final content via sys.canvas set (updates games.json).
+            // No needsNew / rename — updates are always in-place on the active game.
             try {
-                let needsNew = false;
-                try {
-                    const pvfs = JSON.parse(localStorage.getItem('traits.pvfs') || '{}');
-                    const gj = JSON.parse(pvfs['canvas/games.json'] || '{}');
-                    const activeContent = gj.games?.[gj.active]?.content || '';
-                    if (activeContent) {
-                        const oldTitle = (activeContent.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '';
-                        const newTitle = (content.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '';
-                        if (newTitle && oldTitle && newTitle.trim().toLowerCase() !== oldTitle.trim().toLowerCase()) {
-                            needsNew = true;
-                        }
-                    }
-                } catch(_) {}
-                if (needsNew) {
-                    const title = (content.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || 'untitled';
-                    await sdk.call('sys.canvas', ['new', title.trim()]);
-                }
                 await sdk.call('sys.canvas', ['set', content]);
-                // CRITICAL: Refresh WASM VFS state back to localStorage after sys.canvas 'set'
                 if (wasmReady && wasm?.pvfs_refresh) {
-                    try {
-                        wasm.pvfs_refresh();
-                        console.log('[Canvas/Agent] PVFS refreshed after sys.canvas set');
-                    } catch(e) { console.warn('[Canvas/Agent] PVFS refresh failed:', e); }
-                }
-                if (!needsNew) {
-                    const title = (content.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '';
-                    if (title) await sdk.call('sys.canvas', ['rename', title.trim()]).catch(() => {});
+                    try { wasm.pvfs_refresh(); } catch(_) {}
                 }
             } catch(_) {}
             window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content, immediateRelaySync: true } }));
@@ -609,46 +585,12 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                         try { localStorage.setItem('traits.pvfs', JSON.stringify(pvfs)); } catch(_) {}
                         lastContent = pendingContent;
                         if (isCanvas && lastContent) {
-                            const _sdk = window._traitsSDK;
-                            if (_sdk) {
-                                try {
-                                    // Detect new game: compare <title> of new content vs active game
-                                    let needsNew = false;
-                                    try {
-                                        const gj = JSON.parse(pvfs['canvas/games.json'] || '{}');
-                                        const activeContent = gj.games?.[gj.active]?.content || '';
-                                        if (activeContent) {
-                                            const oldTitle = (activeContent.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '';
-                                            const newTitle = (lastContent.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '';
-                                            if (newTitle && oldTitle && newTitle.trim().toLowerCase() !== oldTitle.trim().toLowerCase()) {
-                                                needsNew = true;
-                                            }
-                                        }
-                                    } catch(_) {}
-                                    if (needsNew) {
-                                        const title = (lastContent.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || 'untitled';
-                                        await _sdk.call('sys.canvas', ['new', title.trim()]);
-                                        console.log('[Canvas/Agent/Browser] New game created:', title.trim());
-                                    }
-                                    const setRes = await _sdk.call('sys.canvas', ['set', lastContent]);
-                                    console.log('[Canvas/Agent/Browser] sys.canvas set result:', setRes?.ok);
-                                    // CRITICAL: After sys.canvas 'set', refresh WASM VFS state back to localStorage
-                                    // so games.json updates are synced to main thread storage
-                                    if (wasmReady && wasm?.pvfs_refresh) {
-                                        try {
-                                            wasm.pvfs_refresh();
-                                            console.log('[Canvas/Agent/Browser] PVFS refreshed after sys.canvas set');
-                                        } catch(e) { console.warn('[Canvas/Agent/Browser] PVFS refresh failed:', e); }
-                                    }
-                                    // Auto-name from <title> if untitled
-                                    if (!needsNew) {
-                                        const title = (lastContent.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '';
-                                        if (title) await _sdk.call('sys.canvas', ['rename', title.trim()]).catch(() => {});
-                                    }
-                                } catch(e) { console.warn('[Canvas/Agent/Browser] games.json sync error:', e); }
-                            }
-                            console.log('[Canvas/Agent/Browser] Firing traits-canvas-update, len:', lastContent.length);
-                            window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content: lastContent, immediateRelaySync: true } }));
+                            // Live preview only — no sys.canvas set, no rename, no relay sync.
+                            // The final persist + relay sync happens ONCE after the agent loop ends
+                            // (see post-loop block below).  Firing intermediate previews keeps the
+                            // phone viewport updated without the side-effects of full persistence.
+                            console.log('[Canvas/Agent/Browser] VFS write preview, len:', lastContent.length);
+                            window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content: lastContent } }));
                         }
                         toolResult = '{"ok":true}';
                     }
@@ -708,6 +650,25 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
             }
             if (choice?.finish_reason === 'stop') break;
         }
+
+        // ── Post-loop: single final persist + relay sync ──
+        // All intermediate writes only touched localStorage directly.
+        // Now do ONE sys.canvas set to update games.json, then fire
+        // the canonical event with immediateRelaySync.
+        if (lastContent) {
+            const _sdk = window._traitsSDK;
+            if (_sdk) {
+                try {
+                    await _sdk.call('sys.canvas', ['set', lastContent]);
+                    if (wasmReady && wasm?.pvfs_refresh) {
+                        try { wasm.pvfs_refresh(); } catch(_) {}
+                    }
+                    console.log('[Canvas/Agent/Browser] Final sys.canvas set done');
+                } catch(e) { console.warn('[Canvas/Agent/Browser] Final persist error:', e); }
+            }
+            window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content: lastContent, immediateRelaySync: true } }));
+        }
+
         return JSON.stringify(lastContent ? { ok: true, response: 'Canvas updated' } : { ok: false, error: 'No canvas content written' });
     } catch(e) {
         console.error('[Canvas/Agent/Browser] ✗', e);

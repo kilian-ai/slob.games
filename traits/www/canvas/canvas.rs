@@ -3145,6 +3145,19 @@ pub fn canvas(_args: &[Value]) -> Value {
                                         }
                                         const targetId = matchedId || gameId;
 
+                                        // Never overwrite the active game — it is the user's source of truth.
+                                        // Relay echoes of the same game should not revert local edits.
+                                        if (col.active && (col.active === targetId || col.active === gameId)) continue;
+
+                                        // Also skip if the active game shares relay identity with this incoming game
+                                        // (happens after fork: internal game inherits owner/game_id from external)
+                                        if (col.active && col.games[col.active]) {
+                                            const ag = col.games[col.active];
+                                            const aOwner = (ag._sync_owner || ag.owner || '').toLowerCase();
+                                            const aGid = (ag._sync_game_id || ag.game_id || '').toLowerCase();
+                                            if (aOwner && aGid && aOwner === owner.toLowerCase() && aGid === gid.toLowerCase()) continue;
+                                        }
+
                                         // Skip if we already have this exact content version
                                         if (existing.has(g.content_hash) && !matchedId && !col.games[gameId]) continue;
 
