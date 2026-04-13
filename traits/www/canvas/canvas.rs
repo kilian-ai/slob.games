@@ -1824,7 +1824,14 @@ pub fn canvas(_args: &[Value]) -> Value {
                             opts = opts || {};
                             const immediateRelaySync = !!opts.immediateRelaySync;
                             const text = String(content || '');
-                            if (!text || text === __lastPersistedContent) return;
+                            if (!text) return;
+                            // If content already persisted, still honour immediateRelaySync upgrade
+                            if (text === __lastPersistedContent) {
+                                if (immediateRelaySync) {
+                                    _syncActiveToRelayInternal({ immediate: true }).catch(() => {});
+                                }
+                                return;
+                            }
                             try {
                                 const sdk = window._traitsSDK;
                                 if (!sdk) return;
@@ -2086,17 +2093,24 @@ pub fn canvas(_args: &[Value]) -> Value {
                         window.__canvasGameLogs = __gameLogs;
 
                         // Track canvas agent status — suppress poll while agent is running
+                        // and for a grace period after to prevent async races from reverting content
                         let __canvasAgentRunning = false;
+                        let __canvasAgentFinishedAt = 0;
+                        const AGENT_GRACE_MS = 5000; // protect content for 5s after agent finishes
                         window.addEventListener('traits-canvas-agent-status', (e) => {
                             __canvasAgentRunning = !!e.detail?.running;
                             const overlay = document.getElementById('canvasLoading');
                             if (overlay) overlay.style.display = __canvasAgentRunning ? 'flex' : 'none';
+                            if (!__canvasAgentRunning) __canvasAgentFinishedAt = Date.now();
                         });
 
                         // Poll VFS for agent writes (1s backup for missed events)
                         const _pollId = setInterval(() => {
                             try {
                                 if (sourceMode || __canvasAgentRunning) return;
+                                // Grace period: skip poll for 5s after agent finishes to prevent
+                                // async relay echoes / stale reads from reverting the fresh content
+                                if (Date.now() - __canvasAgentFinishedAt < AGENT_GRACE_MS) return;
                                 const content = getActiveGameContent() || readCanvasFromStorage();
                                 if (content && content !== __lastContent) {
                                     __lastContent = content;
@@ -3080,6 +3094,12 @@ pub fn canvas(_args: &[Value]) -> Value {
                             // Add synced games to local collection without disrupting active game
                             function addSyncedGames(games, localHashes) {
                                 if (!games.length) return 0;
+                                // Suppress sync writes while canvas agent is active or in grace period
+                                // to prevent relay echoes from reverting freshly-written content
+                                if (__canvasAgentRunning || (Date.now() - __canvasAgentFinishedAt < AGENT_GRACE_MS)) {
+                                    console.log('[sync] skipped addSyncedGames — agent active or in grace period');
+                                    return 0;
+                                }
                                 try {
                                     const raw = localStorage.getItem('traits.pvfs') || '{}';
                                     const files = JSON.parse(raw);

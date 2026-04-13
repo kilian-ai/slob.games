@@ -1947,18 +1947,27 @@ export class Traits {
                         try {
                             if (wasm && wasm.pvfs_refresh) wasm.pvfs_refresh();
                         } catch(_) {}
-                        try {
-                            const getRes = this._callWasm('sys.canvas', ['get']);
-                            const content = getRes?.result?.content ?? getRes?.content ?? '';
-                            this._lastCanvasContent = content;
-                            window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content } }));
-                        } catch(_) {
-                            window.dispatchEvent(new CustomEvent('traits-canvas-update', {}));
+                        // Suppress auto-event while canvas agent is running — the agent fires
+                        // its own explicit traits-canvas-update with immediateRelaySync.
+                        // Firing here too causes a double-event chain where persistActiveContent
+                        // runs first WITHOUT immediateRelaySync, setting __lastPersistedContent
+                        // and blocking the agent's explicit event from triggering immediate sync.
+                        if (!_canvasAgentRunning) {
+                            try {
+                                const getRes = this._callWasm('sys.canvas', ['get']);
+                                const content = getRes?.result?.content ?? getRes?.content ?? '';
+                                this._lastCanvasContent = content;
+                                window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content } }));
+                            } catch(_) {
+                                window.dispatchEvent(new CustomEvent('traits-canvas-update', {}));
+                            }
                         }
                     }
                     if (r.canvas_project_action || r.action === 'new' || r.action === 'rename' || r.action === 'activate' || r.action === 'fork') {
                         window.dispatchEvent(new CustomEvent('traits-canvas-project', { detail: r }));
-                        window.dispatchEvent(new CustomEvent('traits-canvas-update', {}));
+                        if (!_canvasAgentRunning) {
+                            window.dispatchEvent(new CustomEvent('traits-canvas-update', {}));
+                        }
                     }
                 }
                 return wasmResult;
@@ -2477,15 +2486,13 @@ export class Traits {
                             try { request = JSON.parse(argsStr).request || argsStr; } catch(e) { request = argsStr; }
                             console.log('[Voice/Canvas] ▶ Canvas tool triggered, launching agent for request:', request);
 
-                            // Send function_call_output + response.create so model speaks while agent builds.
-                            // The wording is intentional: kickoff first, completion only after the agent resolves.
-                            const kickoffMsg = 'I just kicked off the implementation tasks: ' +
-                                String(request || 'updating the current game').replace(/\s+/g, ' ').trim().slice(0, 220) +
-                                '. We auto-save changes, so no manual save is needed. Please give me a little patience while the canvas agent finishes.';
-                            _sendOutput(JSON.stringify({ status: 'building', message: kickoffMsg }));
-                            if (_voiceDc && _voiceDc.readyState === 'open') {
-                                _voiceDc.send(JSON.stringify({ type: 'response.create' }));
-                            }
+                            // Send function_call_output to acknowledge the tool call, but do NOT
+                            // send response.create — the model must stay silent while the canvas
+                            // agent builds.  The Realtime API streams audio in real-time, so any
+                            // model response generated now would be heard as "done" by the user
+                            // even though the build is still in progress.  The model will only
+                            // speak after the agent resolves (see completion block below).
+                            _sendOutput(JSON.stringify({ status: 'building', message: 'Canvas agent is working on: ' + String(request || 'updating the current game').replace(/\s+/g, ' ').trim().slice(0, 220) }));
 
                             let truncated = '';
                             try {
