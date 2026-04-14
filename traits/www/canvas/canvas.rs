@@ -438,7 +438,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                 }
             }
             body {
-                div .canvas-header {
+                div .canvas-header style="display:none" {
                     div .actions {
                         div .viewport-controls {
                             span { "Viewport" }
@@ -1004,12 +1004,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                         function _submenuEnabled() {
                             try {
                                 var raw = (localStorage.getItem('traits.env.SLOB_SUBMENU') || '').trim().toLowerCase();
-                                if (!raw) return true;
-                                return !(
-                                    raw === '0' || raw === 'false' || raw === 'off' ||
-                                    raw === 'no' || raw === 'hide' || raw === 'hidden'
-                                );
-                            } catch(_) { return true; }
+                                return raw === 'on';
+                            } catch(_) { return false; }
                         }
 
                         function applyCanvasSubmenuVisibility() {

@@ -109,6 +109,299 @@ const JS: &str = r##"
     return id+'-'+n;
   }
 
+  function readPvfsFiles(){
+    try{return JSON.parse(localStorage.getItem('traits.pvfs')||'{}')}catch(_){return {}}
+  }
+
+  function normalizeResourcePath(path){
+    var s=String(path||'').trim();
+    if(!s)return '';
+    s=s.replace(/^https?:\/\/[^\/]+/i,'');
+    s=s.replace(/^\.\//,'');
+    s=s.replace(/^\//,'');
+    s=s.split('#')[0].split('?')[0];
+    if(!s||s==='canvas/app.html'||s==='canvas/games.json')return '';
+    if(s.indexOf('..')>=0)return '';
+    return s;
+  }
+
+  function collectResourcesForContent(content,maxBytes){
+    var files=readPvfsFiles();
+    var html=String(content||'');
+    var refs={};
+    var total=0;
+    function addRef(raw){
+      var path=normalizeResourcePath(raw);
+      if(!path||refs[path])return;
+      var val=files[path];
+      if(typeof val!=='string'||!val)return;
+      if((total+val.length)>(maxBytes||2097152))return;
+      refs[path]=val;
+      total+=val.length;
+    }
+    try{
+      var doc=new DOMParser().parseFromString(html,'text/html');
+      ['src','href','poster'].forEach(function(attr){
+        var nodes=doc.querySelectorAll('['+attr+']');
+        for(var i=0;i<nodes.length;i++)addRef(nodes[i].getAttribute(attr));
+      });
+      var styleEls=doc.querySelectorAll('style');
+      for(var si=0;si<styleEls.length;si++){
+        var css=String(styleEls[si].textContent||'');
+        css.replace(/url\(([^)]+)\)/g,function(_,raw){
+          addRef(String(raw||'').trim().replace(/^['"]|['"]$/g,''));
+          return _;
+        });
+      }
+    }catch(_){ }
+    html.replace(/url\(([^)]+)\)/g,function(_,raw){
+      addRef(String(raw||'').trim().replace(/^['"]|['"]$/g,''));
+      return _;
+    });
+    return refs;
+  }
+
+  function getSdk(){
+    return window._traitsSDK||null;
+  }
+
+  async function commitRevisionSnapshot(gameKey,name,version,content,resources){
+    var sdk=getSdk();
+    if(!sdk)return false;
+    var text=String(content||'');
+    if(!text)return false;
+    try{
+      await sdk.call('sys.game_vcs',[
+        'commit',
+        String(gameKey||''),
+        text,
+        String(name||'untitled'),
+        String(version||''),
+        JSON.stringify(resources&&typeof resources==='object'?resources:{})
+      ]);
+      return true;
+    }catch(_){return false}
+  }
+
+  async function fetchInternalGames(){
+    var res=await fetch(RELAY+'/internal/games',{headers:authHeaders()});
+    if(!res.ok)throw new Error('Could not load private games');
+    return await res.json();
+  }
+
+  async function mergeDuplicateGamesByName(myGames){
+    if(!getToken()||!__relayUser||mergeDuplicateGamesByName._busy)return false;
+    mergeDuplicateGamesByName._busy=true;
+    try{
+      var col=readGamesCollection();
+      if(!col.games)col.games={};
+      var groups={};
+      function pushGroup(key,row){
+        if(!key)return;
+        if(!groups[key])groups[key]=[];
+        groups[key].push(row);
+      }
+
+      for(var id in col.games){
+        var g=col.games[id]||{};
+        pushGroup(slugify(g.name||id),{
+          source:'local',
+          id:id,
+          name:String(g.name||id||'Untitled'),
+          gameId:relayGameIdForLocal(id,g),
+          owner:relayOwnerForLocal(g)||__relayUser||'local',
+          updated:String(g.updated||g.created||''),
+          version:String(g.version||''),
+          content:String(g.content||''),
+          resources:collectResourcesForContent(g.content||'',2*1024*1024),
+          published:false,
+          relayLinked:!!String(g._sync_game_id||g.game_id||'').trim(),
+          active:id===col.active,
+          game:g
+        });
+      }
+
+      (myGames||[]).forEach(function(g){
+        pushGroup(slugify(g.name||g.game_id||'untitled'),{
+          source:'relay',
+          id:String(g.game_id||''),
+          name:String(g.name||g.game_id||'Untitled'),
+          gameId:String(g.game_id||slugify(g.name||'untitled')).trim().toLowerCase(),
+          owner:String(g.owner||__relayUser||'').trim().toLowerCase(),
+          updated:String(g.updated||''),
+          version:String(g.version||''),
+          content:'',
+          resources:null,
+          checksum:normHash(g.checksum||g.content_hash||''),
+          published:!!g.published,
+          relayLinked:true,
+          active:false,
+          game:g
+        });
+      });
+
+      var changedLocal=false;
+      var changedRemote=false;
+      var groupKeys=Object.keys(groups);
+      for(var gi=0;gi<groupKeys.length;gi++){
+        var key=groupKeys[gi];
+        var variants=groups[key]||[];
+        var relayCount=0;
+        for(var rc=0;rc<variants.length;rc++)if(variants[rc].relayLinked)relayCount++;
+        if(relayCount===0||variants.length<=1)continue;
+
+        variants.sort(function(a,b){
+          var aCanon=(a.gameId===key)?1:0;
+          var bCanon=(b.gameId===key)?1:0;
+          if(bCanon!==aCanon)return bCanon-aCanon;
+          if(b.active!==a.active)return b.active-a.active;
+          if(String(b.updated||'')!==String(a.updated||''))return String(b.updated||'').localeCompare(String(a.updated||''));
+          if(b.source!==a.source)return a.source==='local'?-1:1;
+          return String(a.id||'').localeCompare(String(b.id||''));
+        });
+
+        var canonical=variants[0];
+        var canonicalName=canonical.name||'Untitled';
+        var canonicalGameId=slugify(canonicalName||key||canonical.gameId||'untitled');
+        var canonicalOwner=String(__relayUser||canonical.owner||'local').trim().toLowerCase()||'local';
+        var canonicalKey=canonicalOwner+'/'+canonicalGameId;
+        var seenHashes={};
+        var canonicalPayload=null;
+        var publishedWanted=false;
+
+        for(var vi=0;vi<variants.length;vi++){
+          var variant=variants[vi];
+          var payload=null;
+          if(variant.source==='local'){
+            payload={
+              name:variant.name,
+              version:variant.version,
+              content:String(variant.content||''),
+              resources:variant.resources&&typeof variant.resources==='object'?variant.resources:{}
+            };
+          }else{
+            var full=await fetchInternalGameContent(variant.gameId,variant.owner||canonicalOwner);
+            if(full&&typeof full.content==='string'){
+              payload={
+                name:String(full.name||variant.name||'Untitled'),
+                version:String(full.version||variant.version||''),
+                content:String(full.content||''),
+                resources:(full.resources&&typeof full.resources==='object')?full.resources:{}
+              };
+              variant.content=payload.content;
+              variant.resources=payload.resources;
+            }
+          }
+          if(!payload||!payload.content)continue;
+          var vhash=normHash(await shortHash(payload.content));
+          if(!canonicalPayload)canonicalPayload=payload;
+          if(vhash&&!seenHashes[vhash]){
+            seenHashes[vhash]=true;
+            await commitRevisionSnapshot(canonicalKey,payload.name,payload.version,payload.content,payload.resources);
+          }
+          if(variant.published)publishedWanted=true;
+          if(variant===canonical)canonicalPayload=payload;
+        }
+
+        if(!canonicalPayload||!canonicalPayload.content)continue;
+
+        var canonicalLocalId='';
+        for(var li=0;li<variants.length;li++){
+          var localVariant=variants[li];
+          if(localVariant.source!=='local')continue;
+          if(localVariant.gameId===canonicalGameId||localVariant.id===canonicalGameId){
+            canonicalLocalId=localVariant.id;
+            break;
+          }
+        }
+        if(!canonicalLocalId){
+          for(var li2=0;li2<variants.length;li2++){
+            if(variants[li2].source==='local'){canonicalLocalId=variants[li2].id;break}
+          }
+        }
+        if(!canonicalLocalId){
+          canonicalLocalId=col.games[canonicalGameId]?uniqueLocalId(canonicalGameId,col):canonicalGameId;
+        }
+
+        var canonicalGame=(col.games[canonicalLocalId]||{});
+        canonicalGame.name=canonicalPayload.name||canonicalName;
+        canonicalGame.content=canonicalPayload.content;
+        canonicalGame.version=canonicalPayload.version||canonicalGame.version||'';
+        canonicalGame.scope='internal';
+        canonicalGame._scope='internal';
+        canonicalGame.owner=canonicalOwner;
+        canonicalGame._sync_owner=canonicalOwner;
+        canonicalGame.game_id=canonicalGameId;
+        canonicalGame._sync_game_id=canonicalGameId;
+        canonicalGame.updated=new Date().toISOString();
+        if(!canonicalGame.created)canonicalGame.created=canonicalGame.updated;
+        canonicalGame._sync_hash=normHash(await shortHash(canonicalPayload.content));
+        canonicalGame.checksum=canonicalGame._sync_hash;
+        col.games[canonicalLocalId]=canonicalGame;
+        changedLocal=true;
+
+        for(var dl=0;dl<variants.length;dl++){
+          var doomed=variants[dl];
+          if(doomed.source!=='local')continue;
+          if(doomed.id===canonicalLocalId)continue;
+          if(col.active===doomed.id)col.active=canonicalLocalId;
+          delete col.games[doomed.id];
+          changedLocal=true;
+        }
+
+        try{
+          var putRes=await fetch(RELAY+'/internal/game/'+encodeURIComponent(canonicalGameId),{
+            method:'PUT',headers:authHeaders(),body:JSON.stringify({
+              name:canonicalPayload.name||canonicalName,
+              content:canonicalPayload.content,
+              version:canonicalPayload.version||'',
+              scope:'internal',
+              resources:canonicalPayload.resources&&typeof canonicalPayload.resources==='object'?canonicalPayload.resources:{}
+            })
+          });
+          if(putRes.ok){
+            var putData=await putRes.json().catch(function(){return {}});
+            canonicalGame._sync_owner=putData.owner||canonicalOwner;
+            canonicalGame.owner=putData.owner||canonicalOwner;
+            canonicalGame._sync_game_id=putData.game_id||canonicalGameId;
+            canonicalGame.game_id=putData.game_id||canonicalGameId;
+            canonicalGame._sync_hash=normHash(putData.checksum||putData.content_hash||canonicalGame._sync_hash||'');
+            canonicalGame.checksum=canonicalGame._sync_hash;
+            col.games[canonicalLocalId]=canonicalGame;
+            changedLocal=true;
+            changedRemote=true;
+            if(publishedWanted){
+              await fetch(RELAY+'/internal/game/'+encodeURIComponent(canonicalGameId)+'/publish',{
+                method:'PATCH',headers:authHeaders(),body:JSON.stringify({published:true})
+              }).catch(function(){});
+            }
+          }
+        }catch(_){ }
+
+        var deletedRemote={};
+        for(var dr=0;dr<variants.length;dr++){
+          var rv=variants[dr];
+          var oldGameId='';
+          if(rv.source==='relay')oldGameId=rv.gameId;
+          else oldGameId=String((rv.game&&rv.game._sync_game_id)||'').trim().toLowerCase();
+          if(!oldGameId||oldGameId===canonicalGameId||deletedRemote[oldGameId])continue;
+          deletedRemote[oldGameId]=true;
+          try{
+            await fetch(RELAY+'/internal/game/'+encodeURIComponent(oldGameId)+'?owner='+encodeURIComponent(canonicalOwner),{
+              method:'DELETE',headers:authHeaders()
+            });
+            changedRemote=true;
+          }catch(_){ }
+        }
+      }
+
+      if(changedLocal)writeGamesCollection(col);
+      return !!(changedLocal||changedRemote);
+    }finally{
+      mergeDuplicateGamesByName._busy=false;
+    }
+  }
+
   function readGamesCollection(){
     try{
       var pvfs=JSON.parse(localStorage.getItem('traits.pvfs')||'{}');
@@ -189,7 +482,13 @@ const JS: &str = r##"
     if(!g||!g.content){alert('Nothing to publish for this game.');return null}
     // Filename (game_id) is the stable identity; mirror updates overwrite that key.
     var gameId=relayGameIdForLocal(localId,g);
-    var payload={name:g.name||'Untitled',content:String(g.content||''),version:g.version||'',scope:'internal'};
+    var payload={
+      name:g.name||'Untitled',
+      content:String(g.content||''),
+      version:g.version||'',
+      scope:'internal',
+      resources:collectResourcesForContent(g.content||'',2*1024*1024)
+    };
     var r=await fetch(RELAY+'/internal/game/'+encodeURIComponent(gameId),{
       method:'PUT',headers:authHeaders(),body:JSON.stringify(payload)
     });
@@ -553,9 +852,11 @@ const JS: &str = r##"
           var me=await fetch(RELAY+'/auth/me',{headers:authHeaders()});
           if(me.ok){var meData=await me.json();__relayUser=String(meData.username||'').trim().toLowerCase()}
         }catch(_){}
-        var res=await fetch(RELAY+'/internal/games',{headers:authHeaders()});
-        if(res.ok){
-          var myGames=await res.json();
+        var myGames=await fetchInternalGames();
+        if(myGames){
+          if(await mergeDuplicateGamesByName(myGames)){
+            myGames=await fetchInternalGames();
+          }
           await reconcileLocalAndRelay(myGames);
           var myIds={};
           var myKeys={};

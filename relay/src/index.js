@@ -906,23 +906,23 @@ export class GameRoom {
         return json({ ok: true, username: target, deleted: key });
       }
 
-      // GET /games — list all external games (with high score)
+      // GET /games — list all published games (with high score)
       if (url.pathname === "/games" && request.method === "GET") {
         const rows = this.sql.exec(
           `SELECT g.content_hash, g.name, g.size, g.updated, g.owner, g.game_id, g.scope, g.version, g.checksum, g.resources,
                   s.score AS highscore, s.player AS highscore_player
            FROM games g
            LEFT JOIN scores s ON s.game_hash = g.content_hash
-           WHERE g.scope = 'external' AND g.published = 1
+           WHERE g.published = 1
            ORDER BY g.name ASC`
         ).toArray().map((r) => this.normalizeExternalGameRow(r));
         return json(rows);
       }
 
-      // GET /games.toml — export external game manifests as TOML
+      // GET /games.toml — export published game manifests as TOML
       if (url.pathname === '/games.toml' && request.method === 'GET') {
         const rows = this.sql.exec(
-          "SELECT content_hash, name, size, updated, owner, game_id, version, checksum FROM games WHERE scope = 'external' AND published = 1 ORDER BY owner ASC, game_id ASC"
+          "SELECT content_hash, name, size, updated, owner, game_id, version, checksum FROM games WHERE published = 1 ORDER BY owner ASC, game_id ASC"
         ).toArray().map((r) => this.normalizeExternalGameRow(r));
         const out = rows.map((g) => {
           return [
@@ -949,7 +949,7 @@ export class GameRoom {
         const user = await this.authUser(request);
         if (!user) return json({ error: "auth required" }, 401);
         const rows = this.sql.exec(
-          `SELECT g.owner, g.game_id, g.name, g.content_hash, g.checksum, g.version, g.size, g.updated, g.forked_from_hash, g.published,
+            `SELECT g.owner, g.game_id, g.name, g.content_hash, g.checksum, g.version, g.size, g.updated, g.forked_from_hash, g.scope, g.published,
                   s.score AS highscore, s.player AS highscore_player
            FROM games g
            LEFT JOIN scores s ON s.game_hash = g.content_hash
@@ -1017,7 +1017,7 @@ export class GameRoom {
         this.sql.exec(
           `INSERT INTO games
            (content_hash, name, content, updated, size, owner, game_id, scope, version, checksum, resources, forked_from_hash)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'external', ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'internal', ?, ?, ?, ?)`,
           checksum, String(body.name || src.name).slice(0, 100), src.content,
           updated, size, user, gameId, version, checksum, encodeResourcesField(srcResources), sourceHash
         );
@@ -1141,7 +1141,7 @@ export class GameRoom {
         const updated = new Date().toISOString();
 
         const prev = this.sql.exec(
-          "SELECT resources, forked_from_hash, published, checksum, content_hash FROM games WHERE owner = ? AND game_id = ?",
+          "SELECT resources, forked_from_hash, published, checksum, content_hash, scope FROM games WHERE owner = ? AND game_id = ?",
           user, gameId
         ).toArray()[0];
         const prevResources = parseResourcesField(prev && prev.resources);
@@ -1152,30 +1152,25 @@ export class GameRoom {
         const resourcePayloadBytes = resourceBytes(resourcesMap);
         const packageSize = content.length + resourcePayloadBytes;
         if (packageSize > MAX_GAME_PACKAGE_SIZE) return json({ error: 'package too large' }, 413);
-        const prevPublished = prev ? (prev.published ?? 1) : 0;
+        const prevPublished = prev ? (prev.published ?? 0) : 0;
         const size = content.length;
         const checksum = await packageHash16(content);
-        const prevChecksum = String((prev && (prev.checksum || prev.content_hash)) || '');
-        const hasChanged = !prev || (prevChecksum !== checksum);
-        const nextPublished = hasChanged ? 0 : prevPublished;
+        const nextPublished = prevPublished;
+        const nextScope = String(body.scope || (prev && prev.scope) || 'internal').trim().toLowerCase() === 'external' ? 'external' : 'internal';
 
         this.sql.exec("DELETE FROM games WHERE owner = ? AND game_id = ?", user, gameId);
         this.sql.exec(
           `INSERT INTO games
            (content_hash, name, content, updated, size, owner, game_id, scope, version, checksum, resources, forked_from_hash, published)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'external', ?, ?, ?, ?, ?)`,
-          checksum, name, content, updated, size, user, gameId, version, checksum,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          checksum, name, content, updated, size, user, gameId, nextScope, version, checksum,
           encodeResourcesField(resourcesMap), (prev && prev.forked_from_hash) || null, nextPublished
         );
         this.cacheResourcesForGame(checksum, resourcesMap);
         this.trimExternalPool();
 
-        if (hasChanged && prevPublished && prev && prev.content_hash) {
-          // On edit, games become draft by default. Remove previously published hash from clients.
-          this.broadcast(JSON.stringify({ type: 'game-deleted', content_hash: prev.content_hash }));
-        }
-
-        // Only broadcast to other clients if the game is published
+        // Publish state is authoritative on the private row itself.
+        // Content edits do not implicitly change published/draft.
         if (nextPublished) {
           const msg = JSON.stringify({
             type: 'sync',
@@ -1184,7 +1179,7 @@ export class GameRoom {
               checksum,
               owner: user,
               game_id: gameId,
-              scope: 'external',
+              scope: nextScope,
               version,
               name,
               content,
