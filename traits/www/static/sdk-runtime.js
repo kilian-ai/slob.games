@@ -255,6 +255,7 @@ let _voxtralProcessor = null;
 let _voxtralModel = null;
 let _voxtralLib4 = null;
 let _voxtralModelLoading = null;
+let _voiceAudioGesturePromise = null;
 
 // Traits excluded from voice function-calling tools (mirrors native TOOL_EXCLUDE)
 const VOICE_TOOL_EXCLUDE = new Set([
@@ -691,6 +692,40 @@ function _localVoiceProgress(text) {
     if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('local-voice-progress', { detail: text }));
     }
+}
+
+async function _ensureAudioGestureUnlocked() {
+    if (typeof window === 'undefined') return true;
+    try {
+        if (navigator?.userActivation?.isActive) return true;
+    } catch (_) {}
+
+    if (_voiceAudioGesturePromise) return _voiceAudioGesturePromise;
+
+    _voiceAudioGesturePromise = new Promise((resolve) => {
+        const events = ['pointerdown', 'touchstart', 'mousedown', 'keydown', 'click'];
+        let done = false;
+        const cleanup = () => {
+            if (done) return;
+            done = true;
+            for (const evt of events) {
+                try { window.removeEventListener(evt, onGesture, true); } catch (_) {}
+            }
+            resolve(true);
+        };
+        const onGesture = () => cleanup();
+
+        for (const evt of events) {
+            try { window.addEventListener(evt, onGesture, { once: true, capture: true, passive: true }); } catch (_) {}
+        }
+
+        // Safety timeout so voice doesn't hang forever waiting on gestures.
+        setTimeout(() => cleanup(), 10000);
+    });
+
+    const ok = await _voiceAudioGesturePromise;
+    _voiceAudioGesturePromise = null;
+    return ok;
 }
 
 async function _ensureTransformers() {
@@ -2924,7 +2959,14 @@ class Traits {
                 audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
             });
 
+            _localVoiceProgress('Waiting for user gesture to enable audio…');
+            await _ensureAudioGestureUnlocked();
             _localVoiceAudioCtx = new AudioContext();
+            try {
+                if (_localVoiceAudioCtx.state === 'suspended') {
+                    await _localVoiceAudioCtx.resume();
+                }
+            } catch (_) {}
             const source = _localVoiceAudioCtx.createMediaStreamSource(_localVoiceStream);
 
             // ScriptProcessorNode for continuous audio capture + silence detection
@@ -3277,7 +3319,14 @@ class Traits {
             _voxtralVoiceStream = await navigator.mediaDevices.getUserMedia({
                 audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
             });
+            _localVoiceProgress('Waiting for user gesture to enable audio…');
+            await _ensureAudioGestureUnlocked();
             _voxtralVoiceAudioCtx = new AudioContext({ sampleRate: 16000 });
+            try {
+                if (_voxtralVoiceAudioCtx.state === 'suspended') {
+                    await _voxtralVoiceAudioCtx.resume();
+                }
+            } catch (_) {}
             const source = _voxtralVoiceAudioCtx.createMediaStreamSource(_voxtralVoiceStream);
             _voxtralVoiceNode = _voxtralVoiceAudioCtx.createScriptProcessor(4096, 1, 1);
             source.connect(_voxtralVoiceNode);
