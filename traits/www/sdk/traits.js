@@ -2139,13 +2139,17 @@ export class Traits {
      * @returns {Promise<{ok: boolean, tools?: number, error?: string}>}
      */
     async startVoice(opts = {}) {
-        // Stop any existing voice session
-        await this.stopVoice();
+        // Stop any existing voice session without emitting a synthetic "stopped"
+        // event when no session was active. This avoids false "session ended"
+        // UI messages on every start attempt.
+        await this.stopVoice({ silent: true });
 
         const rawKey = opts.apiKey || _voiceApiKey || await _ensureVoiceApiKey(this);
         const apiKey = rawKey ? rawKey.trim() : null;
         if (!apiKey) {
-            return { ok: false, error: 'OpenAI API key required. Set OPENAI_API_KEY in Settings > Secrets' };
+            const msg = 'OpenAI API key required. Set OPENAI_API_KEY in Settings > Secrets';
+            _dispatchVoiceEvent('error', { message: msg });
+            return { ok: false, error: msg };
         }
 
         const voice = opts.voice || 'shimmer';
@@ -2283,7 +2287,9 @@ export class Traits {
             }
 
             if (!ephemeralKey) {
-                return { ok: false, error: 'Could not obtain ephemeral token. Check that your OPENAI_API_KEY is valid and has Realtime API access.' };
+                const msg = 'Could not obtain ephemeral token. Check that your OPENAI_API_KEY is valid and has Realtime API access.';
+                _dispatchVoiceEvent('error', { message: msg });
+                return { ok: false, error: msg };
             }
 
             // ── Request microphone access ──
@@ -2738,7 +2744,8 @@ export class Traits {
             return { ok: true, tools: tools.length, sessionId: voiceSessionId };
 
         } catch(e) {
-            await this.stopVoice();
+            _dispatchVoiceEvent('error', { message: e.message || String(e) });
+            await this.stopVoice({ silent: true });
             return { ok: false, error: e.message || String(e) };
         }
     }
@@ -2747,7 +2754,9 @@ export class Traits {
      * Stop the current voice session.
      * @returns {Promise<void>}
      */
-    async stopVoice() {
+    async stopVoice(opts = {}) {
+        const silent = !!(opts && opts.silent);
+        const hadActiveSession = !!(_voiceDc || _voicePc || _voiceStream || _voiceAudioEl);
         if (_voiceDc) {
             try { _voiceDc.close(); } catch(e) {}
             _voiceDc = null;
@@ -2765,7 +2774,9 @@ export class Traits {
             _voiceAudioEl = null;
         }
         _voiceSdk = null;
-        _dispatchVoiceEvent('stopped', {});
+        if (!silent && hadActiveSession) {
+            _dispatchVoiceEvent('stopped', {});
+        }
     }
 
     /**

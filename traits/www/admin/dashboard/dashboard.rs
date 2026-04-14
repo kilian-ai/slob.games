@@ -268,11 +268,60 @@ tr:hover td { background: rgba(0,224,255,0.03); }
 
 const JS: &str = r##"
 (function() {
-var API = 'https://relay.slob.games/sync';
+var API_CANDIDATES = ['https://relay.slob.games/sync', 'https://relay.traits.build/sync'];
+var API = API_CANDIDATES[0];
 var token = '';
 var usersData = [];
 var gamesData = { external: [], internal: [] };
 var currentTab = 'byOwner';
+
+function apiOrigin(syncBase) {
+  return String(syncBase || '').replace(/\/sync\/?$/, '');
+}
+
+async function selectApiBase(forceProbe) {
+  if (!forceProbe && API) return API;
+  for (var i = 0; i < API_CANDIDATES.length; i++) {
+    var cand = API_CANDIDATES[i];
+    try {
+      var hr = await fetch(apiOrigin(cand) + '/health', { method: 'GET' });
+      if (hr.ok) {
+        API = cand;
+        return API;
+      }
+    } catch (_) {}
+  }
+  API = API_CANDIDATES[0];
+  return API;
+}
+
+async function relayFetch(path, opts) {
+  await selectApiBase(false);
+  var lastErr = null;
+  var first = API;
+  var ordered = [first];
+  for (var i = 0; i < API_CANDIDATES.length; i++) {
+    if (API_CANDIDATES[i] !== first) ordered.push(API_CANDIDATES[i]);
+  }
+
+  for (var j = 0; j < ordered.length; j++) {
+    var base = ordered[j];
+    try {
+      var res = await fetch(base + path, opts || {});
+      // Retry on upstream/server failure at current endpoint.
+      if (res.status >= 500 && j < ordered.length - 1) {
+        lastErr = new Error('HTTP ' + res.status);
+        continue;
+      }
+      API = base;
+      return res;
+    } catch (e) {
+      lastErr = e;
+      if (j < ordered.length - 1) continue;
+    }
+  }
+  throw (lastErr || new Error('Failed to fetch relay endpoint'));
+}
 
 function esc(v) {
   var d = document.createElement('div');
@@ -296,7 +345,12 @@ function ago(iso) {
 }
 
 async function apiFetch(path) {
-  var r = await fetch(API + path, { headers: { 'Authorization': 'Bearer ' + token } });
+  var r;
+  try {
+    r = await relayFetch(path, { headers: { 'Authorization': 'Bearer ' + token } });
+  } catch (e) {
+    return { ok: false, error: 'Failed to fetch relay' };
+  }
   var text = await r.text();
   var body = {};
   try { body = text ? JSON.parse(text) : {}; } catch (_) { body = {}; }
@@ -305,7 +359,12 @@ async function apiFetch(path) {
 }
 
 async function apiDelete(path) {
-  var r = await fetch(API + path, { method: 'DELETE', headers: { 'Authorization': 'Bearer ' + token } });
+  var r;
+  try {
+    r = await relayFetch(path, { method: 'DELETE', headers: { 'Authorization': 'Bearer ' + token } });
+  } catch (e) {
+    return { ok: false, error: 'Failed to fetch relay' };
+  }
   var text = await r.text();
   var body = {};
   try { body = text ? JSON.parse(text) : {}; } catch (_) { body = {}; }
@@ -315,12 +374,21 @@ async function apiDelete(path) {
 }
 
 async function apiPut(path, body) {
-  var r = await fetch(API + path, {
-    method: 'PUT',
-    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-  return r.json();
+  var r;
+  try {
+    r = await relayFetch(path, {
+      method: 'PUT',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+  } catch (e) {
+    return { ok: false, error: 'Failed to fetch relay' };
+  }
+  var text = await r.text();
+  var parsed = {};
+  try { parsed = text ? JSON.parse(text) : {}; } catch (_) { parsed = {}; }
+  if (!r.ok) return { ok: false, error: parsed.error || ('HTTP ' + r.status) };
+  return parsed;
 }
 
 async function load() {
@@ -522,7 +590,7 @@ async function playAdminGame(ownerEnc, gameIdEnc, hashEnc) {
     var name = '';
     var version = '';
 
-    var r = await fetch(API + '/game/' + encodeURIComponent(hash));
+    var r = await relayFetch('/game/' + encodeURIComponent(hash));
     var d = await r.json();
     if (!r.ok || !d.content) throw new Error(d.error || 'Could not load game');
     content = d.content;
@@ -628,7 +696,7 @@ async function toggleAdminPublish(ownerEnc, gameIdEnc, hashEnc, currentPublished
   var owner = decodeURIComponent(ownerEnc);
   var hash = decodeURIComponent(hashEnc);
   var nextPublished = !currentPublished;
-  var r = await fetch(API + '/internal/game/' + encodeURIComponent(gameId) + '/publish', {
+  var r = await relayFetch('/internal/game/' + encodeURIComponent(gameId) + '/publish', {
     method: 'PATCH',
     headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json', 'X-Game-Owner': owner },
     body: JSON.stringify({ published: nextPublished })
@@ -827,7 +895,7 @@ async function pvfsSyncToRelay(localIdEnc) {
     version: g.version || ''
   };
   try {
-    var r = await fetch(API + '/internal/game/' + encodeURIComponent(gameId), {
+    var r = await relayFetch('/internal/game/' + encodeURIComponent(gameId), {
       method: 'PUT',
       headers: { 'Authorization': 'Bearer ' + t, 'Content-Type': 'application/json' },
       body: JSON.stringify(body)

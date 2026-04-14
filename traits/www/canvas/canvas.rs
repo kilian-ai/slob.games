@@ -1891,11 +1891,26 @@ pub fn canvas(_args: &[Value]) -> Value {
                             var _nextFakeId = 900000;
                             // Track AudioContext instances for suspension
                             var _audioContexts = [];
+                            var _audioGestureUnlocked = false;
+                            function _resumeTrackedAudioContexts() {
+                                if (!_audioGestureUnlocked) return;
+                                _audioContexts.forEach(function(ctx){ try { ctx.resume(); } catch(_){} });
+                            }
+                            function _unlockAudioFromGesture() {
+                                if (_audioGestureUnlocked) return;
+                                _audioGestureUnlocked = true;
+                                _resumeTrackedAudioContexts();
+                            }
+                            ['pointerdown','touchstart','mousedown','keydown','click'].forEach(function(evt){
+                                try { window.addEventListener(evt, _unlockAudioFromGesture, { once: true, passive: true, capture: true }); } catch(_) {}
+                            });
                             var _OrigAudioCtx = window.AudioContext || window.webkitAudioContext;
                             if (_OrigAudioCtx) {
                                 var PatchedAudioCtx = function() {
                                     var ctx = new _OrigAudioCtx();
                                     _audioContexts.push(ctx);
+                                    // Only resume after explicit user gesture to satisfy autoplay policy.
+                                    if (_audioGestureUnlocked) { try { ctx.resume(); } catch(_){} }
                                     return ctx;
                                 };
                                 PatchedAudioCtx.prototype = _OrigAudioCtx.prototype;
@@ -1962,7 +1977,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 _paused = false;
                                 try { if (typeof window.traits.onResume === 'function') window.traits.onResume(); } catch(_e){}
                                 // Resume AudioContexts
-                                _audioContexts.forEach(function(ctx){ try { ctx.resume(); } catch(_){} });
+                                _resumeTrackedAudioContexts();
                                 // Flush queued rAFs
                                 var rafs = _rafQueue.slice(); _rafQueue = [];
                                 rafs.forEach(function(e){ _origRAF.call(window, e.cb); });
@@ -2510,9 +2525,15 @@ pub fn canvas(_args: &[Value]) -> Value {
                         fabVoiceBtn.addEventListener('click', () => {
                             fabMenu.classList.remove('show');
                             fabToggle.classList.remove('open');
-                            const action = _voiceActive ? 'stop' : 'start';
-                            window.dispatchEvent(new CustomEvent('traits-voice-control', { detail: { voice_control_action: action } }));
-                            updateVoiceBtn(!_voiceActive);
+                            if (_voiceActive) {
+                                window.dispatchEvent(new CustomEvent('traits-voice-control', { detail: { voice_control_action: 'stop' } }));
+                                updateVoiceBtn(false);
+                                return;
+                            }
+                            // Do not optimistically flip active state; wait for real voice-event "started".
+                            fabVoiceLabel.textContent = 'Starting Voice…';
+                            fabVoiceBtn.querySelector('.fab-icon').textContent = '⏳';
+                            window.dispatchEvent(new CustomEvent('traits-voice-control', { detail: { voice_control_action: 'start' } }));
                         });
                         // Splat viewer button
                         document.getElementById('fabSplats').addEventListener('click', async () => {
@@ -2888,9 +2909,12 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     vcmAppend('system', '🎤 Voice session started');
                                     break;
                                 case 'stopped':
-                                case 'disconnected':
                                     updateVoiceBtn(false);
                                     vcmAppend('system', '⏹ Voice session ended');
+                                    break;
+                                case 'disconnected':
+                                    updateVoiceBtn(false);
+                                    vcmAppend('system', '⚠ Voice connection lost');
                                     break;
                                 case 'transcript':
                                     vcmAppend('user', d.text);
@@ -2910,6 +2934,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     break;
                                 }
                                 case 'error':
+                                    updateVoiceBtn(false);
                                     vcmAppend('system', '\u26A0 ' + d.message);
                                     break;
                             }

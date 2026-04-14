@@ -276,6 +276,10 @@ const JS: &str = r##"
     function updateVoiceBtn(active) {
         voiceActive = active;
         if (fabVoiceLabel) fabVoiceLabel.textContent = active ? 'Stop Voice' : 'Start Voice';
+        if (fabVoice) {
+            var icon = fabVoice.querySelector('.fab-icon');
+            if (icon) icon.textContent = active ? '⏹' : '🎤';
+        }
     }
     if (fabVoice) {
         fabVoice.addEventListener('click', function() {
@@ -283,8 +287,15 @@ const JS: &str = r##"
             if (!s) return;
             fabMenu.classList.remove('show');
             fabToggle.classList.remove('open');
-            if (voiceActive) { s.stopVoice(); updateVoiceBtn(false); }
-            else { s.startVoice(); updateVoiceBtn(true); }
+            if (voiceActive) {
+                s.stopVoice();
+                updateVoiceBtn(false);
+            } else {
+                if (fabVoiceLabel) fabVoiceLabel.textContent = 'Starting Voice…';
+                var icon = fabVoice.querySelector('.fab-icon');
+                if (icon) icon.textContent = '⏳';
+                s.startVoice();
+            }
         });
     }
     // FAB New Game
@@ -377,9 +388,12 @@ const JS: &str = r##"
                 bcmAppend('system', '🎤 Voice session started');
                 break;
             case 'stopped':
-            case 'disconnected':
                 updateVoiceBtn(false);
                 bcmAppend('system', '⏹ Voice session ended');
+                break;
+            case 'disconnected':
+                updateVoiceBtn(false);
+                bcmAppend('system', '⚠ Voice connection lost');
                 break;
             case 'transcript':
                 bcmAppend('user', d.text);
