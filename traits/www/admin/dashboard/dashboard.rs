@@ -31,8 +31,15 @@ pub fn dashboard(_args: &[Value]) -> Value {
                             button.tab-btn.active onclick="switchTab('byOwner')" id="tabByOwner" { "By Owner" }
                             button.tab-btn onclick="switchTab('byName')" id="tabByName" { "By Name" }
                         }
-                        p.note id="gamesStatus" { "Loading…" }
+                        p.note id="gamesStatus" { "Loading\u{2026}" }
+                        p.note id="gamesLegend" { "Public = scope \"external\" AND published = true." }
                         div id="gamesTable" {}
+                    }
+
+                    section.card id="pvfsCard" {
+                        h2 { "PVFS Games" }
+                        p.note id="pvfsStatus" { "Reading local storage\u{2026}" }
+                        div id="pvfsTable" {}
                     }
                 }
                 script { (PreEscaped(JS)) }
@@ -117,6 +124,70 @@ tr:hover td { background: rgba(0,224,255,0.03); }
   background: rgba(90,101,112,0.15); color: var(--muted);
   padding: 2px 8px; border-radius: 4px; font-size: 10px;
   text-transform: uppercase; letter-spacing: 0.05em;
+}
+.badge-pub {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(0,255,136,0.12);
+  color: var(--green);
+  border: 1px solid rgba(0,255,136,0.2);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.badge-draft {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(239,107,115,0.12);
+  color: var(--danger);
+  border: 1px solid rgba(239,107,115,0.2);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.badge-public {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(0,224,255,0.1);
+  color: var(--accent);
+  border: 1px solid rgba(0,224,255,0.22);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.badge-private {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(90,101,112,0.18);
+  color: #9aa6b2;
+  border: 1px solid rgba(90,101,112,0.35);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.badge-scope {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(90,101,112,0.1);
+  color: #9aa6b2;
+  border: 1px solid rgba(90,101,112,0.25);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
 }
 .group-header {
   padding: 12px 10px 6px;
@@ -308,17 +379,53 @@ function renderUsers() {
 function renderGames() {
   var el = document.getElementById('gamesTable');
   var status = document.getElementById('gamesStatus');
+  var legend = document.getElementById('gamesLegend');
 
   // All games in a unified list
   var all = [];
   for (var i = 0; i < gamesData.external.length; i++) {
     var g = gamesData.external[i];
-    all.push({ owner: g.owner || 'public', game_id: g.game_id || '', name: g.name, size: g.size, updated: g.updated, fullHash: g.content_hash || '', hash: (g.content_hash || '').slice(0, 8), version: g.version || '', forked: !!g.forked_from_hash, highscore: g.highscore || 0, highscore_player: g.highscore_player || '' });
+    var isPublished = (g.published === undefined) ? true : !!g.published;
+    var scope = String(g.scope || 'external');
+    var isPublic = (scope === 'external') && isPublished;
+    all.push({
+      owner: g.owner || 'public',
+      game_id: g.game_id || '',
+      name: g.name,
+      size: g.size,
+      updated: g.updated,
+      fullHash: g.content_hash || '',
+      hash: (g.content_hash || '').slice(0, 8),
+      version: g.version || '',
+      forked: !!g.forked_from_hash,
+      highscore: g.highscore || 0,
+      highscore_player: g.highscore_player || '',
+      published: isPublished,
+      publicVisible: isPublic,
+      scope: scope,
+    });
   }
 
-  status.textContent = all.length + ' game' + (all.length === 1 ? '' : 's');
+  var pubCount = all.filter(function(gm){ return gm.published; }).length;
+  var publicCount = all.filter(function(gm){ return gm.publicVisible; }).length;
+  status.textContent = all.length + ' game' + (all.length === 1 ? '' : 's') + ' • ' + pubCount + ' published • ' + publicCount + ' public';
+  if (legend) {
+    legend.textContent = 'Public = scope "external" AND published = true. Draft/private rows stay in user catalog only.';
+  }
 
   if (!all.length) { el.innerHTML = '<p class="note">No games found.</p>'; return; }
+
+  function publishBadge(gm) {
+    return gm.published ? '<span class="badge-pub">published</span>' : '<span class="badge-draft">draft</span>';
+  }
+
+  function visibilityBadge(gm) {
+    return gm.publicVisible ? '<span class="badge-public">public</span>' : '<span class="badge-private">private</span>';
+  }
+
+  function scopeBadge(gm) {
+    return '<span class="badge-scope">' + esc(gm.scope || 'external') + '</span>';
+  }
 
   if (currentTab === 'byOwner') {
     // Group by owner
@@ -334,19 +441,23 @@ function renderGames() {
       var ow = owners[oi];
       var gs = byOwner[ow];
       h += '<div class="group-header">' + esc(ow) + ' (' + gs.length + ')</div>';
-      h += '<table><tr><th>Identity</th><th>Name</th><th>Version</th><th>HS</th><th>Size</th><th>Updated</th><th></th></tr>';
+      h += '<table><tr><th>Identity</th><th>Name</th><th>Publish</th><th>Visibility</th><th>Scope</th><th>Version</th><th>HS</th><th>Size</th><th>Updated</th><th></th></tr>';
       for (var gi = 0; gi < gs.length; gi++) {
         var gm = gs[gi];
         var identity = esc(gm.owner + '/' + gm.game_id);
         var gh = encodeURIComponent(gm.fullHash);
         h += '<tr><td><code>' + identity + '</code></td><td><span style="cursor:pointer;color:var(--accent);text-decoration:underline" onclick="playAdminGame(\'' + encodeURIComponent(gm.owner) + '\',\'' + encodeURIComponent(gm.game_id || '') + '\',\'' + gh + '\')">' + esc(gm.name) + '</span></td>';
+        h += '<td>' + publishBadge(gm) + '</td>';
+        h += '<td>' + visibilityBadge(gm) + '</td>';
+        h += '<td>' + scopeBadge(gm) + '</td>';
         h += '<td>' + esc(gm.version || '—') + '</td>';
         h += '<td>' + (gm.highscore ? '<span title="' + esc(gm.highscore_player || '') + '">' + gm.highscore + '</span>' : '<span style="opacity:0.3">—</span>') + '</td>';
         h += '<td>' + formatSize(gm.size) + '</td>';
         h += '<td title="' + esc(gm.updated) + '">' + ago(gm.updated) + '</td>';
         h += '<td class="actions">';
-        h += '<button class="btn-sm accent" onclick="assignGame(\'' + gh + '\',\'' + encodeURIComponent(gm.owner) + '\')">Assign</button>';
-        h += '<button class="btn-sm danger" onclick="deleteGame(\'' + gh + '\')">Del</button>';
+        h += '<button class="btn-sm ' + (gm.published ? '' : 'accent') + '" onclick="toggleAdminPublish(\'' + encodeURIComponent(gm.owner) + '\',\'' + encodeURIComponent(gm.game_id) + '\',\'' + gh + '\',' + (gm.published ? 'true' : 'false') + ')">' + (gm.published ? 'Unpublish' : 'Publish') + '</button>';
+        h += '<button class="btn-sm accent" onclick="assignGame(\'' + gh + '\',\'' + encodeURIComponent(gm.owner) + '\')">' + 'Assign</button>';
+        h += '<button class="btn-sm danger" onclick="deleteGame(\'' + gh + '\')">' + 'Del</button>';
         h += '</td></tr>';
       }
       h += '</table>';
@@ -361,19 +472,23 @@ function renderGames() {
       return String(b.updated || '').localeCompare(String(a.updated || ''));
     });
     var h2 = '';
-    h2 += '<table><tr><th>Owner/ID</th><th>Name</th><th>Version</th><th>HS</th><th>Size</th><th>Updated</th><th></th></tr>';
+    h2 += '<table><tr><th>Owner/ID</th><th>Name</th><th>Publish</th><th>Visibility</th><th>Scope</th><th>Version</th><th>HS</th><th>Size</th><th>Updated</th><th></th></tr>';
     for (var ni = 0; ni < byNameList.length; ni++) {
       var gm2 = byNameList[ni];
       var gh2 = encodeURIComponent(gm2.fullHash);
       h2 += '<tr><td><code>' + esc(gm2.owner + '/' + gm2.game_id) + '</code></td>';
       h2 += '<td><span style="cursor:pointer;color:var(--accent);text-decoration:underline" onclick="playAdminGame(\'' + encodeURIComponent(gm2.owner) + '\',\'' + encodeURIComponent(gm2.game_id || '') + '\',\'' + gh2 + '\')">' + esc(gm2.name) + '</span></td>';
+      h2 += '<td>' + publishBadge(gm2) + '</td>';
+      h2 += '<td>' + visibilityBadge(gm2) + '</td>';
+      h2 += '<td>' + scopeBadge(gm2) + '</td>';
       h2 += '<td>' + esc(gm2.version || '—') + '</td>';
       h2 += '<td>' + (gm2.highscore ? '<span title="' + esc(gm2.highscore_player || '') + '">' + gm2.highscore + '</span>' : '<span style="opacity:0.3">—</span>') + '</td>';
       h2 += '<td>' + formatSize(gm2.size) + '</td>';
       h2 += '<td title="' + esc(gm2.updated) + '">' + ago(gm2.updated) + '</td>';
       h2 += '<td class="actions">';
-      h2 += '<button class="btn-sm accent" onclick="assignGame(\'' + gh2 + '\',\'' + encodeURIComponent(gm2.owner) + '\')">Assign</button>';
-      h2 += '<button class="btn-sm danger" onclick="deleteGame(\'' + gh2 + '\')">Del</button>';
+      h2 += '<button class="btn-sm ' + (gm2.published ? '' : 'accent') + '" onclick="toggleAdminPublish(\'' + encodeURIComponent(gm2.owner) + '\',\'' + encodeURIComponent(gm2.game_id) + '\',\'' + gh2 + '\',' + (gm2.published ? 'true' : 'false') + ')">' + (gm2.published ? 'Unpublish' : 'Publish') + '</button>';
+      h2 += '<button class="btn-sm accent" onclick="assignGame(\'' + gh2 + '\',\'' + encodeURIComponent(gm2.owner) + '\')">' + 'Assign</button>';
+      h2 += '<button class="btn-sm danger" onclick="deleteGame(\'' + gh2 + '\')">' + 'Del</button>';
       h2 += '</td></tr>';
     }
     h2 += '</table>';
@@ -508,6 +623,29 @@ async function submitEditUser(usernameEnc) {
 }
 
 // ── Game actions ──
+async function toggleAdminPublish(ownerEnc, gameIdEnc, hashEnc, currentPublished) {
+  var gameId = decodeURIComponent(gameIdEnc);
+  var owner = decodeURIComponent(ownerEnc);
+  var hash = decodeURIComponent(hashEnc);
+  var nextPublished = !currentPublished;
+  var r = await fetch(API + '/internal/game/' + encodeURIComponent(gameId) + '/publish', {
+    method: 'PATCH',
+    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json', 'X-Game-Owner': owner },
+    body: JSON.stringify({ published: nextPublished })
+  });
+  var d = await r.json().catch(function(){ return {}; });
+  if (!r.ok) { alert(d.error || 'Toggle failed'); return; }
+  // Update local data and re-render
+  var all = gamesData.external || [];
+  for (var i = 0; i < all.length; i++) {
+    if (String(all[i].content_hash || '') === hash) {
+      all[i].published = nextPublished ? 1 : 0;
+      break;
+    }
+  }
+  renderGames();
+}
+
 async function deleteGame(hashEnc) {
   var hash = decodeURIComponent(hashEnc);
   if (!confirm('Delete game #' + hash.slice(0,8) + '? This cannot be undone.')) return;
@@ -613,11 +751,116 @@ async function deleteUserSecret(usernameEnc, keyEnc) {
   }
 }
 
+// ── PVFS Games (local browser storage) ──
+function readPvfsGames() {
+  try {
+    var raw = localStorage.getItem('traits.pvfs');
+    if (!raw) return {};
+    var pvfs = JSON.parse(raw);
+    var gamesRaw = pvfs['canvas/games.json'];
+    if (!gamesRaw) return {};
+    var data = typeof gamesRaw === 'string' ? JSON.parse(gamesRaw) : gamesRaw;
+    return data.games || {};
+  } catch(_) { return {}; }
+}
+
+function renderPvfsGames() {
+  var el = document.getElementById('pvfsTable');
+  var status = document.getElementById('pvfsStatus');
+  if (!el) return;
+  var games = readPvfsGames();
+  var ids = Object.keys(games);
+  if (!ids.length) {
+    status.textContent = 'No PVFS games in local storage.';
+    el.innerHTML = '';
+    return;
+  }
+  status.textContent = ids.length + ' local game' + (ids.length === 1 ? '' : 's') + ' in PVFS';
+  var h = '<table><tr><th>Name</th><th>Version</th><th>Size</th><th>Scope</th><th>Local ID</th><th>Relay ID</th><th>Status</th><th></th></tr>';
+  for (var i = 0; i < ids.length; i++) {
+    var id = ids[i];
+    var g = games[id];
+    var name = g.name || id;
+    var version = g.version || '—';
+    var size = formatSize((g.content || '').length);
+    var scope = g.scope || 'external';
+    var syncOwner = g._sync_owner || '';
+    var syncGameId = g._sync_game_id || '';
+    var syncHash = g._sync_hash || '';
+    var isSynced = !!syncGameId;
+    var statusBadge = isSynced
+      ? '<span class="badge-pub">synced</span>'
+      : '<span class="badge-draft">local only</span>';
+    var relayCell = isSynced
+      ? ('<code title="' + esc(syncOwner) + '">' + esc(syncGameId.slice(0,10)) + '…</code>')
+      : '<span style="opacity:0.3">—</span>';
+    var idEnc = encodeURIComponent(id);
+    h += '<tr>';
+    h += '<td><strong>' + esc(name) + '</strong></td>';
+    h += '<td>' + esc(version) + '</td>';
+    h += '<td>' + size + '</td>';
+    h += '<td><span class="badge-scope">' + esc(scope) + '</span></td>';
+    h += '<td><code>' + esc(id.slice(0,10)) + '…</code></td>';
+    h += '<td>' + relayCell + '</td>';
+    h += '<td>' + statusBadge + '</td>';
+    h += '<td class="actions">';
+    h += '<button class="btn-sm accent" onclick="pvfsSyncToRelay(\'' + idEnc + '\')">Sync</button>';
+    h += '</td>';
+    h += '</tr>';
+  }
+  h += '</table>';
+  el.innerHTML = h;
+}
+
+async function pvfsSyncToRelay(localIdEnc) {
+  var localId = decodeURIComponent(localIdEnc);
+  var games = readPvfsGames();
+  var g = games[localId];
+  if (!g) { alert('Game not found in PVFS'); return; }
+  var t = getToken();
+  if (!t) { alert('Log in first (Settings) to sync to relay'); return; }
+  var gameId = g._sync_game_id || localId;
+  var body = {
+    name: g.name || 'Untitled',
+    content: g.content || '',
+    scope: g.scope || 'external',
+    version: g.version || ''
+  };
+  try {
+    var r = await fetch(API + '/internal/game/' + encodeURIComponent(gameId), {
+      method: 'PUT',
+      headers: { 'Authorization': 'Bearer ' + t, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    var d = await r.json().catch(function(){ return {}; });
+    if (!r.ok) { alert(d.error || 'Sync failed (HTTP ' + r.status + ')'); return; }
+    // Update PVFS sync metadata
+    try {
+      var raw = localStorage.getItem('traits.pvfs');
+      var pvfs = raw ? JSON.parse(raw) : {};
+      var gamesData2 = pvfs['canvas/games.json'];
+      var data = gamesData2 ? (typeof gamesData2 === 'string' ? JSON.parse(gamesData2) : gamesData2) : { games: {} };
+      if (!data.games) data.games = {};
+      if (data.games[localId]) {
+        data.games[localId]._sync_game_id = d.game_id || gameId;
+        data.games[localId]._sync_hash = d.content_hash || '';
+        data.games[localId]._sync_owner = d.owner || '';
+      }
+      pvfs['canvas/games.json'] = JSON.stringify(data);
+      localStorage.setItem('traits.pvfs', JSON.stringify(pvfs));
+    } catch(_) {}
+    renderPvfsGames();
+  } catch(e) {
+    alert((e && e.message) ? e.message : 'Sync failed');
+  }
+}
+
 window.switchTab = switchTab;
 window.deleteUser = deleteUser;
 window.editUser = editUser;
 window.submitEditUser = submitEditUser;
 window.deleteGame = deleteGame;
+window.toggleAdminPublish = toggleAdminPublish;
 window.playAdminGame = playAdminGame;
 window.assignGame = assignGame;
 window.submitAssignGame = submitAssignGame;
@@ -625,6 +868,8 @@ window.manageSecrets = manageSecrets;
 window.addUserSecret = addUserSecret;
 window.deleteUserSecret = deleteUserSecret;
 window.closeModal = closeModal;
+window.pvfsSyncToRelay = pvfsSyncToRelay;
 load();
+renderPvfsGames();
 })();
 "##;

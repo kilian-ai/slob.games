@@ -967,12 +967,14 @@ export class GameRoom {
         if (!user) return json({ error: 'auth required' }, 401);
         const gameId = normalizeSlug(publishMatch[1], '');
         if (!gameId) return json({ error: 'missing game id' }, 400);
+        const body = await request.json().catch(() => ({}));
         const row = this.sql.exec(
           "SELECT published, content_hash FROM games WHERE owner = ? AND game_id = ?",
           user, gameId
         ).toArray()[0];
         if (!row) return json({ error: 'not found' }, 404);
-        const newVal = row.published ? 0 : 1;
+        const explicit = (typeof body.published === 'boolean') ? (body.published ? 1 : 0) : null;
+        const newVal = (explicit === null) ? (row.published ? 0 : 1) : explicit;
         this.sql.exec("UPDATE games SET published = ? WHERE owner = ? AND game_id = ?", newVal, user, gameId);
         if (newVal === 0) {
           // Notify clients to remove unpublished game from their catalog
@@ -1139,7 +1141,7 @@ export class GameRoom {
         const updated = new Date().toISOString();
 
         const prev = this.sql.exec(
-          "SELECT resources, forked_from_hash, published FROM games WHERE owner = ? AND game_id = ?",
+          "SELECT resources, forked_from_hash, published, checksum, content_hash FROM games WHERE owner = ? AND game_id = ?",
           user, gameId
         ).toArray()[0];
         const prevResources = parseResourcesField(prev && prev.resources);
@@ -1150,9 +1152,12 @@ export class GameRoom {
         const resourcePayloadBytes = resourceBytes(resourcesMap);
         const packageSize = content.length + resourcePayloadBytes;
         if (packageSize > MAX_GAME_PACKAGE_SIZE) return json({ error: 'package too large' }, 413);
-        const prevPublished = prev ? (prev.published ?? 1) : 1;
+        const prevPublished = prev ? (prev.published ?? 1) : 0;
         const size = content.length;
         const checksum = await packageHash16(content);
+        const prevChecksum = String((prev && (prev.checksum || prev.content_hash)) || '');
+        const hasChanged = !prev || (prevChecksum !== checksum);
+        const nextPublished = hasChanged ? 0 : prevPublished;
 
         this.sql.exec("DELETE FROM games WHERE owner = ? AND game_id = ?", user, gameId);
         this.sql.exec(
@@ -1160,13 +1165,18 @@ export class GameRoom {
            (content_hash, name, content, updated, size, owner, game_id, scope, version, checksum, resources, forked_from_hash, published)
            VALUES (?, ?, ?, ?, ?, ?, ?, 'external', ?, ?, ?, ?, ?)`,
           checksum, name, content, updated, size, user, gameId, version, checksum,
-          encodeResourcesField(resourcesMap), (prev && prev.forked_from_hash) || null, prevPublished
+          encodeResourcesField(resourcesMap), (prev && prev.forked_from_hash) || null, nextPublished
         );
         this.cacheResourcesForGame(checksum, resourcesMap);
         this.trimExternalPool();
 
+        if (hasChanged && prevPublished && prev && prev.content_hash) {
+          // On edit, games become draft by default. Remove previously published hash from clients.
+          this.broadcast(JSON.stringify({ type: 'game-deleted', content_hash: prev.content_hash }));
+        }
+
         // Only broadcast to other clients if the game is published
-        if (prevPublished) {
+        if (nextPublished) {
           const msg = JSON.stringify({
             type: 'sync',
             games: [{
@@ -1188,7 +1198,7 @@ export class GameRoom {
           }
         }
 
-        return json({ ok: true, owner: user, game_id: gameId, content_hash: checksum, checksum, version, published: !!prevPublished });
+        return json({ ok: true, owner: user, game_id: gameId, content_hash: checksum, checksum, version, published: !!nextPublished });
       }
 
       // GET /internal/game/:gameId — get full content of authenticated user's game

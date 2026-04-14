@@ -449,6 +449,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                         select #game-select { option value="" disabled selected { "no games" } }
                         button #btnSave .save-btn { "Save" }
                         button #btnClear { "Clear" }
+                        button #btnBackfill { "Backfill Assets" }
                         button #btnSource { "View Source" }
                     }
                 }
@@ -663,6 +664,93 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 resources: _canonicalResourceMap(out),
                                 bytes,
                             };
+                        }
+
+                        function _resourceRefsForContent(content) {
+                            const text = String(content || '');
+                            const refs = [];
+                            const prefixes = ['sprites/', 'assets/', 'images/', 'textures/', 'audio/'];
+                            for (let i = 0; i < prefixes.length; i++) {
+                                const prefix = prefixes[i];
+                                if (text.toLowerCase().indexOf(prefix) === -1) continue;
+                                const re = new RegExp(prefix.replace('/', '\\/') + '[a-zA-Z0-9_\\-\\./]+', 'g');
+                                const matches = text.match(re) || [];
+                                for (let j = 0; j < matches.length; j++) {
+                                    if (refs.indexOf(matches[j]) === -1) refs.push(matches[j]);
+                                }
+                            }
+                            return refs;
+                        }
+
+                        function _activeGameResourceStatus() {
+                            const col = readGamesCollection();
+                            const activeId = col.active;
+                            const active = activeId ? (col.games || {})[activeId] : null;
+                            if (!active || !active.content) {
+                                return { activeId: activeId || '', refs: [], missing: [], found: [], resources: {} };
+                            }
+                            const refs = _resourceRefsForContent(active.content);
+                            const files = _readPvfsFiles();
+                            const found = [];
+                            const missing = [];
+                            for (let i = 0; i < refs.length; i++) {
+                                const path = refs[i];
+                                if (typeof files[path] === 'string' && files[path]) found.push(path);
+                                else missing.push(path);
+                            }
+                            const pkg = _collectGameResourcesForContent(active.content, 2 * 1024 * 1024);
+                            return {
+                                activeId,
+                                active,
+                                refs,
+                                missing,
+                                found,
+                                resources: pkg.resources || {},
+                                bytes: pkg.bytes || 0,
+                            };
+                        }
+
+                        async function backfillActiveGameResources() {
+                            const token = _authToken();
+                            if (!token) {
+                                alert('Login required to backfill assets.');
+                                return false;
+                            }
+                            const status = _activeGameResourceStatus();
+                            const active = status.active;
+                            if (!active || !active.content) {
+                                alert('No active game content to backfill.');
+                                return false;
+                            }
+                            if (!status.found.length) {
+                                alert('No local assets found for the active game. Missing: ' + status.missing.length);
+                                return false;
+                            }
+                            const gameId = active._sync_game_id || active.game_id || _slugifyGameId(active.name || status.activeId || 'untitled');
+                            const resp = await fetch('https://relay.slob.games/sync/internal/game/' + encodeURIComponent(gameId), {
+                                method: 'PUT',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': 'Bearer ' + token,
+                                },
+                                body: JSON.stringify({
+                                    name: active.name || 'untitled',
+                                    content: active.content,
+                                    version: active.version || '',
+                                    resources: status.resources || {},
+                                })
+                            }).catch(function(){ return null; });
+                            if (!resp || !resp.ok) {
+                                let msg = 'Backfill failed';
+                                try {
+                                    const data = resp ? await resp.json() : null;
+                                    if (data && data.error) msg = data.error;
+                                } catch (_) {}
+                                alert(msg);
+                                return false;
+                            }
+                            alert('Backfilled ' + status.found.length + ' asset(s). Missing now: ' + status.missing.length);
+                            return true;
                         }
 
                         function _applySyncedResourcesToPvfs(resources, maxBytes) {
@@ -911,6 +999,25 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                         const gameSelect = document.getElementById('game-select');
                         const phoneGameLabel = document.getElementById('phoneGameLabel');
+                        const canvasHeader = document.querySelector('.canvas-header');
+
+                        function _submenuEnabled() {
+                            try {
+                                var raw = (localStorage.getItem('traits.env.SLOB_SUBMENU') || '').trim().toLowerCase();
+                                if (!raw) return true;
+                                return !(
+                                    raw === '0' || raw === 'false' || raw === 'off' ||
+                                    raw === 'no' || raw === 'hide' || raw === 'hidden'
+                                );
+                            } catch(_) { return true; }
+                        }
+
+                        function applyCanvasSubmenuVisibility() {
+                            if (!canvasHeader) return;
+                            canvasHeader.style.display = _submenuEnabled() ? '' : 'none';
+                        }
+
+                        window._applyCanvasSubmenuVisibility = applyCanvasSubmenuVisibility;
 
                         function _escHtml(v) {
                             var d = document.createElement('div');
@@ -924,6 +1031,88 @@ pub fn canvas(_args: &[Value]) -> Value {
                             var owner = String((g && (g._sync_owner || g.owner)) || 'local').trim().toLowerCase() || 'local';
                             var gid = String((g && (g._sync_game_id || g.game_id)) || _slugifyGameId((g && g.name) || id || 'untitled')).trim().toLowerCase();
                             return owner + '/' + gid;
+                        }
+
+                        function _readPvfsRevisionIndex() {
+                            try {
+                                var files = _readPvfsFiles();
+                                var raw = files['canvas/revisions/index.json'];
+                                if (!raw) return {};
+                                var idx = JSON.parse(raw);
+                                return (idx && typeof idx === 'object') ? idx : {};
+                            } catch (_) { return {}; }
+                        }
+
+                        function _candidateRevisionKeysForGame(g, id, idx) {
+                            var keys = {};
+                            function addKey(k) {
+                                k = String(k || '').trim().toLowerCase();
+                                if (!k || k.indexOf('/') <= 0) return;
+                                keys[k] = true;
+                            }
+                            function addOwnerWithGid(owner, gid) {
+                                owner = String(owner || '').trim().toLowerCase();
+                                gid = String(gid || '').trim().toLowerCase();
+                                if (!owner || !gid) return;
+                                addKey(owner + '/' + gid);
+                            }
+
+                            var primary = _revisionKeyForGame(g, id);
+                            addKey(primary);
+
+                            var ownerCandidates = {};
+                            ownerCandidates.local = true;
+                            ownerCandidates.public = true;
+                            var own1 = String((g && g._sync_owner) || '').trim().toLowerCase();
+                            var own2 = String((g && g.owner) || '').trim().toLowerCase();
+                            if (own1) ownerCandidates[own1] = true;
+                            if (own2) ownerCandidates[own2] = true;
+
+                            var gidCandidates = {};
+                            var gid1 = String((g && g._sync_game_id) || '').trim().toLowerCase();
+                            var gid2 = String((g && g.game_id) || '').trim().toLowerCase();
+                            var gid3 = _slugifyGameId((g && g.name) || id || 'untitled');
+                            var gid4 = _slugifyGameId(id || '');
+                            if (gid1) gidCandidates[gid1] = true;
+                            if (gid2) gidCandidates[gid2] = true;
+                            if (gid3) gidCandidates[gid3] = true;
+                            if (gid4) gidCandidates[gid4] = true;
+
+                            var owners = Object.keys(ownerCandidates);
+                            var gids = Object.keys(gidCandidates);
+                            for (var oi = 0; oi < owners.length; oi++) {
+                                for (var gi = 0; gi < gids.length; gi++) {
+                                    addOwnerWithGid(owners[oi], gids[gi]);
+                                }
+                            }
+
+                            // Keep matching strict to avoid pulling unrelated games that share a slug.
+                            // Only keys explicitly derivable from this game are considered.
+                            return Object.keys(keys);
+                        }
+
+                        function _mergeRevisionLists(base, extra) {
+                            var byId = {};
+                            var out = [];
+                            function pushAll(arr) {
+                                if (!arr || !arr.length) return;
+                                for (var i = 0; i < arr.length; i++) {
+                                    var it = arr[i] || {};
+                                    var rid = String(it.id || '').trim();
+                                    if (!rid || byId[rid]) continue;
+                                    byId[rid] = true;
+                                    out.push(it);
+                                }
+                            }
+                            pushAll(base || []);
+                            pushAll(extra || []);
+                            out.sort(function(a, b) {
+                                var ac = String((a && a.created) || '');
+                                var bc = String((b && b.created) || '');
+                                if (bc !== ac) return bc.localeCompare(ac);
+                                return String((b && b.id) || '').localeCompare(String((a && a.id) || ''));
+                            });
+                            return out;
                         }
 
                         function _closeRevisionMenu() {
@@ -940,7 +1129,36 @@ pub fn canvas(_args: &[Value]) -> Value {
                             if (!sdk) return;
                             var out = await sdk.call('sys.game_vcs', ['list', key]);
                             var payload = (out && out.result) || out || {};
-                            var revs = payload.revisions || [];
+                            var revsPrimary = payload.revisions || [];
+                            for (var p = 0; p < revsPrimary.length; p++) {
+                                if (!revsPrimary[p]) continue;
+                                revsPrimary[p]._game_key = key;
+                            }
+
+                            var idx = _readPvfsRevisionIndex();
+                            var allFromIndex = [];
+                            var cand = _candidateRevisionKeysForGame(g, col.active, idx);
+                            for (var ci = 0; ci < cand.length; ci++) {
+                                var ck = cand[ci];
+                                var arr = (idx && idx[ck] && Array.isArray(idx[ck])) ? idx[ck] : [];
+                                for (var ai = arr.length - 1; ai >= 0; ai--) {
+                                    var meta = arr[ai] || {};
+                                    var rid = String(meta.id || '').trim();
+                                    if (!rid) continue;
+                                    var row = {
+                                        id: rid,
+                                        name: meta.name || g.name || 'untitled',
+                                        version: meta.version || '',
+                                        created: meta.created || '',
+                                        _game_key: ck,
+                                    };
+                                    allFromIndex.push(row);
+                                }
+                            }
+
+                            var revs = _mergeRevisionLists(revsPrimary, allFromIndex);
+                            var currentRevisionId = String((revsPrimary[0] && revsPrimary[0].id) || '');
+                            var currentRevisionKey = key;
 
                             _closeRevisionMenu();
                             var menu = document.createElement('div');
@@ -968,18 +1186,25 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 for (var i = 0; i < revs.length; i++) {
                                     var it = revs[i] || {};
                                     var rid = _escJs(it.id || '');
-                                    var isCurr = (i === 0);
+                                    var rkey = _escJs(it._game_key || key);
+                                    var itemKey = String(it._game_key || key || '').trim().toLowerCase();
+                                    var keyHint = (itemKey && itemKey !== currentRevisionKey) ? (' • ' + itemKey) : '';
+                                    var isCurr = !!(
+                                        currentRevisionId &&
+                                        String(it.id || '') === currentRevisionId &&
+                                        itemKey === currentRevisionKey
+                                    );
                                     html += '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid #18243b' + (isCurr ? ';background:rgba(76,175,138,.05)' : '') + '">';
                                     if (isCurr) {
                                         html += '<button class="btn-play" style="padding:4px 8px;font-size:11px;opacity:.35;cursor:default" disabled>restore</button>';
                                     } else {
-                                        html += '<button class="btn-play" style="padding:4px 8px;font-size:11px" onclick="window._canvasRestoreRevision(\'' + rid + '\')">restore</button>';
+                                        html += '<button class="btn-play" style="padding:4px 8px;font-size:11px" onclick="window._canvasRestoreRevision(\'' + rid + '\',\'' + rkey + '\')">restore</button>';
                                     }
                                     html += '<div style="flex:1;min-width:0">';
                                     html += '<div style="font-size:12px;color:#d8e1f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">v' + _escHtml(it.version || '—') + (isCurr ? ' <span style="color:#4caf8a;font-size:10px">● current</span>' : '') + '</div>';
-                                    html += '<div style="font-size:10px;color:#7f91b2">' + _escHtml(String(it.created || '')) + '</div>';
+                                    html += '<div style="font-size:10px;color:#7f91b2">' + _escHtml(String(it.created || '') + keyHint) + '</div>';
                                     html += '</div>';
-                                    html += '<button class="danger" style="padding:4px 8px;font-size:11px" onclick="window._canvasDeleteRevision(\'' + rid + '\')">X</button>';
+                                    html += '<button class="danger" style="padding:4px 8px;font-size:11px" onclick="window._canvasDeleteRevision(\'' + rid + '\',\'' + rkey + '\')">X</button>';
                                     html += '</div>';
                                 }
                             }
@@ -998,30 +1223,16 @@ pub fn canvas(_args: &[Value]) -> Value {
                             }, 0);
                         }
 
-                        async function _restoreRevisionById(revisionId) {
+                        async function _restoreRevisionById(revisionId, revisionKey) {
                             var col = readGamesCollection();
                             if (!col.active || !col.games[col.active]) return;
                             var g = col.games[col.active] || {};
-                            var key = _revisionKeyForGame(g, col.active);
+                            var activeKey = String(_revisionKeyForGame(g, col.active) || '').trim().toLowerCase();
+                            var lookupKey = String(revisionKey || activeKey || '').trim().toLowerCase();
                             var sdk = window._traitsSDK;
                             if (!sdk) return;
 
-                            // Snapshot current content before restoring so the user can get back to it.
-                            // sys.game_vcs deduplicates if content is identical to the latest snapshot.
-                            var curContent = String(g.content || '');
-                            if (curContent) {
-                                try {
-                                    var pkg = _collectGameResourcesForContent(curContent, 2 * 1024 * 1024);
-                                    await sdk.call('sys.game_vcs', [
-                                        'commit', key, curContent,
-                                        g.name || 'untitled',
-                                        g.version || '',
-                                        JSON.stringify(pkg.resources || {})
-                                    ]);
-                                } catch (_) {}
-                            }
-
-                            var out = await sdk.call('sys.game_vcs', ['checkout', key, revisionId]);
+                            var out = await sdk.call('sys.game_vcs', ['checkout', lookupKey, revisionId]);
                             var payload = (out && out.result) || out || {};
                             var rev = payload.revision || {};
                             var content = String(rev.content || '');
@@ -1057,11 +1268,11 @@ pub fn canvas(_args: &[Value]) -> Value {
                             await _syncActiveToRelayInternal({ immediate: true });
                         }
 
-                        async function _deleteRevisionById(revisionId) {
+                        async function _deleteRevisionById(revisionId, revisionKey) {
                             var col = readGamesCollection();
                             if (!col.active || !col.games[col.active]) return;
                             var g = col.games[col.active] || {};
-                            var key = _revisionKeyForGame(g, col.active);
+                            var key = String(revisionKey || _revisionKeyForGame(g, col.active) || '').trim().toLowerCase();
                             var sdk = window._traitsSDK;
                             if (!sdk) return;
                             await sdk.call('sys.game_vcs', ['delete', key, revisionId]);
@@ -1280,10 +1491,25 @@ pub fn canvas(_args: &[Value]) -> Value {
                         }
 
                         document.getElementById('btnSave').addEventListener('click', saveProject);
+                        document.getElementById('btnBackfill').addEventListener('click', function() {
+                            backfillActiveGameResources().catch(function(e) {
+                                alert('Backfill failed: ' + (e && e.message ? e.message : e));
+                            });
+                        });
                         window.addEventListener('traits-canvas-projects-changed', renderProjectBar);
+                        window.addEventListener('storage', function(ev) {
+                            if (!ev || ev.key === 'traits.env.SLOB_SUBMENU') applyCanvasSubmenuVisibility();
+                        });
+                        window.addEventListener('traits-env-changed', function(ev) {
+                            var k = ev && ev.detail && ev.detail.key;
+                            if (!k || k === 'SLOB_SUBMENU' || k === 'traits.env.SLOB_SUBMENU') {
+                                applyCanvasSubmenuVisibility();
+                            }
+                        });
                         runOneTimeHistoricalDedupe();
                         dedupeLocalGames();
                         renderProjectBar();
+                        applyCanvasSubmenuVisibility();
 
                         (async function installCanvasSdkHooks() {
                             try {
