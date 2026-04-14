@@ -784,6 +784,66 @@ export class GameRoom {
         return json({ external, internal: [] });
       }
 
+      // GET /admin/stats — relay diagnostics (admin only)
+      if (url.pathname === "/admin/stats" && request.method === "GET") {
+        const user = await this.authUser(request);
+        if (!user) return json({ error: "auth required" }, 401);
+        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
+        if (role !== 'admin') return json({ error: "admin required" }, 403);
+
+        const totalGames = this.sql.exec("SELECT COUNT(*) AS n FROM games").toArray()[0]?.n || 0;
+        const internalGames = this.sql.exec("SELECT COUNT(*) AS n FROM games WHERE scope = 'internal'").toArray()[0]?.n || 0;
+        const externalGames = this.sql.exec("SELECT COUNT(*) AS n FROM games WHERE scope = 'external'").toArray()[0]?.n || 0;
+        const publishedGames = this.sql.exec("SELECT COUNT(*) AS n FROM games WHERE published = 1").toArray()[0]?.n || 0;
+        const draftGames = this.sql.exec("SELECT COUNT(*) AS n FROM games WHERE published != 1").toArray()[0]?.n || 0;
+
+        const totalGameContentBytes = this.sql.exec("SELECT COALESCE(SUM(size), 0) AS n FROM games").toArray()[0]?.n || 0;
+        const totalResourceRows = this.sql.exec("SELECT COUNT(*) AS n FROM resource_cache").toArray()[0]?.n || 0;
+        const totalResourceBytes = this.sql.exec("SELECT COALESCE(SUM(LENGTH(value)), 0) AS n FROM resource_cache").toArray()[0]?.n || 0;
+
+        const users = this.sql.exec("SELECT COUNT(*) AS n FROM users").toArray()[0]?.n || 0;
+        const highScores = this.sql.exec("SELECT COUNT(*) AS n FROM scores").toArray()[0]?.n || 0;
+
+        const pageCount = this.sql.exec("PRAGMA page_count").toArray()[0]?.page_count || 0;
+        const pageSize = this.sql.exec("PRAGMA page_size").toArray()[0]?.page_size || 0;
+        const dbApproxBytes = pageCount * pageSize;
+
+        const externalPoolLimit = this.getExternalPoolLimit();
+        const externalOverLimit = Math.max(0, Number(externalGames) - Number(externalPoolLimit));
+
+        return json({
+          ok: true,
+          generated_at: new Date().toISOString(),
+          runtime: {
+            active_websockets: this.state.getWebSockets().length,
+            auth_rate_limit_entries: this.authAttempts.size,
+          },
+          games: {
+            total: totalGames,
+            internal: internalGames,
+            external: externalGames,
+            published: publishedGames,
+            draft: draftGames,
+            external_pool_limit: externalPoolLimit,
+            external_over_limit: externalOverLimit,
+            content_bytes_total: totalGameContentBytes,
+          },
+          resources: {
+            cached_rows: totalResourceRows,
+            cached_bytes_total: totalResourceBytes,
+          },
+          users: {
+            total: users,
+            highscore_rows: highScores,
+          },
+          storage: {
+            sqlite_page_count: pageCount,
+            sqlite_page_size: pageSize,
+            sqlite_db_bytes_approx: dbApproxBytes,
+          },
+        });
+      }
+
       // DELETE /admin/users/:username — delete a user (admin only, cannot delete self)
       const adminUserDelete = url.pathname.match(/^\/admin\/users\/([^/]+)$/);
       if (adminUserDelete && request.method === "DELETE") {
