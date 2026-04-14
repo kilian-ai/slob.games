@@ -53,6 +53,7 @@ const CSS: &str = r##"
 .badge.draft:hover{background:rgba(255,102,102,0.15)}
 .badge.publish-dim{background:rgba(120,136,158,0.12);color:#8da0b8;cursor:pointer;opacity:.82}
 .badge.publish-dim:hover{background:rgba(141,160,184,0.22);color:#b9c7d9;opacity:1}
+.badge.offline{background:rgba(255,176,32,0.12);color:#ffcc66;cursor:default;opacity:.95}
 .submeta{font-size:0.62rem;color:#6f7f96;opacity:.9}
 .btn-del{background:none;border:1px solid rgba(255,60,60,0.2);color:#ff4444;font-size:0.6rem;padding:1px 6px;border-radius:3px;cursor:pointer;text-transform:uppercase;letter-spacing:0.04em;font-weight:600;transition:all 0.2s}
 .btn-del:hover{background:rgba(255,60,60,0.12);border-color:rgba(255,60,60,0.4)}
@@ -73,6 +74,24 @@ const JS: &str = r##"
   var __relayMineByGameId={};
   var __relayUser='';
   var __reconcileInFlight=false;
+  var __relayHealth={ok:true,status:200,msg:''};
+
+  function _setRelayHealth(ok,status,msg){
+    __relayHealth={ok:!!ok,status:Number(status||0),msg:String(msg||'')};
+  }
+
+  async function fetchJson(path,headers){
+    var h=headers||{};
+    try{
+      var res=await fetch(RELAY+path,{headers:h,cache:'no-store'});
+      var text=await res.text();
+      var data=null;
+      try{data=text?JSON.parse(text):null}catch(_){data=null}
+      return {ok:res.ok,status:res.status,text:text,data:data};
+    }catch(e){
+      return {ok:false,status:0,text:String(e&&e.message||e),data:null};
+    }
+  }
 
   function getToken(){return(localStorage.getItem('traits.secret.SLOB_USER_TOKEN')||'').trim()}
   function authHeaders(){var h={'Content-Type':'application/json'};var t=getToken();if(t)h['Authorization']='Bearer '+t;return h}
@@ -184,9 +203,9 @@ const JS: &str = r##"
   }
 
   async function fetchInternalGames(){
-    var res=await fetch(RELAY+'/internal/games',{headers:authHeaders()});
-    if(!res.ok)throw new Error('Could not load private games');
-    return await res.json();
+    var r=await fetchJson('/internal/games',authHeaders());
+    if(!r.ok)throw new Error('Could not load private games ('+r.status+')');
+    return Array.isArray(r.data)?r.data:[];
   }
 
   async function mergeDuplicateGamesByName(myGames){
@@ -715,6 +734,10 @@ const JS: &str = r##"
     if(pubBtn){
       pubBtn.addEventListener('click',function(e){
         e.stopPropagation();
+        if(g.offline){
+          alert('Relay unavailable ('+(__relayHealth.status||0)+'). Try again once relay.slob.games is reachable.');
+          return;
+        }
         if(g.unsynced){
           syncLocalToRelay(g.id).then(function(){renderRelay()}).catch(function(err){alert((err&&err.message)||'Sync failed')});
           return;
@@ -816,9 +839,12 @@ const JS: &str = r##"
       var isPublished=!!(relay&&relay.published);
       g.gameId=gameId;
       g.isPublished=isPublished;
-      g.unsynced=!relay;
+      g.offline=!__relayHealth.ok;
+      g.unsynced=!relay&&__relayHealth.ok;
 
-      if(!relay){
+      if(g.offline){
+        g.publishBadge={cls:'offline',label:'offline'};
+      }else if(!relay){
         g.publishBadge={cls:'publish-dim',label:'unsynced'};
       }else if(isPublished){
         g.publishBadge={cls:'pub',label:'published'};
@@ -845,14 +871,45 @@ const JS: &str = r##"
     var t=getToken();
     __relayMineByGameId={};
     __relayUser='';
+    _setRelayHealth(true,200,'');
+
+    var publicResp=await fetchJson('/games');
+    if(!publicResp.ok){
+      var hint='Could not load community games.';
+      if(publicResp.status===530||/1016/.test(String(publicResp.text||''))){
+        hint='Relay unavailable (Cloudflare 1016 / 530). Check relay domain routing.';
+      }else if(publicResp.status){
+        hint='Could not load community games ('+publicResp.status+').';
+      }
+      _setRelayHealth(false,publicResp.status,hint);
+      grid.innerHTML='<div class="empty">'+esc(hint)+'</div>';
+      await renderLocal();
+      return;
+    }
+    var publicGames=Array.isArray(publicResp.data)?publicResp.data:[];
+
     // If logged in, show user's own games with publish/delete controls
     if(t){
       try{
-        try{
-          var me=await fetch(RELAY+'/auth/me',{headers:authHeaders()});
-          if(me.ok){var meData=await me.json();__relayUser=String(meData.username||'').trim().toLowerCase()}
-        }catch(_){}
-        var myGames=await fetchInternalGames();
+        var meResp=await fetchJson('/auth/me',authHeaders());
+        if(meResp.ok&&meResp.data){
+          __relayUser=String(meResp.data.username||'').trim().toLowerCase();
+        }
+
+        var myResp=await fetchJson('/internal/games',authHeaders());
+        var myGames=[];
+        if(myResp.ok){
+          myGames=Array.isArray(myResp.data)?myResp.data:[];
+        }else if(myResp.status===401){
+          // stale token in this browser context; continue as logged-out view
+          __relayUser='';
+        }else{
+          _setRelayHealth(false,myResp.status,'Could not load private games ('+myResp.status+').');
+          grid.innerHTML='<div class="empty">'+esc(__relayHealth.msg)+'</div>';
+          await renderLocal();
+          return;
+        }
+
         if(myGames){
           if(await mergeDuplicateGamesByName(myGames)){
             myGames=await fetchInternalGames();
@@ -870,19 +927,15 @@ const JS: &str = r##"
             }
           });
           // Also show other community games below
-          var res2=await fetch(RELAY+'/games');
-          if(res2.ok){
-            var community=await res2.json();
-            var others=community.filter(function(g){
+          var others=publicGames.filter(function(g){
               var owner=String(g.owner||'').trim().toLowerCase();
               var gid=slugify(g.game_id||g.name||'untitled');
               var key=owner+'/'+gid;
               var hash=String(g.content_hash||'').trim().toLowerCase();
               return !myIds[hash] && !myKeys[key];
-            });
-            if(others.length){
-              others.forEach(function(g){rows.push({kind:'community',name:String(g.name||'Untitled'),game:g})});
-            }
+          });
+          if(others.length){
+            others.forEach(function(g){rows.push({kind:'community',name:String(g.name||'Untitled'),game:g})});
           }
           grid.innerHTML='';
           rows.sort(function(a,b){return a.name.toLowerCase().localeCompare(b.name.toLowerCase())});
@@ -896,16 +949,10 @@ const JS: &str = r##"
       }catch(e){}
     }
     // Fallback: not logged in — show all community games
-    try{
-      var res=await fetch(RELAY+'/games');
-      var games=await res.json();
-      grid.innerHTML='';
-      if(!games.length){grid.innerHTML='<div class="empty">No community games available.</div>';return}
-      games.sort(function(a,b){return a.name.localeCompare(b.name)});
-      games.forEach(function(g){grid.appendChild(makeCommunityCard(g))});
-    }catch(e){
-      grid.innerHTML='<div class="empty">Could not load community games.</div>';
-    }
+    grid.innerHTML='';
+    if(!publicGames.length){grid.innerHTML='<div class="empty">No community games available.</div>';await renderLocal();return}
+    publicGames.sort(function(a,b){return String(a.name||'').localeCompare(String(b.name||''))});
+    publicGames.forEach(function(g){grid.appendChild(makeCommunityCard(g))});
     await renderLocal();
   }
 
