@@ -265,8 +265,13 @@ fi
 # ── Copy cdylib outputs to trait directories ──
 # ── Generate terminal-runtime.js (classic script for file:// mode) ──
 TERMINAL_SRC="traits/www/terminal/terminal.js"
+AGENT_TERMINAL_SRC="traits/www/terminal/agent-terminal.js"
 TERMINAL_CSS="traits/www/terminal/terminal.css"
 TERMINAL_RUNTIME="traits/www/static/terminal-runtime.js"
+AGENT_TERMINAL_RUNTIME="traits/www/static/agent-terminal-runtime.js"
+if [[ -f "$AGENT_TERMINAL_SRC" ]]; then
+    cp "$AGENT_TERMINAL_SRC" "$AGENT_TERMINAL_RUNTIME"
+fi
 if [[ -f "$TERMINAL_SRC" ]]; then
     echo "Generating terminal runtime..."
     {
@@ -315,9 +320,9 @@ if [[ -f "$SDK_SRC" ]]; then
     } > "$SDK_RUNTIME"
 fi
 
-if [[ -f "$INDEX_HTML" && -f "$WASM_RUNTIME_JS" && -f "$WASM_WORKER_JS" && -f "$TERMINAL_RUNTIME" && -f "$SDK_RUNTIME" ]]; then
+if [[ -f "$INDEX_HTML" && -f "$WASM_RUNTIME_JS" && -f "$WASM_WORKER_JS" && -f "$TERMINAL_RUNTIME" && -f "$AGENT_TERMINAL_RUNTIME" && -f "$SDK_RUNTIME" ]]; then
     echo "Generating standalone HTML..."
-    python3 - "$INDEX_HTML" "$WASM_RUNTIME_JS" "$WASM_WORKER_JS" "$TERMINAL_RUNTIME" "$SDK_RUNTIME" "$INDEX_STANDALONE_HTML" <<'PY'
+    python3 - "$INDEX_HTML" "$WASM_RUNTIME_JS" "$WASM_WORKER_JS" "$TERMINAL_RUNTIME" "$AGENT_TERMINAL_RUNTIME" "$SDK_RUNTIME" "$INDEX_STANDALONE_HTML" <<'PY'
 import pathlib
 import sys
 
@@ -325,13 +330,15 @@ index_path = pathlib.Path(sys.argv[1])
 wasm_runtime_path = pathlib.Path(sys.argv[2])
 worker_runtime_path = pathlib.Path(sys.argv[3])
 terminal_runtime_path = pathlib.Path(sys.argv[4])
-sdk_runtime_path = pathlib.Path(sys.argv[5])
-out_path = pathlib.Path(sys.argv[6])
+agent_terminal_runtime_path = pathlib.Path(sys.argv[5])
+sdk_runtime_path = pathlib.Path(sys.argv[6])
+out_path = pathlib.Path(sys.argv[7])
 
 html = index_path.read_text()
 wasm_runtime = wasm_runtime_path.read_text()
 worker_runtime = worker_runtime_path.read_text()
 terminal_runtime = terminal_runtime_path.read_text()
+agent_terminal_runtime = agent_terminal_runtime_path.read_text()
 sdk_runtime = sdk_runtime_path.read_text()
 
 runtime_fn = """function runtimeScriptPath() {
@@ -346,6 +353,9 @@ runtime_fn_old = """function runtimeScriptPath() {
 term_src_old = "const termSrc = isLocal ? `./terminal-runtime.js?v=${Date.now()}` : '/static/www/static/terminal-runtime.js';"
 term_src_new = "const termSrc = 'inline:terminal-runtime';"
 
+agent_term_src_old = "const agentTermSrc = isLocal ? `./agent-terminal-runtime.js?v=${Date.now()}` : '/static/www/static/agent-terminal-runtime.js';"
+agent_term_src_new = agent_term_src_old
+
 sdk_src_old = "const sdkSrc = isLocal ? `./sdk-runtime.js?v=${Date.now()}` : '/static/www/static/sdk-runtime.js';"
 sdk_src_new = "const sdkSrc = 'inline:sdk-runtime';"
 
@@ -353,11 +363,14 @@ if runtime_fn_old not in html:
     raise SystemExit('standalone generation failed: runtimeScriptPath() block not found')
 if term_src_old not in html:
     raise SystemExit('standalone generation failed: terminal runtime path not found')
+if agent_term_src_old not in html:
+    raise SystemExit('standalone generation failed: agent terminal runtime path not found')
 if sdk_src_old not in html:
     raise SystemExit('standalone generation failed: SDK runtime path not found')
 
 html = html.replace(runtime_fn_old, runtime_fn)
 html = html.replace(term_src_old, term_src_new)
+html = html.replace(agent_term_src_old, agent_term_src_new)
 html = html.replace(sdk_src_old, sdk_src_new)
 
 # Standalone is always "local" (hash routing) — no server to handle pushState paths
@@ -395,6 +408,9 @@ fi
 
 if [[ -f "$INDEX_STANDALONE_HTML" ]]; then
     cp "$INDEX_STANDALONE_HTML" index.html
+    if [[ -f "$AGENT_TERMINAL_RUNTIME" ]]; then
+        cp "$AGENT_TERMINAL_RUNTIME" agent-terminal-runtime.js
+    fi
     echo "Copied $INDEX_STANDALONE_HTML → index.html"
 fi
 

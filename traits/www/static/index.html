@@ -846,6 +846,8 @@ async function boot() {
 
     // Pre-load terminal as classic script (import() blocked in file:// mode)
     try {
+      const agentTermSrc = isLocal ? `./agent-terminal-runtime.js?v=${Date.now()}` : '/static/www/static/agent-terminal-runtime.js';
+      await loadScript(agentTermSrc);
       const termSrc = isLocal ? `./terminal-runtime.js?v=${Date.now()}` : '/static/www/static/terminal-runtime.js';
       await loadScript(termSrc);
     } catch(e) { console.warn('Terminal pre-load failed:', e); }

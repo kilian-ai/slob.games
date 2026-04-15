@@ -22,6 +22,7 @@ const CLEAR_SENTINEL = '\x1b[CLEAR]';
 const REST_RE = /\x1b\[REST\]([\s\S]*?)\x1b\[\/REST\]/;
 const WEBLLM_RE = /\x1b\[WEBLLM\]([\s\S]*?)\x1b\[\/WEBLLM\]/;
 const VOICE_RE = /\x1b\[VOICE\]([\s\S]*?)\x1b\[\/VOICE\]/;
+const AGENT_RE = /\x1b\[AGENT\]([\s\S]*?)\x1b\[\/AGENT\]/;
 // Source of truth: kernel/cli/cli.rs PROMPT constant. Must stay in sync.
 const PROMPT = '\x1b[32mtraits \x1b[0m';
 
@@ -43,6 +44,11 @@ let Terminal, FitAddon, WebLinksAddon, SerializeAddon;
  * @returns {Promise<{term, fitAddon, wasm}>}
  */
 async function createTerminal(mountEl, opts = {}) {
+    // Best-effort module import when running as ESM (e.g. /www/wasm page).
+    if (typeof window !== 'undefined' && typeof window.handleAgentCommand !== 'function') {
+        try { await import('/static/www/terminal/agent-terminal.js'); } catch (_) {}
+    }
+
     // ── Load xterm.js ──
     try {
         const xtermMod = await import('https://cdn.jsdelivr.net/npm/@xterm/xterm@5/+esm');
@@ -725,6 +731,56 @@ async function createTerminal(mountEl, opts = {}) {
                 } catch (e) {
                     term.write(`\x1b[31mVoice parse error: ${e.message}\x1b[0m\r\n`);
                     term.write(PROMPT);
+                    restPending = false;
+                    requestAnimationFrame(saveState);
+                }
+                return;
+            }
+
+            // Check for Agent dispatch sentinel
+            const agentMatch = output.match(AGENT_RE);
+            if (agentMatch) {
+                const visible = output.replace(AGENT_RE, '');
+                if (visible) term.write(visible);
+
+                if (!activeSdk || typeof window.handleAgentCommand !== 'function') {
+                    term.write('\x1b[31mAgent handler unavailable\x1b[0m\r\n');
+                    term.write(PROMPT);
+                    requestAnimationFrame(saveState);
+                    return;
+                }
+
+                try {
+                    const payload = JSON.parse(agentMatch[1] || '{}');
+                    const line = String(payload.line || '').trim();
+                    restPending = true;
+
+                    const write = (text) => {
+                        const s = String(text || '');
+                        term.write(s.replace(/\n/g, '\r\n'));
+                    };
+                    const writeln = (text) => {
+                        write(text || '');
+                        term.write('\r\n');
+                    };
+
+                    const handled = await window.handleAgentCommand({
+                        line,
+                        sdk: activeSdk,
+                        write,
+                        writeln,
+                        term,
+                        backgroundCall,
+                    });
+
+                    if (!handled) {
+                        writeln(`\x1b[31mUnknown agent command: ${line}\x1b[0m`);
+                    }
+                    term.write(PROMPT);
+                } catch (e) {
+                    term.write(`\x1b[31mAgent parse error: ${e.message}\x1b[0m\r\n`);
+                    term.write(PROMPT);
+                } finally {
                     restPending = false;
                     requestAnimationFrame(saveState);
                 }
