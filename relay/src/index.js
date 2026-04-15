@@ -973,7 +973,7 @@ export class GameRoom {
                   s.score AS highscore, s.player AS highscore_player
            FROM games g
            LEFT JOIN scores s ON s.game_hash = g.content_hash
-           WHERE g.published = 1
+           WHERE g.published = 1 AND g.scope = 'external'
            ORDER BY g.name ASC`
         ).toArray().map((r) => this.normalizeExternalGameRow(r));
         return json(rows);
@@ -1028,14 +1028,23 @@ export class GameRoom {
         const gameId = normalizeSlug(publishMatch[1], '');
         if (!gameId) return json({ error: 'missing game id' }, 400);
         const body = await request.json().catch(() => ({}));
+
+        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
+        const requestedOwner = normalizeSlug(
+          request.headers.get('X-Game-Owner') || body.owner || user,
+          user
+        );
+        const owner = requestedOwner || user;
+        if (owner !== user && role !== 'admin') return json({ error: 'forbidden' }, 403);
+
         const row = this.sql.exec(
           "SELECT published, content_hash FROM games WHERE owner = ? AND game_id = ?",
-          user, gameId
+          owner, gameId
         ).toArray()[0];
         if (!row) return json({ error: 'not found' }, 404);
         const explicit = (typeof body.published === 'boolean') ? (body.published ? 1 : 0) : null;
         const newVal = (explicit === null) ? (row.published ? 0 : 1) : explicit;
-        this.sql.exec("UPDATE games SET published = ? WHERE owner = ? AND game_id = ?", newVal, user, gameId);
+        this.sql.exec("UPDATE games SET published = ? WHERE owner = ? AND game_id = ?", newVal, owner, gameId);
         if (newVal === 0) {
           // Notify clients to remove unpublished game from their catalog
           this.broadcast(JSON.stringify({ type: 'game-deleted', content_hash: row.content_hash }));
@@ -1043,14 +1052,14 @@ export class GameRoom {
           // Re-broadcast the game to all clients
           const full = this.sql.exec(
             "SELECT content_hash, name, content, updated, owner, game_id, scope, version, checksum, resources FROM games WHERE owner = ? AND game_id = ?",
-            user, gameId
+            owner, gameId
           ).toArray()[0];
           if (full) {
             const norm = this.normalizeExternalGameRow(full, true);
             this.broadcast(JSON.stringify({ type: 'sync', games: [norm] }));
           }
         }
-        return json({ ok: true, game_id: gameId, published: !!newVal });
+        return json({ ok: true, owner, game_id: gameId, published: !!newVal });
       }
 
       // POST /internal/fork — fork a game into authenticated user's collection
