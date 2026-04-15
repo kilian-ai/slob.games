@@ -91,14 +91,14 @@ fn ensure_pvfs() {
         if cell.borrow().is_none() {
             let mut vfs = kernel_logic::vfs::LayeredVfs::new();
             // Seed builtins (same as CliSession VFS)
-            for (_path, rel_path, toml) in BUILTIN_TRAIT_DEFS {
-                vfs.seed(rel_path, *toml);
+            for (_path, rel_path, toml, mtime) in BUILTIN_TRAIT_DEFS {
+                vfs.seed_with_mtime(rel_path, *toml, *mtime);
             }
-            for (_path, rel_path, feat) in BUILTIN_FEATURES {
-                vfs.seed(rel_path, *feat);
+            for (_path, rel_path, feat, mtime) in BUILTIN_FEATURES {
+                vfs.seed_with_mtime(rel_path, *feat, *mtime);
             }
-            for (rel_path, content) in BUILTIN_DOCS {
-                vfs.seed(rel_path, *content);
+            for (rel_path, content, mtime) in BUILTIN_DOCS {
+                vfs.seed_with_mtime(rel_path, *content, *mtime);
             }
             // Restore user layer from localStorage
             if let Some(json) = ls_get("traits.pvfs") {
@@ -226,7 +226,6 @@ pub fn init() -> Result<JsValue, JsValue> {
                 "version": t.version,
                 "tags": t.tags,
                 "wasm_callable": t.wasm_callable,
-                "params": t.params,
             })).collect()
         },
         registry_count: || get_registry().len(),
@@ -266,29 +265,90 @@ pub fn init() -> Result<JsValue, JsValue> {
     })).unwrap().into())
 }
 
-/// Build a `LayeredVfs` seeded from the embedded WASM binary assets.
+/// A `Vfs` wrapper that auto-persists to `localStorage['traits.pvfs']` after
+/// every mutation. Used as the CLI session VFS so that files created via shell
+/// commands (`vi`, `mkdir`, `>` redirect) survive page refreshes immediately —
+/// no unload event needed.
+struct PersistingVfs {
+    inner: kernel_logic::vfs::LayeredVfs,
+}
+
+impl PersistingVfs {
+    fn new() -> Self {
+        let mut vfs = kernel_logic::vfs::LayeredVfs::new();
+        for (_path, rel_path, toml, mtime) in BUILTIN_TRAIT_DEFS {
+            vfs.seed_with_mtime(rel_path, *toml, *mtime);
+        }
+        for (_path, rel_path, feat, mtime) in BUILTIN_FEATURES {
+            vfs.seed_with_mtime(rel_path, *feat, *mtime);
+        }
+        for (rel_path, content, mtime) in BUILTIN_DOCS {
+            vfs.seed_with_mtime(rel_path, *content, *mtime);
+        }
+        // Restore from the persistent mirror first so Worker mode (no window/localStorage)
+        // still picks up state seeded by pvfs_load from terminal.js.
+        ensure_pvfs();
+        let persisted = PERSISTENT_VFS.with(|cell| {
+            cell.borrow()
+                .as_ref()
+                .map(|p| p.dump())
+                .unwrap_or_default()
+        });
+        if !persisted.is_empty() {
+            vfs.load(&persisted);
+        }
+        // Fallback for main-thread mode where localStorage is directly readable.
+        if let Some(json) = ls_get("traits.pvfs") {
+            vfs.load(&json);
+        }
+        Self { inner: vfs }
+    }
+
+    #[inline]
+    fn auto_save(&self) {
+        let json = self.inner.dump();
+        // Keep the in-memory persistent mirror aligned with the active CLI session VFS.
+        ensure_pvfs();
+        PERSISTENT_VFS.with(|cell| {
+            if let Some(vfs) = cell.borrow_mut().as_mut() {
+                vfs.load(&json);
+            }
+        });
+        ls_set("traits.pvfs", &json);
+    }
+}
+
+impl kernel_logic::vfs::Vfs for PersistingVfs {
+    fn read(&self, path: &str) -> Option<String> { self.inner.read(path) }
+    fn write(&mut self, path: &str, content: &str) { self.inner.write(path, content); self.auto_save(); }
+    fn append(&mut self, path: &str, content: &str) { self.inner.append(path, content); self.auto_save(); }
+    fn delete(&mut self, path: &str) -> bool {
+        let r = self.inner.delete(path);
+        if r { self.auto_save(); }
+        r
+    }
+    fn mkdir(&mut self, path: &str) -> bool {
+        let r = self.inner.mkdir(path);
+        if r { self.auto_save(); }
+        r
+    }
+    fn list(&self) -> Vec<String> { self.inner.list() }
+    fn list_dirs(&self) -> Vec<String> { self.inner.list_dirs() }
+    fn is_dir(&self, path: &str) -> bool { self.inner.is_dir(path) }
+    fn exists(&self, path: &str) -> bool { self.inner.exists(path) }
+    fn dump(&self) -> String { self.inner.dump() }
+    fn load(&mut self, json: &str) { self.inner.load(json); self.auto_save(); }
+}
+
+/// Build a `PersistingVfs` seeded from the embedded WASM binary assets.
 ///
-/// Every `.trait.toml` and `.features.json` that was bundled via `include_str!`
-/// in `wasm_builtin_traits.rs` is mounted as a read-only builtin file.
+/// Restores user-created files from `localStorage['traits.pvfs']` so they
+/// survive page refreshes. Mutations are saved to localStorage immediately so
+/// no unload/pagehide handler is needed for persistence.
+///
 /// Called via `Platform::make_vfs` each time a `CliSession` is created.
-///
-/// Terminal usage after `init()` + `vfs_load()`:
-///   ls                                            → directory tree
-///   ls traits/sys/                                → files in sys namespace
-///   cat traits/sys/checksum/checksum.trait.toml
-///   cat traits/sys/checksum/checksum.features.json
 fn make_wasm_vfs() -> Box<dyn kernel_logic::vfs::Vfs> {
-    let mut vfs = kernel_logic::vfs::LayeredVfs::new();
-    for (_path, rel_path, toml) in BUILTIN_TRAIT_DEFS {
-        vfs.seed(rel_path, *toml);
-    }
-    for (_path, rel_path, feat) in BUILTIN_FEATURES {
-        vfs.seed(rel_path, *feat);
-    }
-    for (rel_path, content) in BUILTIN_DOCS {
-        vfs.seed(rel_path, *content);
-    }
-    Box::new(vfs)
+    Box::new(PersistingVfs::new())
 }
 
 // ────────────────── WASM process status ──────────────────
@@ -683,6 +743,15 @@ pub fn pvfs_refresh() {
 /// persistence (Workers can't access localStorage directly).
 #[wasm_bindgen]
 pub fn pvfs_dump() -> String {
+    // Prefer the active CLI session VFS when available (terminal Worker path).
+    let session_dump = CLI_SESSION.with(|cell| {
+        let mut opt = cell.borrow_mut();
+        opt.as_mut().map(|session| session.vfs_dump())
+    });
+    if let Some(json) = session_dump {
+        return json;
+    }
+
     ensure_pvfs();
     PERSISTENT_VFS.with(|cell| {
         cell.borrow().as_ref().map(|vfs| vfs.dump()).unwrap_or_else(|| "{}".to_string())
@@ -694,6 +763,14 @@ pub fn pvfs_dump() -> String {
 /// (Workers can't access localStorage directly, so the main thread sends the data).
 #[wasm_bindgen]
 pub fn pvfs_load(json: &str) {
+    // If a CLI session already exists, load directly into that session VFS too.
+    CLI_SESSION.with(|cell| {
+        let mut opt = cell.borrow_mut();
+        if let Some(session) = opt.as_mut() {
+            session.vfs_load(json);
+        }
+    });
+
     ensure_pvfs();
     PERSISTENT_VFS.with(|cell| {
         if let Some(vfs) = cell.borrow_mut().as_mut() {
