@@ -503,10 +503,14 @@ const JS: &str = r##"
   }
 
   async function activateAndGoCanvas(id, cardGame){
-    async function ensureCardContent(g, localId){
+    // Strategy: avoid calling sys.canvas activate/load_game from the Games page because
+    // the WASM VFS is a singleton initialized once at page load, and Canvas's JS sync
+    // writes directly to localStorage (flat format) which the WASM VFS never sees.
+    // Instead: populate the JS pvfs + write a launch payload with full content.
+    // Canvas init reads the payload and calls load_game via WASM, bridging the two stores.
+    async function fetchContentForGame(g, localId){
       if(!g||typeof g!=='object')return g;
       if(typeof g.content==='string'&&g.content.length>0)return g;
-
       var hash=String(g._sync_hash||g.checksum||'').trim().toLowerCase();
       if(hash){
         try{
@@ -520,7 +524,6 @@ const JS: &str = r##"
           }
         }catch(_){ }
       }
-
       var gid=String(g._sync_game_id||g.game_id||relayGameIdForLocal(localId,g)||'').trim().toLowerCase();
       if(gid){
         try{
@@ -536,76 +539,24 @@ const JS: &str = r##"
           }
         }catch(_){ }
       }
-
       return g;
     }
 
-    var sdk=window._traitsSDK;
-    var hydratedCard=(cardGame&&typeof cardGame==='object')?cardGame:null;
-    if(hydratedCard){
-      try{hydratedCard=await ensureCardContent(hydratedCard,id);}catch(_){ }
+    // 1. Resolve game object: prefer passed cardGame, else look up in local pvfs
+    var g=(cardGame&&typeof cardGame==='object')?cardGame:null;
+    if(!g||(typeof g.content!=='string'||!g.content)){
+      var col=readGamesCollection();
+      var fromPvfs=(col.games||{})[id]||null;
+      if(fromPvfs)g=fromPvfs;
     }
-
-    if(sdk){
-      try{
-        var g=hydratedCard;
-        if(g&&typeof g.content==='string'){
-          var loadedDirect=await sdk.call('sys.canvas',[
-            'load_game',
-            String(id||''),
-            String(g.name||'Game'),
-            String(g.version||''),
-            String(g.content||''),
-            String(g._scope||g.scope||'internal'),
-            String(g._sync_owner||g.owner||'local'),
-            String(g._sync_game_id||g.game_id||relayGameIdForLocal(id,g)||''),
-            String(g._sync_hash||g.checksum||'')
-          ]);
-          if(isTraitCallOk(loadedDirect)){
-            persistCanvasLaunchPayload(id,g);
-            goCanvas();
-            return;
-          }
-        }
-        var activated=await sdk.call('sys.canvas',['activate',id]);
-        if(isTraitCallOk(activated)){
-          persistCanvasLaunchPayload(id,hydratedCard||null);
-          goCanvas();
-          return;
-        }
-      }catch(_){ }
-      try{
-        var g=hydratedCard;
-        if(!g){
-          var col=readGamesCollection();
-          g=(col.games||{})[id]||null;
-          if(g){
-            g=await ensureCardContent(g,id);
-          }
-        }
-        if(g&&typeof g.content==='string'){
-          var loaded=await sdk.call('sys.canvas',[
-            'load_game',
-            String(id||''),
-            String(g.name||'Game'),
-            String(g.version||''),
-            String(g.content||''),
-            String(g._scope||g.scope||'internal'),
-            String(g._sync_owner||g.owner||'local'),
-            String(g._sync_game_id||g.game_id||relayGameIdForLocal(id,g)||''),
-            String(g._sync_hash||g.checksum||'')
-          ]);
-          if(isTraitCallOk(loaded)){
-            persistCanvasLaunchPayload(id,g);
-            goCanvas();
-            return;
-          }
-        }
-      }catch(_){ }
+    // 2. Hydrate content from relay if still missing
+    if(g&&(typeof g.content!=='string'||!g.content)){
+      try{g=await fetchContentForGame(g,id);}catch(_){}
     }
-    // Fallback when SDK is unavailable.
-    setActiveGameFromPayload(id,hydratedCard||cardGame);
-    persistCanvasLaunchPayload(id,hydratedCard||cardGame);
+    // 3. Write game into JS pvfs so Canvas can also read it directly
+    setActiveGameFromPayload(id,g);
+    // 4. Write launch payload to sessionStorage — Canvas init reads this and calls load_game
+    persistCanvasLaunchPayload(id,g);
     goCanvas();
   }
 
