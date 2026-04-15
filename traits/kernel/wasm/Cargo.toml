@@ -26,6 +26,7 @@ wasm-bindgen-futures = "0.4"
 getrandom = { version = "0.2", features = ["js"] }
 sha2 = "0.10"
 shell-words = "1"
+regex = "1"
 maud = "0.26"
 pulldown-cmark = "0.12"
 rig = { package = "rig-core", version = "0.30.0", default-features = false, features = ["wasm"] }
