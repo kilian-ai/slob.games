@@ -276,14 +276,41 @@ var usersData = [];
 var gamesData = { external: [], internal: [] };
 var currentTab = 'byOwner';
 
+function _decodeB64Url(s) {
+  var t = String(s || '').replace(/-/g, '+').replace(/_/g, '/');
+  while (t.length % 4) t += '=';
+  return atob(t);
+}
+
+function tokenRelaySyncBase() {
+  var t = getToken();
+  if (!t) return '';
+  var parts = String(t).split('.');
+  for (var i = 0; i < parts.length; i++) {
+    try {
+      var obj = JSON.parse(_decodeB64Url(parts[i]));
+      if (obj && typeof obj.relay === 'string' && obj.relay) {
+        return String(obj.relay).replace(/\/+$/, '') + '/sync';
+      }
+    } catch (_) {}
+  }
+  return '';
+}
+
 function apiOrigin(syncBase) {
   return String(syncBase || '').replace(/\/sync\/?$/, '');
 }
 
 async function selectApiBase(forceProbe) {
   if (!forceProbe && API) return API;
+  var tokenBase = tokenRelaySyncBase();
+  var ordered = [];
+  if (tokenBase) ordered.push(tokenBase);
   for (var i = 0; i < API_CANDIDATES.length; i++) {
-    var cand = API_CANDIDATES[i];
+    if (ordered.indexOf(API_CANDIDATES[i]) < 0) ordered.push(API_CANDIDATES[i]);
+  }
+  for (var j = 0; j < ordered.length; j++) {
+    var cand = ordered[j];
     try {
       var hr = await fetch(apiOrigin(cand) + '/health', { method: 'GET' });
       if (hr.ok) {
@@ -299,18 +326,25 @@ async function selectApiBase(forceProbe) {
 async function relayFetch(path, opts) {
   await selectApiBase(false);
   var lastErr = null;
-  var first = API;
-  var ordered = [first];
-  for (var i = 0; i < API_CANDIDATES.length; i++) {
-    if (API_CANDIDATES[i] !== first) ordered.push(API_CANDIDATES[i]);
+  var tokenBase = tokenRelaySyncBase();
+  var isAuthScoped = /^\/(internal|admin|auth)\//.test(String(path || ''));
+  var first = tokenBase || API;
+  var ordered = [];
+  if (isAuthScoped && tokenBase) {
+    ordered = [tokenBase];
+  } else {
+    ordered = [first];
+    for (var i = 0; i < API_CANDIDATES.length; i++) {
+      if (API_CANDIDATES[i] !== first) ordered.push(API_CANDIDATES[i]);
+    }
   }
 
   for (var j = 0; j < ordered.length; j++) {
     var base = ordered[j];
     try {
       var res = await fetch(base + path, opts || {});
-      // Retry on upstream/server failure at current endpoint.
-      if (res.status >= 500 && j < ordered.length - 1) {
+      // Retry on upstream/server failure or path mismatch at current endpoint.
+      if ((res.status >= 500 || res.status === 404) && j < ordered.length - 1) {
         lastErr = new Error('HTTP ' + res.status);
         continue;
       }
@@ -835,6 +869,32 @@ function readPvfsGames() {
   } catch(_) { return {}; }
 }
 
+function pvfsContentMeta(g) {
+  var content = typeof g.content === 'string' ? g.content : '';
+  var hasInline = !!content;
+  var isHtml = /<\s*html|<\s*body|<\s*canvas|<\s*script/i.test(content);
+  var refCount = 0;
+  try {
+    var refs = [];
+    content.replace(/(?:src|href)\s*=\s*["']([^"']+)["']/gi, function(_, u){ refs.push(u); return _; });
+    content.replace(/url\(([^)]+)\)/gi, function(_, u){ refs.push(String(u||'').trim().replace(/^['"]|['"]$/g,'')); return _; });
+    var clean = {};
+    for (var i = 0; i < refs.length; i++) {
+      var r = String(refs[i] || '').trim();
+      if (!r) continue;
+      if (/^(data:|javascript:|https?:)/i.test(r)) continue;
+      clean[r] = true;
+    }
+    refCount = Object.keys(clean).length;
+  } catch (_) {}
+  return {
+    hasInline: hasInline,
+    isHtml: isHtml,
+    bytes: content.length,
+    refCount: refCount
+  };
+}
+
 function renderPvfsGames() {
   var el = document.getElementById('pvfsTable');
   var status = document.getElementById('pvfsStatus');
@@ -859,7 +919,7 @@ function renderPvfsGames() {
     if (ro && rgid) relayIndex[ro + '/' + rgid] = true;
   }
 
-  var h = '<table><tr><th>Name</th><th>Version</th><th>Size</th><th>Scope</th><th>Local ID</th><th>Relay ID</th><th>Status</th><th></th></tr>';
+  var h = '<table><tr><th>Name</th><th>Version</th><th>Size</th><th>Scope</th><th>Local ID</th><th>Relay ID</th><th>Status</th><th>Storage</th><th>Content</th><th></th></tr>';
   for (var i = 0; i < ids.length; i++) {
     var id = ids[i];
     var g = games[id];
@@ -870,6 +930,7 @@ function renderPvfsGames() {
     var syncOwner = g._sync_owner || '';
     var syncGameId = g._sync_game_id || '';
     var syncHash = g._sync_hash || '';
+    var meta = pvfsContentMeta(g);
     var ownerNorm = String(syncOwner || currentUsername || '').trim().toLowerCase();
     var gameNorm = String(syncGameId || '').trim().toLowerCase();
     var syncKey = (ownerNorm && gameNorm) ? (ownerNorm + '/' + gameNorm) : '';
@@ -889,6 +950,12 @@ function renderPvfsGames() {
     var relayCell = syncGameId
       ? ('<code title="' + esc(syncOwner || currentUsername || 'unknown') + '">' + esc(syncGameId.slice(0,10)) + '…</code>')
       : '<span style="opacity:0.3">—</span>';
+    var storageCell = meta.hasInline
+      ? '<span class="badge-pub">inline payload</span>'
+      : '<span class="badge-draft">no content</span>';
+    var contentCell = meta.hasInline
+      ? ('<span>' + (meta.isHtml ? 'html' : 'text') + '</span><br><span style="opacity:0.7">' + formatSize(meta.bytes) + ', refs: ' + meta.refCount + '</span>')
+      : '<span style="opacity:0.5">—</span>';
     var idEnc = encodeURIComponent(id);
     h += '<tr>';
     h += '<td><strong>' + esc(name) + '</strong></td>';
@@ -898,13 +965,40 @@ function renderPvfsGames() {
     h += '<td><code>' + esc(id.slice(0,10)) + '…</code></td>';
     h += '<td>' + relayCell + '</td>';
     h += '<td>' + statusBadge + '</td>';
+    h += '<td>' + storageCell + '</td>';
+    h += '<td>' + contentCell + '</td>';
     h += '<td class="actions">';
+    h += '<button class="btn-sm" onclick="pvfsInspect(\'' + idEnc + '\')">View</button>';
     h += '<button class="btn-sm accent" onclick="pvfsSyncToRelay(\'' + idEnc + '\')">Sync</button>';
     h += '</td>';
     h += '</tr>';
   }
   h += '</table>';
   el.innerHTML = h;
+}
+
+function pvfsInspect(localIdEnc) {
+  var localId = decodeURIComponent(localIdEnc);
+  var games = readPvfsGames();
+  var g = games[localId];
+  if (!g) { alert('Game not found in PVFS'); return; }
+  var content = typeof g.content === 'string' ? g.content : '';
+  var clone = {};
+  for (var k in g) {
+    if (!Object.prototype.hasOwnProperty.call(g, k)) continue;
+    if (k === 'content') continue;
+    clone[k] = g[k];
+  }
+  clone.content_bytes = content.length;
+  clone.content_preview = content ? content.slice(0, 800) : '';
+  var raw = JSON.stringify(clone, null, 2);
+  var body = '<h3>PVFS Game: ' + esc(g.name || localId) + '</h3>'
+    + '<p class="note">The full game HTML/code is stored inline in <code>canvas/games.json</code> under <code>content</code>.</p>'
+    + '<pre style="max-height:50vh;overflow:auto;background:#0a0a0f;border:1px solid var(--line);padding:10px;border-radius:8px;white-space:pre-wrap;">'
+    + esc(raw)
+    + '</pre>'
+    + '<div class="modal-actions"><button onclick="closeModal()">Close</button></div>';
+  showModal(body);
 }
 
 async function pvfsSyncToRelay(localIdEnc) {
@@ -928,7 +1022,12 @@ async function pvfsSyncToRelay(localIdEnc) {
       body: JSON.stringify(body)
     });
     var d = await r.json().catch(function(){ return {}; });
-    if (!r.ok) { alert(d.error || 'Sync failed (HTTP ' + r.status + ')'); return; }
+    if (!r.ok) {
+      var msg = d.error || ('Sync failed (HTTP ' + r.status + ')');
+      if (r.status >= 500) msg = 'Relay unavailable (HTTP ' + r.status + '). Please retry.';
+      alert(msg);
+      return;
+    }
     // Update PVFS sync metadata
     try {
       var raw = localStorage.getItem('traits.pvfs');
@@ -964,6 +1063,7 @@ window.addUserSecret = addUserSecret;
 window.deleteUserSecret = deleteUserSecret;
 window.closeModal = closeModal;
 window.pvfsSyncToRelay = pvfsSyncToRelay;
+window.pvfsInspect = pvfsInspect;
 load();
 renderPvfsGames();
 })();
