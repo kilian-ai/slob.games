@@ -1,0 +1,14 @@
+{
+  "trait": "llm.rig.openai.agent",
+  "features": [
+    {
+      "name": "Build and run rig-backed openai agent shim",
+      "examples": [
+        {
+          "input": ["Say hi in five words.", "gpt-4o-mini", "You are concise."],
+          "output": { "contains": ["provider", "rig.openai.agent", "model"] }
+        }
+      ]
+    }
+  ]
+}

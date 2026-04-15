@@ -1,0 +1,14 @@
+{
+  "trait": "llm.rig.openai.embed",
+  "features": [
+    {
+      "name": "Build and run rig-backed openai embedding shim",
+      "examples": [
+        {
+          "input": ["slob games is wasm-first", "text-embedding-3-small"],
+          "output": { "contains": ["provider", "rig.openai.embed", "dimensions"] }
+        }
+      ]
+    }
+  ]
+}

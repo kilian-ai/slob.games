@@ -1,0 +1,21 @@
+[trait]
+description = "Execute Lua scripts in-browser via the SDK Lua runtime bridge"
+version = "v260414.000001"
+author = "system"
+tags = ["sys", "lua", "runtime", "scripting"]
+
+[signature]
+params = [
+  { name = "code", type = "string", description = "Lua source code to run", required = true, example = "print('hello from lua')" },
+  { name = "input", type = "any", description = "Optional JSON input exposed as __traits_input_json", optional = true, example = { user = "alice", score = 42 } },
+]
+
+[signature.returns]
+type = "map"
+description = "{ok, stdout, stderr, result, error?}"
+
+[implementation]
+language = "rust"
+source = "builtin"
+entry = "lua"
+wasm = true

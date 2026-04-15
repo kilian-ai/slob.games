@@ -1,0 +1,14 @@
+{
+  "trait": "llm.rig.providers",
+  "features": [
+    {
+      "name": "List rig-backed shims",
+      "examples": [
+        {
+          "input": [],
+          "output": { "contains": ["rig_core", "openai", "llm.rig.openai.agent"] }
+        }
+      ]
+    }
+  ]
+}

@@ -41,6 +41,62 @@ pub fn dashboard(_args: &[Value]) -> Value {
                         p.note id="pvfsStatus" { "Reading local storage\u{2026}" }
                         div id="pvfsTable" {}
                     }
+
+                    section.card id="adminTerminalCard" {
+                      h2 { "Traits Terminal" }
+                      p.note {
+                        "Shared docs/api terminal mounted inside Admin. Use it to call Rig traits directly. "
+                        code { "openai_api_key" }
+                        " must be present in browser secrets for the OpenAI-backed examples."
+                      }
+                      div.terminal-examples {
+                        div.example-row {
+                          div.example-meta {
+                            strong { "Rig Providers" }
+                            span { "List the Rig-backed WASM shims available in this build." }
+                          }
+                          div.example-actions {
+                            button.btn-sm onclick="copyAdminTerminalCommand('call llm.rig.providers')" { "Copy" }
+                            button.btn-sm.accent onclick="runAdminTerminalCommand('call llm.rig.providers')" { "Run" }
+                          }
+                        }
+                        pre.cmd-box { "call llm.rig.providers" }
+
+                        div.example-row {
+                          div.example-meta {
+                            strong { "Rig Embed" }
+                            span { "Run the embedding shim through the OpenAI embeddings endpoint." }
+                          }
+                          div.example-actions {
+                            button.btn-sm onclick="copyAdminTerminalCommand('call llm.rig.openai.embed \"slob games is wasm-first\" \"text-embedding-3-small\"')" { "Copy" }
+                            button.btn-sm.accent onclick="runAdminTerminalCommand('call llm.rig.openai.embed \"slob games is wasm-first\" \"text-embedding-3-small\"')" { "Run" }
+                          }
+                        }
+                        pre.cmd-box { "call llm.rig.openai.embed \"slob games is wasm-first\" \"text-embedding-3-small\"" }
+
+                        div.example-row {
+                          div.example-meta {
+                            strong { "Rig Agent" }
+                            span { "Build a concise Rig OpenAI agent with README context and execute it." }
+                          }
+                          div.example-actions {
+                            button.btn-sm onclick="copyAdminTerminalCommand('call llm.rig.openai.agent \"Summarize slob.games in one sentence.\" \"gpt-4o-mini\" \"You are concise.\" \"README.md\"')" { "Copy" }
+                            button.btn-sm.accent onclick="runAdminTerminalCommand('call llm.rig.openai.agent \"Summarize slob.games in one sentence.\" \"gpt-4o-mini\" \"You are concise.\" \"README.md\"')" { "Run" }
+                          }
+                        }
+                        pre.cmd-box { "call llm.rig.openai.agent \"Summarize slob.games in one sentence.\" \"gpt-4o-mini\" \"You are concise.\" \"README.md\"" }
+                      }
+                      div.terminal-wrap id="adminTermWrap" style="display:none" {
+                        div.terminal-header id="adminTermHeader" {
+                          button.terminal-toggle id="adminBtnToggleTerm" { "▼ Terminal" }
+                          span.terminal-hint { "WASM-powered traits CLI inside Admin" }
+                          span.terminal-status id="adminTermStatus" {}
+                        }
+                        div.terminal-container id="adminTermContainer" {
+                          div.xterm-mount id="adminXterm" {}
+                        }
+                      }
+                    }
                 }
                 script { (PreEscaped(JS)) }
             }
@@ -258,11 +314,107 @@ tr:hover td { background: rgba(0,224,255,0.03); }
   background: rgba(0,224,255,0.15); border-color: rgba(0,224,255,0.25); color: var(--accent);
 }
 .modal-actions button:hover { border-color: #3d5b6c; }
+.rev-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid #2f3a47;
+  border-radius: 999px;
+  color: var(--text);
+  background: #111520;
+  font-size: 11px;
+  cursor: help;
+}
+.rev-pill:hover { border-color: #4a5d75; }
+.rev-hover {
+  position: fixed;
+  z-index: 12000;
+  width: min(320px, calc(100vw - 24px));
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid #2f3a47;
+  background: #0b1017;
+  box-shadow: 0 12px 30px rgba(0,0,0,0.45);
+  border-radius: 10px;
+  padding: 10px;
+  font-size: 12px;
+  display: none;
+}
+.rev-hover .title { font-weight: 700; margin-bottom: 8px; color: var(--text); }
+.rev-hover .empty { color: var(--muted); }
+.rev-hover .row {
+  border-top: 1px solid #1c2330;
+  padding: 6px 0;
+}
+.rev-hover .row:first-of-type { border-top: 0; }
+.rev-hover .meta { color: var(--muted); font-size: 11px; }
+.rev-row-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  padding: 6px 6px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.rev-row-btn:hover {
+  border-color: #33445a;
+  background: rgba(0,224,255,0.06);
+}
+.terminal-examples {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.example-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+.example-meta {
+  display: grid;
+  gap: 4px;
+}
+.example-meta strong {
+  color: var(--text);
+  font-size: 13px;
+}
+.example-meta span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.example-actions {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.cmd-box {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(0,224,255,0.12);
+  background: rgba(6,10,18,0.95);
+  color: #8ff3ff;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.5;
+}
+#adminTermWrap {
+  margin-top: 18px;
+  border: 1px solid rgba(0,224,255,0.08);
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(8,12,20,0.92);
+}
 @media (max-width: 720px) {
   .page { padding: 18px 14px 32px; }
   .card { padding: 16px; }
   table { font-size: 11px; }
   th, td { padding: 6px 6px; }
+  .example-row { display: block; }
+  .example-actions { margin-top: 8px; }
 }
 "##;
 
@@ -275,6 +427,8 @@ var currentUsername = '';
 var usersData = [];
 var gamesData = { external: [], internal: [] };
 var currentTab = 'byOwner';
+var adminTerminalInstance = null;
+var pendingAdminTerminalCommand = '';
 
 function _decodeB64Url(s) {
   var t = String(s || '').replace(/-/g, '+').replace(/_/g, '/');
@@ -362,6 +516,14 @@ function esc(v) {
   var d = document.createElement('div');
   d.textContent = String(v == null ? '' : v);
   return d.innerHTML;
+}
+
+function slugify(s) {
+  return String(s || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'untitled';
 }
 
 function getToken() {
@@ -671,6 +833,79 @@ function closeModal() {
   if (m) m.remove();
 }
 
+function copyAdminTerminalCommand(cmd) {
+  var text = String(cmd || '');
+  if (!text) return;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).catch(function(){});
+  }
+}
+
+function focusAdminTerminal() {
+  if (!adminTerminalInstance || !adminTerminalInstance.term) return;
+  var container = document.getElementById('adminTermContainer');
+  var toggleBtn = document.getElementById('adminBtnToggleTerm');
+  if (container && container.classList.contains('collapsed')) {
+    container.classList.remove('collapsed');
+    if (toggleBtn) toggleBtn.textContent = '▼ Terminal';
+  }
+  try {
+    if (adminTerminalInstance.fitAddon && adminTerminalInstance.fitAddon.fit) adminTerminalInstance.fitAddon.fit();
+  } catch (_) {}
+  adminTerminalInstance.term.focus();
+}
+
+function pasteAdminTerminalCommand(cmd, execute) {
+  var text = String(cmd || '');
+  if (!text) return;
+  if (!adminTerminalInstance || !adminTerminalInstance.term || typeof adminTerminalInstance.term.paste !== 'function') {
+    pendingAdminTerminalCommand = text + (execute ? '\r' : '');
+    return;
+  }
+  focusAdminTerminal();
+  adminTerminalInstance.term.paste(text + (execute ? '\r' : ''));
+}
+
+function runAdminTerminalCommand(cmd) {
+  pasteAdminTerminalCommand(cmd, true);
+}
+
+async function initAdminTerminal() {
+  var wrap = document.getElementById('adminTermWrap');
+  var mount = document.getElementById('adminXterm');
+  if (!wrap || !mount) return;
+
+  var createTerminal = window.createTerminal;
+  if (!createTerminal) {
+    var paths = ['/static/www/terminal/terminal.js', '../terminal/terminal.js'];
+    for (var i = 0; i < paths.length; i++) {
+      try {
+        var mod = await import(paths[i]);
+        createTerminal = mod.createTerminal;
+        break;
+      } catch (_) {}
+    }
+  }
+  if (!createTerminal) return;
+
+  wrap.style.display = '';
+  adminTerminalInstance = await createTerminal(mount, {
+    header: document.getElementById('adminTermHeader'),
+    container: document.getElementById('adminTermContainer'),
+    toggleBtn: document.getElementById('adminBtnToggleTerm'),
+    statusEl: document.getElementById('adminTermStatus')
+  });
+  window.adminTerminalInstance = adminTerminalInstance;
+
+  if (pendingAdminTerminalCommand) {
+    var queued = pendingAdminTerminalCommand;
+    pendingAdminTerminalCommand = '';
+    setTimeout(function() {
+      pasteAdminTerminalCommand(queued.replace(/\r$/, ''), /\r$/.test(queued));
+    }, 120);
+  }
+}
+
 // ── User actions ──
 async function deleteUser(usernameEnc) {
   var username = decodeURIComponent(usernameEnc);
@@ -869,6 +1104,374 @@ function readPvfsGames() {
   } catch(_) { return {}; }
 }
 
+function readPvfsRevisionIndex() {
+  try {
+    var raw = localStorage.getItem('traits.pvfs');
+    if (!raw) return {};
+    var pvfs = JSON.parse(raw);
+    var idxRaw = pvfs['canvas/revisions/index.json'];
+    if (!idxRaw) return {};
+    var idx = typeof idxRaw === 'string' ? JSON.parse(idxRaw) : idxRaw;
+    return (idx && typeof idx === 'object') ? idx : {};
+  } catch(_) { return {}; }
+}
+
+function pvfsRevisionKeyForGame(localId, g) {
+  var owner = String((g && (g._sync_owner || g.owner)) || 'local').trim().toLowerCase() || 'local';
+  var gid = String((g && (g._sync_game_id || g.game_id)) || slugify((g && g.name) || localId || 'untitled')).trim().toLowerCase();
+  return owner + '/' + gid;
+}
+
+function pvfsRevisionCandidates(localId, g) {
+  var keys = {};
+  function addKey(k) {
+    k = String(k || '').trim().toLowerCase();
+    if (!k || k.indexOf('/') <= 0) return;
+    keys[k] = true;
+  }
+  addKey(pvfsRevisionKeyForGame(localId, g));
+
+  var ownerCandidates = { local: true, public: true };
+  var o1 = String((g && g._sync_owner) || '').trim().toLowerCase();
+  var o2 = String((g && g.owner) || '').trim().toLowerCase();
+  if (o1) ownerCandidates[o1] = true;
+  if (o2) ownerCandidates[o2] = true;
+  if (currentUsername) ownerCandidates[currentUsername] = true;
+
+  var gidCandidates = {};
+  var gid1 = String((g && g._sync_game_id) || '').trim().toLowerCase();
+  var gid2 = String((g && g.game_id) || '').trim().toLowerCase();
+  var gid3 = slugify((g && g.name) || localId || 'untitled');
+  var gid4 = slugify(localId || '');
+  if (gid1) gidCandidates[gid1] = true;
+  if (gid2) gidCandidates[gid2] = true;
+  if (gid3) gidCandidates[gid3] = true;
+  if (gid4) gidCandidates[gid4] = true;
+
+  var owners = Object.keys(ownerCandidates);
+  var gids = Object.keys(gidCandidates);
+  for (var i = 0; i < owners.length; i++) {
+    for (var j = 0; j < gids.length; j++) {
+      addKey(owners[i] + '/' + gids[j]);
+    }
+  }
+  return Object.keys(keys);
+}
+
+function pvfsRevisionsForGame(localId, g) {
+  var idx = readPvfsRevisionIndex();
+  var keys = pvfsRevisionCandidates(localId, g);
+  var byId = {};
+  var out = [];
+  for (var i = 0; i < keys.length; i++) {
+    var arr = (idx && idx[keys[i]] && Array.isArray(idx[keys[i]])) ? idx[keys[i]] : [];
+    for (var j = arr.length - 1; j >= 0; j--) {
+      var meta = arr[j] || {};
+      var rid = String(meta.id || '').trim();
+      if (!rid || byId[rid]) continue;
+      byId[rid] = true;
+      out.push({
+        id: rid,
+        version: String(meta.version || ''),
+        created: String(meta.created || ''),
+        length: Number(meta.length || 0),
+        path: String(meta.path || ''),
+        key: String(keys[i] || '')
+      });
+    }
+  }
+  out.sort(function(a, b) {
+    if (b.created !== a.created) return String(b.created).localeCompare(String(a.created));
+    return String(b.id).localeCompare(String(a.id));
+  });
+  return out;
+}
+
+function pvfsReadRevisionSnapshot(localId, revId) {
+  try {
+    var games = readPvfsGames();
+    var g = games[localId];
+    if (!g) return null;
+    var revs = pvfsRevisionsForGame(localId, g);
+    var meta = null;
+    for (var i = 0; i < revs.length; i++) {
+      if (String(revs[i].id || '') === String(revId || '')) { meta = revs[i]; break; }
+    }
+    if (!meta) return null;
+    var raw = localStorage.getItem('traits.pvfs') || '{}';
+    var pvfs = JSON.parse(raw);
+    var path = String(meta.path || ('canvas/revisions/' + revId + '.json'));
+    var snapRaw = pvfs[path];
+    if (!snapRaw && path !== ('canvas/revisions/' + revId + '.json')) {
+      path = 'canvas/revisions/' + revId + '.json';
+      snapRaw = pvfs[path];
+    }
+    var snap = snapRaw ? (typeof snapRaw === 'string' ? JSON.parse(snapRaw) : snapRaw) : null;
+    return {
+      localId: localId,
+      game: g,
+      meta: meta,
+      path: path,
+      snapshot: snap
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+function downloadTextFile(filename, text, mime) {
+  var blob = new Blob([String(text || '')], { type: mime || 'text/plain;charset=utf-8' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function pvfsDownloadRevisionHtml(localIdEnc, revIdEnc) {
+  var localId = decodeURIComponent(localIdEnc || '');
+  var revId = decodeURIComponent(revIdEnc || '');
+  var data = pvfsReadRevisionSnapshot(localId, revId);
+  if (!data || !data.snapshot) { alert('Revision snapshot not found in PVFS'); return; }
+  var html = String(data.snapshot.content || '');
+  if (!html) { alert('Revision has no HTML content'); return; }
+  var gameName = slugify((data.game && data.game.name) || localId || 'game');
+  downloadTextFile(gameName + '-' + revId + '.html', html, 'text/html;charset=utf-8');
+}
+
+function pvfsDownloadRevisionJson(localIdEnc, revIdEnc) {
+  var localId = decodeURIComponent(localIdEnc || '');
+  var revId = decodeURIComponent(revIdEnc || '');
+  var data = pvfsReadRevisionSnapshot(localId, revId);
+  if (!data || !data.snapshot) { alert('Revision snapshot not found in PVFS'); return; }
+  var gameName = slugify((data.game && data.game.name) || localId || 'game');
+  downloadTextFile(gameName + '-' + revId + '.json', JSON.stringify(data.snapshot, null, 2), 'application/json;charset=utf-8');
+}
+
+function pvfsDeleteRevision(localIdEnc, revIdEnc) {
+  var localId = decodeURIComponent(localIdEnc || '');
+  var revId = decodeURIComponent(revIdEnc || '');
+  var games = readPvfsGames();
+  var g = games[localId];
+  if (!g) { alert('Game not found in PVFS'); return; }
+  if (!confirm('Delete revision "' + revId + '" for "' + (g.name || localId) + '"?')) return;
+  try {
+    var raw = localStorage.getItem('traits.pvfs') || '{}';
+    var pvfs = JSON.parse(raw);
+    var idxRaw = pvfs['canvas/revisions/index.json'];
+    var idx = idxRaw ? (typeof idxRaw === 'string' ? JSON.parse(idxRaw) : idxRaw) : {};
+    if (!idx || typeof idx !== 'object') idx = {};
+
+    var removedPath = '';
+    var keys = Object.keys(idx);
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      var arr = Array.isArray(idx[k]) ? idx[k] : [];
+      var keep = [];
+      for (var j = 0; j < arr.length; j++) {
+        var row = arr[j] || {};
+        if (String(row.id || '') === revId) {
+          if (!removedPath) removedPath = String(row.path || '');
+          continue;
+        }
+        keep.push(row);
+      }
+      if (keep.length) idx[k] = keep;
+      else delete idx[k];
+    }
+
+    if (!removedPath) removedPath = 'canvas/revisions/' + revId + '.json';
+    delete pvfs[removedPath];
+    if (removedPath !== ('canvas/revisions/' + revId + '.json')) {
+      delete pvfs['canvas/revisions/' + revId + '.json'];
+    }
+    pvfs['canvas/revisions/index.json'] = JSON.stringify(idx);
+    localStorage.setItem('traits.pvfs', JSON.stringify(pvfs));
+
+    closeModal();
+    renderPvfsGames();
+  } catch (_) {
+    alert('Failed to delete revision');
+  }
+}
+
+function pvfsDeleteGame(localIdEnc) {
+  var localId = decodeURIComponent(localIdEnc || '');
+  var games = readPvfsGames();
+  var g = games[localId];
+  if (!g) { alert('Game not found in PVFS'); return; }
+  if (!confirm('Delete PVFS game "' + (g.name || localId) + '" and its local revisions?')) return;
+
+  try {
+    var raw = localStorage.getItem('traits.pvfs') || '{}';
+    var pvfs = JSON.parse(raw);
+    var gamesRaw = pvfs['canvas/games.json'];
+    var col = gamesRaw ? (typeof gamesRaw === 'string' ? JSON.parse(gamesRaw) : gamesRaw) : { active: null, games: {} };
+    if (!col.games || typeof col.games !== 'object') col.games = {};
+
+    var revs = pvfsRevisionsForGame(localId, g);
+    var idxRaw = pvfs['canvas/revisions/index.json'];
+    var idx = idxRaw ? (typeof idxRaw === 'string' ? JSON.parse(idxRaw) : idxRaw) : {};
+    if (!idx || typeof idx !== 'object') idx = {};
+
+    var revIdSet = {};
+    for (var ri = 0; ri < revs.length; ri++) {
+      var rr = revs[ri] || {};
+      var rid = String(rr.id || '');
+      if (!rid) continue;
+      revIdSet[rid] = true;
+      if (rr.path) delete pvfs[String(rr.path)];
+      delete pvfs['canvas/revisions/' + rid + '.json'];
+    }
+
+    var idxKeys = Object.keys(idx);
+    for (var i = 0; i < idxKeys.length; i++) {
+      var k = idxKeys[i];
+      var arr = Array.isArray(idx[k]) ? idx[k] : [];
+      var keep = [];
+      for (var j = 0; j < arr.length; j++) {
+        var row = arr[j] || {};
+        var rid2 = String(row.id || '');
+        if (rid2 && revIdSet[rid2]) continue;
+        keep.push(row);
+      }
+      if (keep.length) idx[k] = keep;
+      else delete idx[k];
+    }
+
+    delete col.games[localId];
+    if (String(col.active || '') === localId) {
+      var remainIds = Object.keys(col.games);
+      col.active = remainIds.length ? remainIds[0] : null;
+      if (col.active && col.games[col.active] && typeof col.games[col.active].content === 'string') {
+        pvfs['canvas/app.html'] = col.games[col.active].content;
+      } else {
+        delete pvfs['canvas/app.html'];
+      }
+    }
+
+    pvfs['canvas/games.json'] = JSON.stringify(col);
+    pvfs['canvas/revisions/index.json'] = JSON.stringify(idx);
+    localStorage.setItem('traits.pvfs', JSON.stringify(pvfs));
+    renderPvfsGames();
+  } catch (_) {
+    alert('Failed to delete PVFS game');
+  }
+}
+
+function pvfsOpenRevision(localIdEnc, revIdEnc) {
+  hidePvfsRevisionHover(true);
+  var localId = decodeURIComponent(localIdEnc || '');
+  var revId = decodeURIComponent(revIdEnc || '');
+  var data = pvfsReadRevisionSnapshot(localId, revId);
+  if (!data) { alert('Revision not found'); return; }
+  var snap = data.snapshot || {};
+  var content = String(snap.content || '');
+  var resources = (snap.resources && typeof snap.resources === 'object') ? snap.resources : {};
+  var body = '';
+  body += '<h3>Revision: ' + esc((data.game && data.game.name) || localId) + '</h3>';
+  body += '<p class="note"><code>' + esc(revId) + '</code> • ' + esc(data.meta.created || 'unknown time') + ' • ' + formatSize(data.meta.length || content.length || 0) + '</p>';
+  body += '<p class="note">Key: <code>' + esc(data.meta.key || '') + '</code><br>Path: <code>' + esc(data.path || '') + '</code><br>Resources: ' + Object.keys(resources).length + '</p>';
+  body += '<pre style="max-height:36vh;overflow:auto;background:#0a0a0f;border:1px solid var(--line);padding:10px;border-radius:8px;white-space:pre-wrap;">' + esc(content ? content.slice(0, 1600) : '(no content)') + '</pre>';
+  body += '<div class="modal-actions">';
+  body += '<button onclick="closeModal()">Close</button>';
+  body += '<button class="btn-sm danger" onclick="pvfsDeleteRevision(\'' + encodeURIComponent(localId) + '\',\'' + encodeURIComponent(revId) + '\')">Delete Revision</button>';
+  body += '<button onclick="pvfsDownloadRevisionJson(\'' + encodeURIComponent(localId) + '\',\'' + encodeURIComponent(revId) + '\')">Download JSON</button>';
+  body += '<button class="primary" onclick="pvfsDownloadRevisionHtml(\'' + encodeURIComponent(localId) + '\',\'' + encodeURIComponent(revId) + '\')">Download HTML</button>';
+  body += '</div>';
+  showModal(body);
+}
+
+var __pvfsRevHideTimer = 0;
+
+function ensurePvfsRevisionHover() {
+  var tip = document.getElementById('pvfsRevHover');
+  if (tip) return tip;
+  tip = document.createElement('div');
+  tip.id = 'pvfsRevHover';
+  tip.className = 'rev-hover';
+  tip.onmouseenter = function() {
+    if (__pvfsRevHideTimer) {
+      clearTimeout(__pvfsRevHideTimer);
+      __pvfsRevHideTimer = 0;
+    }
+  };
+  tip.onmouseleave = function() {
+    hidePvfsRevisionHover();
+  };
+  document.body.appendChild(tip);
+  return tip;
+}
+
+function positionPvfsRevisionHover(ev) {
+  var tip = ensurePvfsRevisionHover();
+  var x = (ev && typeof ev.clientX === 'number') ? ev.clientX : 0;
+  var y = (ev && typeof ev.clientY === 'number') ? ev.clientY : 0;
+  var pad = 12;
+  var maxX = Math.max(8, window.innerWidth - tip.offsetWidth - 8);
+  var maxY = Math.max(8, window.innerHeight - tip.offsetHeight - 8);
+  var left = Math.min(maxX, Math.max(8, x + pad));
+  var top = Math.min(maxY, Math.max(8, y + pad));
+  tip.style.left = left + 'px';
+  tip.style.top = top + 'px';
+}
+
+function hidePvfsRevisionHover(immediate) {
+  var tip = document.getElementById('pvfsRevHover');
+  if (!tip) return;
+  if (__pvfsRevHideTimer) {
+    clearTimeout(__pvfsRevHideTimer);
+    __pvfsRevHideTimer = 0;
+  }
+  if (immediate) {
+    tip.style.display = 'none';
+    return;
+  }
+  __pvfsRevHideTimer = setTimeout(function() {
+    var t = document.getElementById('pvfsRevHover');
+    if (t) t.style.display = 'none';
+    __pvfsRevHideTimer = 0;
+  }, 140);
+}
+
+function showPvfsRevisionHover(ev, localIdEnc) {
+  var localId = decodeURIComponent(localIdEnc || '');
+  var games = readPvfsGames();
+  var g = games[localId];
+  if (!g) return;
+  var revs = pvfsRevisionsForGame(localId, g);
+  var tip = ensurePvfsRevisionHover();
+  var html = '<div class="title">' + esc(g.name || localId) + ' revisions (' + revs.length + ')</div>';
+  if (!revs.length) {
+    html += '<div class="empty">No revisions found for this game key yet.</div>';
+  } else {
+    var max = Math.min(8, revs.length);
+    for (var i = 0; i < max; i++) {
+      var r = revs[i];
+      html += '<div class="row">';
+      var revEnc = encodeURIComponent(r.id || '');
+      html += '<button class="rev-row-btn" onclick="pvfsOpenRevision(\'' + localIdEnc + '\',\'' + revEnc + '\')">';
+      html += '<div><strong>' + esc(r.version || 'v?') + '</strong> <span style="opacity:0.85">' + esc(r.id.slice(0, 18)) + '…</span></div>';
+      html += '<div class="meta">' + esc(r.created || 'unknown time') + ' • ' + formatSize(r.length || 0) + '</div>';
+      html += '</button>';
+      html += '</div>';
+    }
+    if (revs.length > max) html += '<div class="meta" style="padding-top:6px;">+' + (revs.length - max) + ' more</div>';
+  }
+  tip.innerHTML = html;
+  tip.style.display = 'block';
+  positionPvfsRevisionHover(ev);
+}
+
+function movePvfsRevisionHover(ev) {
+  var tip = document.getElementById('pvfsRevHover');
+  if (!tip || tip.style.display === 'none') return;
+  positionPvfsRevisionHover(ev);
+}
+
 function pvfsContentMeta(g) {
   var content = typeof g.content === 'string' ? g.content : '';
   var hasInline = !!content;
@@ -919,7 +1522,7 @@ function renderPvfsGames() {
     if (ro && rgid) relayIndex[ro + '/' + rgid] = true;
   }
 
-  var h = '<table><tr><th>Name</th><th>Version</th><th>Size</th><th>Scope</th><th>Local ID</th><th>Relay ID</th><th>Status</th><th>Storage</th><th>Content</th><th></th></tr>';
+  var h = '<table><tr><th>Name</th><th>Version</th><th>Size</th><th>Scope</th><th>Local ID</th><th>Relay ID</th><th>Status</th><th>Storage</th><th>Content</th><th>Revisions</th><th></th></tr>';
   for (var i = 0; i < ids.length; i++) {
     var id = ids[i];
     var g = games[id];
@@ -967,9 +1570,15 @@ function renderPvfsGames() {
     h += '<td>' + statusBadge + '</td>';
     h += '<td>' + storageCell + '</td>';
     h += '<td>' + contentCell + '</td>';
+    var revs = pvfsRevisionsForGame(id, g);
+    var idHover = encodeURIComponent(id);
+    h += '<td><span class="rev-pill" onmouseenter="showPvfsRevisionHover(event,\'' + idHover + '\')" onmousemove="movePvfsRevisionHover(event)" onmouseleave="hidePvfsRevisionHover()">' + revs.length + ' rev' + (revs.length === 1 ? '' : 's') + '</span></td>';
     h += '<td class="actions">';
     h += '<button class="btn-sm" onclick="pvfsInspect(\'' + idEnc + '\')">View</button>';
+    h += '<button class="btn-sm" onclick="pvfsExtract(\'' + idEnc + '\')">Extract HTML</button>';
+    h += '<button class="btn-sm" onclick="pvfsCleanUpload(\'' + idEnc + '\')">Clean Upload</button>';
     h += '<button class="btn-sm accent" onclick="pvfsSyncToRelay(\'' + idEnc + '\')">Sync</button>';
+    h += '<button class="btn-sm danger" onclick="pvfsDeleteGame(\'' + idEnc + '\')">Delete</button>';
     h += '</td>';
     h += '</tr>';
   }
@@ -999,6 +1608,88 @@ function pvfsInspect(localIdEnc) {
     + '</pre>'
     + '<div class="modal-actions"><button onclick="closeModal()">Close</button></div>';
   showModal(body);
+}
+
+function pvfsExtract(localIdEnc) {
+  var localId = decodeURIComponent(localIdEnc);
+  var games = readPvfsGames();
+  var g = games[localId];
+  if (!g) { alert('Game not found in PVFS'); return; }
+  var content = typeof g.content === 'string' ? g.content : '';
+  if (!content) { alert('No inline content to extract'); return; }
+  var fileBase = slugify(g.name || localId);
+  var blob = new Blob([content], { type: 'text/html;charset=utf-8' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = fileBase + '.html';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function pvfsCleanUpload(localIdEnc) {
+  var localId = decodeURIComponent(localIdEnc);
+  var games = readPvfsGames();
+  var g = games[localId];
+  if (!g) { alert('Game not found in PVFS'); return; }
+  var t = getToken();
+  if (!t) { alert('Log in first (Settings) to upload'); return; }
+
+  var content = typeof g.content === 'string' ? g.content : '';
+  if (!content.trim()) { alert('Game has no content'); return; }
+
+  var gameId = slugify(g.name || localId);
+  if (!confirm('Clean upload "' + (g.name || localId) + '" as game_id "' + gameId + '"?')) return;
+
+  var body = {
+    name: g.name || 'Untitled',
+    content: content,
+    scope: 'internal',
+    version: g.version || ''
+  };
+
+  try {
+    var r = await relayFetch('/internal/game/' + encodeURIComponent(gameId), {
+      method: 'PUT',
+      headers: { 'Authorization': 'Bearer ' + t, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    var d = await r.json().catch(function(){ return {}; });
+    if (!r.ok) {
+      var msg = d.error || ('Upload failed (HTTP ' + r.status + ')');
+      if (r.status >= 500) msg = 'Relay unavailable (HTTP ' + r.status + '). Please retry.';
+      alert(msg);
+      return;
+    }
+
+    // Rewrite local metadata with clean current-owner linkage.
+    try {
+      var me = await apiFetch('/auth/me');
+      var owner = (me && me.ok && me.username) ? String(me.username).trim().toLowerCase() : '';
+      var raw = localStorage.getItem('traits.pvfs');
+      var pvfs = raw ? JSON.parse(raw) : {};
+      var gamesRaw = pvfs['canvas/games.json'];
+      var data = gamesRaw ? (typeof gamesRaw === 'string' ? JSON.parse(gamesRaw) : gamesRaw) : { games: {} };
+      if (!data.games) data.games = {};
+      if (data.games[localId]) {
+        data.games[localId]._sync_game_id = d.game_id || gameId;
+        data.games[localId]._sync_hash = d.content_hash || d.checksum || '';
+        data.games[localId]._sync_owner = d.owner || owner || '';
+        data.games[localId].scope = 'internal';
+        data.games[localId]._scope = 'internal';
+        data.games[localId].owner = d.owner || owner || '';
+      }
+      pvfs['canvas/games.json'] = JSON.stringify(data);
+      localStorage.setItem('traits.pvfs', JSON.stringify(pvfs));
+    } catch (_) {}
+
+    await load();
+    renderPvfsGames();
+  } catch (e) {
+    alert((e && e.message) ? e.message : 'Upload failed');
+  }
 }
 
 async function pvfsSyncToRelay(localIdEnc) {
@@ -1064,7 +1755,20 @@ window.deleteUserSecret = deleteUserSecret;
 window.closeModal = closeModal;
 window.pvfsSyncToRelay = pvfsSyncToRelay;
 window.pvfsInspect = pvfsInspect;
+window.pvfsExtract = pvfsExtract;
+window.pvfsCleanUpload = pvfsCleanUpload;
+window.pvfsDeleteGame = pvfsDeleteGame;
+window.pvfsDeleteRevision = pvfsDeleteRevision;
+window.pvfsOpenRevision = pvfsOpenRevision;
+window.pvfsDownloadRevisionHtml = pvfsDownloadRevisionHtml;
+window.pvfsDownloadRevisionJson = pvfsDownloadRevisionJson;
+window.showPvfsRevisionHover = showPvfsRevisionHover;
+window.movePvfsRevisionHover = movePvfsRevisionHover;
+window.hidePvfsRevisionHover = hidePvfsRevisionHover;
+window.copyAdminTerminalCommand = copyAdminTerminalCommand;
+window.runAdminTerminalCommand = runAdminTerminalCommand;
 load();
 renderPvfsGames();
+initAdminTerminal();
 })();
 "##;

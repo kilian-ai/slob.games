@@ -129,6 +129,154 @@ let _webllmProgressTime = 0;
 
 const WEBLLM_DEFAULT_MODEL = 'Llama-3.2-3B-Instruct-q4f16_1-MLC';
 
+// ── Lua runtime bridge (fengari) ──
+const LUA_RUNTIME_URL = 'https://cdn.jsdelivr.net/npm/fengari-web@0.1.4/dist/fengari-web.js';
+let _luaRuntimeLoading = null;
+
+function _isLuaRuntimeReady() {
+    if (typeof window === 'undefined') return false;
+    const fg = window.fengari;
+    return !!(fg && fg.lua && fg.lauxlib && fg.lualib && fg.to_luastring);
+}
+
+function _loadLuaRuntimeSync() {
+    if (typeof window === 'undefined' || _isLuaRuntimeReady()) return _isLuaRuntimeReady();
+    try {
+        const xhr = new XMLHttpRequest();
+        xhr.open('GET', LUA_RUNTIME_URL, false);
+        xhr.send(null);
+        if (!(xhr.status >= 200 && xhr.status < 300) || !xhr.responseText) {
+            return false;
+        }
+        // Execute fetched script in global scope so `window.fengari` is available.
+        (0, eval)(`${xhr.responseText}\n//# sourceURL=${LUA_RUNTIME_URL}`);
+        return _isLuaRuntimeReady();
+    } catch (_) {
+        return false;
+    }
+}
+
+function _preloadLuaRuntime() {
+    if (typeof window === 'undefined') return Promise.resolve(false);
+    if (_isLuaRuntimeReady()) return Promise.resolve(true);
+    if (_luaRuntimeLoading) return _luaRuntimeLoading;
+
+    _luaRuntimeLoading = new Promise((resolve) => {
+        const s = document.createElement('script');
+        s.src = LUA_RUNTIME_URL;
+        s.async = true;
+        s.onload = () => resolve(_isLuaRuntimeReady());
+        s.onerror = () => resolve(false);
+        document.head.appendChild(s);
+    });
+    return _luaRuntimeLoading;
+}
+
+function _installLuaBridge() {
+    if (typeof window === 'undefined') return;
+    if (typeof window.__traitsLuaRun === 'function') return;
+
+    window.__traitsLuaRun = function __traitsLuaRun(code, inputJson) {
+        try {
+            if (!_isLuaRuntimeReady() && !_loadLuaRuntimeSync()) {
+                return JSON.stringify({ ok: false, error: 'Lua runtime not loaded' });
+            }
+
+            const fg = window.fengari;
+            const lua = fg.lua;
+            const lauxlib = fg.lauxlib;
+            const lualib = fg.lualib;
+            const to_luastring = fg.to_luastring;
+
+            const L = lauxlib.luaL_newstate();
+            lualib.luaL_openlibs(L);
+
+            const runChunk = (src) => {
+                const status = lauxlib.luaL_dostring(L, to_luastring(String(src || '')));
+                if (status !== lua.LUA_OK) {
+                    const msg = lua.lua_tojsstring(L, -1) || 'lua execution error';
+                    lua.lua_pop(L, 1);
+                    return msg;
+                }
+                return null;
+            };
+
+            // Override print and collect lines in Lua-side buffer.
+            const preludeErr = runChunk([
+                '__traits_stdout = {}',
+                'local __traits_tostring = tostring',
+                'print = function(...)',
+                '  local t = {}',
+                '  for i = 1, select("#", ...) do',
+                '    t[#t + 1] = __traits_tostring(select(i, ...))',
+                '  end',
+                '  __traits_stdout[#__traits_stdout + 1] = table.concat(t, "\t")',
+                'end',
+            ].join('\n'));
+            if (preludeErr) {
+                try { lua.lua_close(L); } catch (_) {}
+                return JSON.stringify({ ok: false, error: preludeErr, stdout: [], stderr: [preludeErr] });
+            }
+
+            const safeInputJson = typeof inputJson === 'string' ? inputJson : '{}';
+            lua.lua_pushstring(L, to_luastring(safeInputJson));
+            lua.lua_setglobal(L, to_luastring('__traits_input_json'));
+
+            // Also expose top-level primitive keys as globals for convenience.
+            let parsedInput = null;
+            try { parsedInput = JSON.parse(safeInputJson); } catch (_) { parsedInput = null; }
+            if (parsedInput && typeof parsedInput === 'object' && !Array.isArray(parsedInput)) {
+                for (const [k, v] of Object.entries(parsedInput)) {
+                    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) continue;
+                    if (typeof v === 'string') lua.lua_pushstring(L, to_luastring(v));
+                    else if (typeof v === 'number') lua.lua_pushnumber(L, v);
+                    else if (typeof v === 'boolean') lua.lua_pushboolean(L, v ? 1 : 0);
+                    else if (v === null) lua.lua_pushnil(L);
+                    else continue;
+                    lua.lua_setglobal(L, to_luastring(k));
+                }
+            }
+
+            const execErr = runChunk(code);
+
+            // Join print output lines in Lua then read as JS string.
+            const postErr = runChunk('__traits_stdout_joined = table.concat(__traits_stdout, "\\n")');
+            if (postErr && !execErr) {
+                try { lua.lua_close(L); } catch (_) {}
+                return JSON.stringify({ ok: false, error: postErr, stdout: [], stderr: [postErr] });
+            }
+
+            lua.lua_getglobal(L, to_luastring('__traits_stdout_joined'));
+            const stdoutJoined = lua.lua_tojsstring(L, -1) || '';
+            lua.lua_pop(L, 1);
+
+            // Convention: user can set `__result` to return a value.
+            lua.lua_getglobal(L, to_luastring('__result'));
+            const resultType = lua.lua_type(L, -1);
+            let result = null;
+            if (resultType === lua.LUA_TSTRING) result = lua.lua_tojsstring(L, -1);
+            else if (resultType === lua.LUA_TNUMBER) result = lua.lua_tonumber(L, -1);
+            else if (resultType === lua.LUA_TBOOLEAN) result = !!lua.lua_toboolean(L, -1);
+            else if (resultType === lua.LUA_TNIL) result = null;
+            lua.lua_pop(L, 1);
+
+            try { lua.lua_close(L); } catch (_) {}
+
+            const stdout = stdoutJoined ? String(stdoutJoined).split('\n') : [];
+            const stderr = execErr ? [execErr] : [];
+            if (execErr) {
+                return JSON.stringify({ ok: false, error: execErr, stdout, stderr, result });
+            }
+            return JSON.stringify({ ok: true, stdout, stderr, result });
+        } catch (e) {
+            const msg = (e && (e.message || e.toString())) || 'lua runtime failure';
+            return JSON.stringify({ ok: false, error: msg, stdout: [], stderr: [msg] });
+        }
+    };
+}
+
+_installLuaBridge();
+
 // ── Voice (browser microphone) state ──
 let _voiceStream = null;
 let _voicePc = null;             // RTCPeerConnection for WebRTC voice
@@ -1398,6 +1546,9 @@ class Traits {
 
         await helperPromise;
         syncHelperToWasm();
+
+        // Best-effort preload so first sys.lua call is instant.
+        try { await _preloadLuaRuntime(); } catch (_) {}
 
         return {
             wasm: wasmReady,

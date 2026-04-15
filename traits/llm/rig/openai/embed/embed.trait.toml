@@ -1,0 +1,21 @@
+[trait]
+description = "Rig-backed OpenAI embedding shim for WASM: validates a real rig-core embedding model and executes via existing sync transport"
+version = "v260415"
+author = "system"
+tags = ["llm", "rig", "openai", "embedding", "wasm"]
+
+[signature]
+params = [
+  { name = "input", type = "string", description = "Text to embed", required = true },
+  { name = "model", type = "string", description = "OpenAI embedding model (default: text-embedding-3-small)", required = false, default = "text-embedding-3-small" }
+]
+
+[signature.returns]
+type = "map"
+description = "Embedding vector and metadata"
+
+[implementation]
+language = "rust"
+source = "builtin"
+entry = "rig_openai_embed"
+wasm = true
