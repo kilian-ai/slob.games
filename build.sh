@@ -9,6 +9,85 @@ if [[ "${1:-}" == "--clean" ]]; then
     cargo clean
 fi
 
+# ── Optional auto-sync: upstream terminal stack + implementations ────────────
+# Enabled by default. Set AUTO_SYNC_UPSTREAM_TERMINAL=0 to skip.
+AUTO_SYNC_UPSTREAM_TERMINAL="${AUTO_SYNC_UPSTREAM_TERMINAL:-1}"
+
+# Keep this list focused on terminal behavior + its implementation boundary.
+# This allows upstream behavior changes to flow downstream without manual patches.
+UPSTREAM_TERMINAL_SYNC_PATHS=(
+    traits/kernel/cli
+    traits/sys/cli
+    traits/www/terminal
+    traits/www/static/terminal-runtime.js
+    traits/kernel/logic/src/vfs.rs
+    traits/kernel/logic/src/platform
+)
+
+sync_upstream_terminal() {
+    if [[ "$AUTO_SYNC_UPSTREAM_TERMINAL" != "1" ]]; then
+        echo "Skipping upstream terminal sync (AUTO_SYNC_UPSTREAM_TERMINAL=$AUTO_SYNC_UPSTREAM_TERMINAL)"
+        return 0
+    fi
+
+    if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        echo "Skipping upstream terminal sync (not a git worktree)"
+        return 0
+    fi
+
+    if ! git remote get-url upstream >/dev/null 2>&1; then
+        echo "Configuring upstream remote: https://github.com/kilian-ai/traits.build.git"
+        git remote add upstream https://github.com/kilian-ai/traits.build.git
+    fi
+
+    echo "Syncing terminal stack (and implementations) from upstream/main..."
+    if ! git fetch --depth=1 upstream main >/dev/null 2>&1; then
+        echo "Warning: upstream fetch failed; continuing build without terminal auto-sync"
+        return 0
+    fi
+
+    local changed_count
+    changed_count=$(git diff --name-status HEAD..upstream/main -- "${UPSTREAM_TERMINAL_SYNC_PATHS[@]}" | wc -l | tr -d ' ')
+
+    if [[ "$changed_count" == "0" ]]; then
+        echo "Terminal stack already up to date with upstream/main"
+        return 0
+    fi
+
+    local synced=0
+    local removed=0
+    local status p1 p2 target
+    while IFS=$'\t' read -r status p1 p2; do
+        [[ -z "${status:-}" ]] && continue
+        case "$status" in
+            D*)
+                if git ls-files --error-unmatch "$p1" >/dev/null 2>&1; then
+                    git rm -f "$p1" >/dev/null
+                    removed=$((removed + 1))
+                fi
+                ;;
+            R*|C*)
+                target="$p2"
+                git checkout upstream/main -- "$target"
+                synced=$((synced + 1))
+                if [[ -n "$p1" ]] && git ls-files --error-unmatch "$p1" >/dev/null 2>&1; then
+                    git rm -f "$p1" >/dev/null
+                    removed=$((removed + 1))
+                fi
+                ;;
+            *)
+                target="$p1"
+                git checkout upstream/main -- "$target"
+                synced=$((synced + 1))
+                ;;
+        esac
+        done < <(git diff --name-status HEAD..upstream/main -- "${UPSTREAM_TERMINAL_SYNC_PATHS[@]}")
+
+    echo "Applied upstream terminal sync: synced=$synced removed=$removed"
+}
+
+sync_upstream_terminal
+
 WASM_PKG_DIR="traits/kernel/wasm/pkg"
 WASM_RUNTIME_JS="traits/www/static/wasm-runtime.js"
 WASM_WORKER_JS="traits/www/static/traits-worker.js"

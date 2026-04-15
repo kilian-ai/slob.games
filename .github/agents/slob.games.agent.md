@@ -731,3 +731,43 @@ Clients connect via `wss://relay.slob.games/sync` for real-time game sync. The p
 - **Update this file** (`.github/agents/slob.games.agent.md`) when project structure, conventions, or deployment process changes.
 - **Do not deploy to Fly.io** — slob.games is static-only.
 - **Store memory files** in `.github/memories/`.
+
+### Upstream Terminal Sync (traits.build -> slob.games)
+
+When terminal behavior is updated upstream, sync the terminal stack + implementation boundary with this exact flow:
+
+```bash
+# 0) One-time remote setup
+git remote add upstream https://github.com/kilian-ai/traits.build.git
+
+# 1) Fetch upstream main (targeted fetch is fine)
+git fetch upstream main
+
+# 2) Inspect terminal-related delta
+git diff --name-status origin/main..upstream/main -- \
+  traits/kernel/cli \
+  traits/sys/cli \
+  traits/www/terminal \
+  traits/www/static/terminal-runtime.js \
+  traits/kernel/logic/src/vfs.rs \
+  traits/kernel/logic/src/platform
+
+# 3) Bring changed files from upstream/main
+git checkout upstream/main -- <changed files>
+
+# 4) Apply upstream deletions too
+git rm -f <files deleted upstream>
+
+# 5) Rebuild and regenerate deployed artifacts
+bash build.sh
+
+# 6) Commit + deploy
+git add -A
+git commit -m "sync(terminal): pull upstream terminal updates"
+git push origin main
+```
+
+Notes:
+- Always include generated artifacts from `build.sh` (`index.html`, static runtimes, version bumps).
+- If upstream removed a terminal file (for example `traits/www/terminal/agent-terminal.js`), delete it here too.
+- `build.sh` now auto-syncs this boundary by default before compiling; set `AUTO_SYNC_UPSTREAM_TERMINAL=0` to skip.
