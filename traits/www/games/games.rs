@@ -185,6 +185,12 @@ const JS: &str = r##"
     return window._traitsSDK||null;
   }
 
+  function isTraitCallOk(res){
+    if(!res||res.ok===false)return false;
+    if(res.result&&typeof res.result==='object'&&res.result.ok===false)return false;
+    return true;
+  }
+
   async function commitRevisionSnapshot(gameKey,name,version,content,resources){
     var sdk=getSdk();
     if(!sdk)return false;
@@ -448,17 +454,158 @@ const JS: &str = r##"
     localStorage.setItem('traits.pvfs',JSON.stringify(pvfs));
   }
 
-  async function activateAndGoCanvas(id){
+  function setActiveGameFromPayload(id, g){
+    var pvfs=JSON.parse(localStorage.getItem('traits.pvfs')||'{}');
+    var col=pvfs['canvas/games.json']?JSON.parse(pvfs['canvas/games.json']):{active:'',games:{}};
+    if(!col.games)col.games={};
+    if(g&&typeof g==='object'){
+      col.games[id]={
+        name:String(g.name||'Game'),
+        version:String(g.version||''),
+        content:String(g.content||''),
+        scope:String(g._scope||g.scope||'internal'),
+        _scope:String(g._scope||g.scope||'internal'),
+        owner:String(g._sync_owner||g.owner||'local'),
+        _sync_owner:String(g._sync_owner||g.owner||'local'),
+        game_id:String(g._sync_game_id||g.game_id||relayGameIdForLocal(id,g)||''),
+        _sync_game_id:String(g._sync_game_id||g.game_id||relayGameIdForLocal(id,g)||''),
+        checksum:String(g._sync_hash||g.checksum||''),
+        _sync_hash:String(g._sync_hash||g.checksum||''),
+        created:String(g.created||new Date().toISOString()),
+        updated:new Date().toISOString()
+      };
+    }
+    col.active=id;
+    if(col.games[id]&&col.games[id].content){
+      pvfs['canvas/app.html']=col.games[id].content;
+    }
+    pvfs['canvas/games.json']=JSON.stringify(col);
+    localStorage.setItem('traits.pvfs',JSON.stringify(pvfs));
+  }
+
+  function persistCanvasLaunchPayload(id, g){
+    try{
+      var payload={
+        id:String(id||''),
+        ts:Date.now()
+      };
+      if(g&&typeof g==='object'){
+        payload.name=String(g.name||'Game');
+        payload.version=String(g.version||'');
+        payload.content=String(g.content||'');
+        payload.scope=String(g._scope||g.scope||'internal');
+        payload.owner=String(g._sync_owner||g.owner||'local');
+        payload.game_id=String(g._sync_game_id||g.game_id||relayGameIdForLocal(id,g)||'');
+        payload.checksum=String(g._sync_hash||g.checksum||'');
+      }
+      sessionStorage.setItem('traits.canvas.launch_game',JSON.stringify(payload));
+    }catch(_){ }
+  }
+
+  async function activateAndGoCanvas(id, cardGame){
+    async function ensureCardContent(g, localId){
+      if(!g||typeof g!=='object')return g;
+      if(typeof g.content==='string'&&g.content.length>0)return g;
+
+      var hash=String(g._sync_hash||g.checksum||'').trim().toLowerCase();
+      if(hash){
+        try{
+          var r=await fetch(RELAY+'/game/'+encodeURIComponent(hash));
+          var d=await r.json();
+          if(r.ok&&d&&typeof d.content==='string'&&d.content){
+            g.content=d.content;
+            if(!g.name&&d.name)g.name=d.name;
+            if(!g.version&&d.version)g.version=d.version;
+            return g;
+          }
+        }catch(_){ }
+      }
+
+      var gid=String(g._sync_game_id||g.game_id||relayGameIdForLocal(localId,g)||'').trim().toLowerCase();
+      if(gid){
+        try{
+          var owner=String(g._sync_owner||g.owner||'').trim().toLowerCase();
+          var url=RELAY+'/internal/game/'+encodeURIComponent(gid)+(owner?('?owner='+encodeURIComponent(owner)):'');
+          var r2=await fetch(url,{headers:authHeaders()});
+          var d2=await r2.json();
+          if(r2.ok&&d2&&typeof d2.content==='string'&&d2.content){
+            g.content=d2.content;
+            if(!g.name&&d2.name)g.name=d2.name;
+            if(!g.version&&d2.version)g.version=d2.version;
+            return g;
+          }
+        }catch(_){ }
+      }
+
+      return g;
+    }
+
     var sdk=window._traitsSDK;
+    var hydratedCard=(cardGame&&typeof cardGame==='object')?cardGame:null;
+    if(hydratedCard){
+      try{hydratedCard=await ensureCardContent(hydratedCard,id);}catch(_){ }
+    }
+
     if(sdk){
       try{
-        await sdk.call('sys.canvas',['activate',id]);
-        goCanvas();
-        return;
-      }catch(_){}
+        var g=hydratedCard;
+        if(g&&typeof g.content==='string'){
+          var loadedDirect=await sdk.call('sys.canvas',[
+            'load_game',
+            String(id||''),
+            String(g.name||'Game'),
+            String(g.version||''),
+            String(g.content||''),
+            String(g._scope||g.scope||'internal'),
+            String(g._sync_owner||g.owner||'local'),
+            String(g._sync_game_id||g.game_id||relayGameIdForLocal(id,g)||''),
+            String(g._sync_hash||g.checksum||'')
+          ]);
+          if(isTraitCallOk(loadedDirect)){
+            persistCanvasLaunchPayload(id,g);
+            goCanvas();
+            return;
+          }
+        }
+        var activated=await sdk.call('sys.canvas',['activate',id]);
+        if(isTraitCallOk(activated)){
+          persistCanvasLaunchPayload(id,hydratedCard||null);
+          goCanvas();
+          return;
+        }
+      }catch(_){ }
+      try{
+        var g=hydratedCard;
+        if(!g){
+          var col=readGamesCollection();
+          g=(col.games||{})[id]||null;
+          if(g){
+            g=await ensureCardContent(g,id);
+          }
+        }
+        if(g&&typeof g.content==='string'){
+          var loaded=await sdk.call('sys.canvas',[
+            'load_game',
+            String(id||''),
+            String(g.name||'Game'),
+            String(g.version||''),
+            String(g.content||''),
+            String(g._scope||g.scope||'internal'),
+            String(g._sync_owner||g.owner||'local'),
+            String(g._sync_game_id||g.game_id||relayGameIdForLocal(id,g)||''),
+            String(g._sync_hash||g.checksum||'')
+          ]);
+          if(isTraitCallOk(loaded)){
+            persistCanvasLaunchPayload(id,g);
+            goCanvas();
+            return;
+          }
+        }
+      }catch(_){ }
     }
     // Fallback when SDK is unavailable.
-    setActiveGame(id);
+    setActiveGameFromPayload(id,hydratedCard||cardGame);
+    persistCanvasLaunchPayload(id,hydratedCard||cardGame);
     goCanvas();
   }
 
@@ -754,7 +901,7 @@ const JS: &str = r##"
         publishLocalGame(g.id);
       });
     }
-    div.addEventListener('click',function(){activateAndGoCanvas(g.id)});
+    div.addEventListener('click',function(){activateAndGoCanvas(g.id,g.game||null)});
     return div;
   }
 
@@ -987,7 +1134,7 @@ const JS: &str = r##"
       var sdk=window._traitsSDK;
       if(sdk){
         try{
-          await sdk.call('sys.canvas',[
+          var loaded=await sdk.call('sys.canvas',[
             'load_game',
             id,
             String(name||'Game'),
@@ -998,8 +1145,10 @@ const JS: &str = r##"
             gameId,
             safeHash
           ]);
-          goCanvas();
-          return;
+          if(isTraitCallOk(loaded)){
+            goCanvas();
+            return;
+          }
         }catch(_){ }
       }
       var col=readGamesCollection();

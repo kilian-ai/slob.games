@@ -1523,7 +1523,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                         const cleanPath = String(path || '').split('@')[0];
                                         if (cleanPath === 'sys.canvas' && result && result.ok) {
                                             const r = result.result || result || {};
-                                            if (r.action === 'set' || r.action === 'append' || r.action === 'clear') {
+                                            if (r.action === 'set' || r.action === 'append' || r.action === 'clear' || r.action === 'load_game') {
                                                 try {
                                                     const getRes = await origCall('sys.canvas', ['get']);
                                                     const content = getRes?.result?.content ?? getRes?.content ?? '';
@@ -1532,7 +1532,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                                     window.dispatchEvent(new CustomEvent('traits-canvas-update', {}));
                                                 }
                                             }
-                                            if (r.canvas_project_action || r.action === 'new' || r.action === 'rename' || r.action === 'activate' || r.action === 'fork' || r.action === 'delete') {
+                                            if (r.canvas_project_action || r.action === 'new' || r.action === 'rename' || r.action === 'activate' || r.action === 'load_game' || r.action === 'fork' || r.action === 'delete') {
                                                 window.dispatchEvent(new CustomEvent('traits-canvas-project', { detail: r }));
                                                 window.dispatchEvent(new CustomEvent('traits-canvas-projects-changed'));
                                             }
@@ -2100,6 +2100,19 @@ pub fn canvas(_args: &[Value]) -> Value {
                             } catch(_) { return ''; }
                         }
 
+                        function _consumeCanvasLaunchPayload() {
+                            try {
+                                const raw = sessionStorage.getItem('traits.canvas.launch_game');
+                                if (!raw) return null;
+                                sessionStorage.removeItem('traits.canvas.launch_game');
+                                const payload = JSON.parse(raw);
+                                if (!payload || typeof payload !== 'object') return null;
+                                const ts = Number(payload.ts || 0);
+                                if (ts > 0 && (Date.now() - ts) > 120000) return null;
+                                return payload;
+                            } catch(_) { return null; }
+                        }
+
                         let __lastPersistedContent = '';
 
                         function _extractTitleFromContent(content) {
@@ -2260,10 +2273,52 @@ pub fn canvas(_args: &[Value]) -> Value {
                         // Migrate existing canvas/app.html to games.json if no games exist yet.
                         // Also reconcile orphaned content (agent wrote canvas/app.html but games.json wasn't updated).
                         let __lastContent = '';
+                        const __launchPayload = _consumeCanvasLaunchPayload();
+                        const __launchHasHint = !!(__launchPayload && (__launchPayload.id || __launchPayload.content));
+                        if (__launchHasHint && __launchPayload.content) {
+                            __lastContent = String(__launchPayload.content || '');
+                            if (__lastContent) renderCanvas(__lastContent);
+                        }
                         const _initCol = readGamesCollection();
                         const _initHasGames = Object.keys(_initCol.games || {}).length > 0;
                         const _existingHtml = readCanvasFromStorage();
-                        if (!_initHasGames && _existingHtml) {
+                        if (__launchHasHint) {
+                            (async () => {
+                                let tries = 0;
+                                while (!window._traitsSDK && tries < 40) {
+                                    await new Promise(r => setTimeout(r, 250));
+                                    tries++;
+                                }
+                                const sdk = window._traitsSDK;
+                                if (!sdk) return;
+                                let applied = false;
+                                if (__launchPayload.content) {
+                                    const g = __launchPayload;
+                                    const res = await sdk.call('sys.canvas', [
+                                        'load_game',
+                                        String(g.id || ''),
+                                        String(g.name || 'Game'),
+                                        String(g.version || ''),
+                                        String(g.content || ''),
+                                        String(g.scope || 'internal'),
+                                        String(g.owner || 'local'),
+                                        String(g.game_id || ''),
+                                        String(g.checksum || '')
+                                    ]);
+                                    applied = !!(res && res.ok && (!res.result || res.result.ok !== false));
+                                }
+                                if (!applied && __launchPayload.id) {
+                                    const res2 = await sdk.call('sys.canvas', ['activate', String(__launchPayload.id || '')]);
+                                    applied = !!(res2 && res2.ok && (!res2.result || res2.result.ok !== false));
+                                }
+                                const activeContent = getActiveGameContent();
+                                if (activeContent) {
+                                    __lastContent = activeContent;
+                                    renderCanvas(activeContent);
+                                }
+                                if (applied) renderProjectBar();
+                            })();
+                        } else if (!_initHasGames && _existingHtml) {
                             // Bootstrap: call sys.canvas set to create first game entry
                             __lastContent = _existingHtml;
                             renderCanvas(_existingHtml);
@@ -2283,9 +2338,11 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 }
                             })();
                         } else if (_initHasGames && _existingHtml) {
-                            // Check for orphaned content: canvas/app.html differs from active game
+                            // Check for orphaned content only when active game has no usable content.
+                            // If active content exists, treat it as canonical and ignore stale app.html.
                             const activeContent = _initCol.games[_initCol.active]?.content || '';
-                            if (_existingHtml.length > 100 && _existingHtml !== activeContent) {
+                            const hasUsableActive = !!(activeContent && activeContent.length > 100);
+                            if (!hasUsableActive && _existingHtml.length > 100 && _existingHtml !== activeContent) {
                                 // Orphan detected — show it now, save as new game once SDK ready
                                 __lastContent = _existingHtml;
                                 renderCanvas(_existingHtml);
@@ -2335,6 +2392,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                         // Also restore from WASM VFS once SDK is ready
                         (async () => {
                             try {
+                                if (__launchHasHint) return;
                                 let tries = 0;
                                 while (!window._traitsSDK && tries < 40) {
                                     await new Promise(r => setTimeout(r, 250));
@@ -2356,6 +2414,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                         // Never overwrites or changes the currently active game.
                         (async () => {
                             try {
+                                if (__launchHasHint) return;
                                 let tries = 0;
                                 while (!window._traitsSDK && tries < 40) {
                                     await new Promise(r => setTimeout(r, 250));
@@ -2364,6 +2423,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 const sdk = window._traitsSDK;
                                 if (!sdk) return;
                                 const col = readGamesCollection();
+                                const gameCount = Object.keys(col.games || {}).length;
+                                if (gameCount > 0) return; // seed defaults only on first-run empty canvas
                                 const names = Object.values(col.games || {}).map(g => (g.name || '').toLowerCase());
                                 if (names.includes('snake')) return; // already seeded
                                 const prevActive = col.active;
@@ -3730,8 +3791,12 @@ pub fn canvas(_args: &[Value]) -> Value {
                                             ws.send(JSON.stringify({ type: 'need', hashes: need }));
                                         }
 
-                                        // Prune stale external games the server no longer has
+                                        // Prune stale external games only when catalog is non-empty.
+                                        // Empty/transient catalogs (auth or relay hiccups) must not wipe local state.
                                         try {
+                                            if (serverHashSet.size === 0 || __launchHasHint) {
+                                                return;
+                                            }
                                             const raw = localStorage.getItem('traits.pvfs') || '{}';
                                             const files = JSON.parse(raw);
                                             const col = files['canvas/games.json']
@@ -3771,7 +3836,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                         const added = addSyncedGames(data.games, localHashes);
                                         _syncing = false;
                                         // Auto-activate first game when syncing into empty collection
-                                        if (added > 0 && !hadGames) {
+                                        if (added > 0 && !hadGames && !__launchHasHint) {
                                             const col = readGamesCollection();
                                             const firstId = col.active || Object.keys(col.games || {})[0];
                                             if (firstId) activateGame(firstId);
@@ -3789,7 +3854,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                         _syncing = false;
                                         if (added > 0) {
                                             console.log('[sync] received', added, 'new game(s)');
-                                            if (!hadGames) {
+                                            if (!hadGames && !__launchHasHint) {
                                                 const col = readGamesCollection();
                                                 const firstId = col.active || Object.keys(col.games || {})[0];
                                                 if (firstId) activateGame(firstId);

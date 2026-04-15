@@ -767,7 +767,11 @@ async function callTrait(path, args) {
   var sdk = window._traitsSDK;
   if (!sdk) throw new Error('SDK not ready');
   var res = await sdk.call(path, args || []);
-  return res && res.result !== undefined ? res.result : res;
+  var out = res && res.result !== undefined ? res.result : res;
+  if (!res || res.ok === false || !out || out.ok === false) {
+    throw new Error((out && out.error) || (res && res.error) || ('Trait call failed: ' + path));
+  }
+  return out;
 }
 
 function goCanvasRoute() {
