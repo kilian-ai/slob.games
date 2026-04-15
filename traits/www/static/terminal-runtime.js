@@ -10,6 +10,151 @@
   style.textContent = "/* \u2500\u2500 Shared Terminal Panel \u2500\u2500 */\n.terminal-wrap {\n    position: fixed;\n    bottom: 0;\n    left: 0;\n    right: 0;\n    z-index: 9999;\n    background: #0d1117;\n    border-top: 1px solid #30363d;\n}\n.terminal-header {\n    display: flex;\n    align-items: center;\n    gap: 1rem;\n    padding: 0.4rem 1rem;\n    background: #161b22;\n    cursor: pointer;\n    user-select: none;\n}\n.terminal-toggle {\n    background: none;\n    border: none;\n    color: #8b949e;\n    font-size: 0.85rem;\n    font-weight: 600;\n    cursor: pointer;\n    padding: 0;\n}\n.terminal-hint {\n    font-size: 0.75rem;\n    color: #484f58;\n}\n.terminal-status {\n    font-size: 0.7rem;\n    color: #484f58;\n    margin-left: auto;\n}\n.terminal-status.ready { color: #3fb950; }\n.terminal-status.loading { color: #d29922; }\n.terminal-status.error { color: #f85149; }\n.terminal-container {\n    height: 300px;\n    padding: 4px;\n    overflow: hidden;\n}\n.terminal-container.collapsed {\n    height: 0;\n    padding: 0;\n    overflow: hidden;\n}\n.xterm-mount {\n    height: 100%;\n}\n";
   document.head.appendChild(style);
 })();
+// Shared terminal surface for traits.build and sibling SPAs.
+// Keep this file dependency-free so it can be concatenated into classic scripts.
+(function() {
+  if (typeof window === 'undefined') return;
+
+  const defaults = {
+    sentinels: {
+      clear: '\\x1b[CLEAR]',
+      restOpen: '\\x1b[REST]',
+      restClose: '\\x1b[/REST]',
+      webllmOpen: '\\x1b[WEBLLM]',
+      webllmClose: '\\x1b[/WEBLLM]',
+      voiceOpen: '\\x1b[VOICE]',
+      voiceClose: '\\x1b[/VOICE]'
+    },
+    prompt: '\\x1b[32mtraits \\x1b[0m',
+    storageKeys: {
+      scrollback: 'traits.terminal.scrollback',
+      history: 'traits.terminal.history',
+      pvfs: 'traits.pvfs',
+      legacyVfs: 'traits.terminal.vfs'
+    }
+  };
+
+  window.TerminalShared = window.TerminalShared || {};
+  window.TerminalShared.defaults = defaults;
+})();
+// Shared terminal adapters: transport + persistence.
+// Host repos can override/extend these adapters while keeping terminal core stable.
+(function() {
+  if (typeof window === 'undefined') return;
+
+  function createPersistenceAdapter(opts) {
+    const keys = opts && opts.keys ? opts.keys : {};
+    const getBackgroundCall = opts && opts.getBackgroundCall ? opts.getBackgroundCall : () => null;
+    const serializeAddon = opts && opts.serializeAddon ? opts.serializeAddon : null;
+
+    const saveState = () => {
+      if (serializeAddon) {
+        try { localStorage.setItem(keys.scrollback, serializeAddon.serialize()); } catch (_) {}
+      }
+      const backgroundCall = getBackgroundCall();
+      if (!backgroundCall) return;
+
+      backgroundCall('cli_get_history').then(res => {
+        if (res && res.ok && typeof res.result === 'string') {
+          try { localStorage.setItem(keys.history, res.result); } catch (_) {}
+        }
+      }).catch(() => {});
+
+      backgroundCall('pvfs_dump').then(res => {
+        if (res && res.ok && typeof res.result === 'string') {
+          try {
+            localStorage.setItem(keys.pvfs, res.result);
+            if (keys.legacyVfs) localStorage.setItem(keys.legacyVfs, res.result);
+          } catch (_) {}
+        }
+      }).catch(() => {});
+    };
+
+    const attachAutoSaveHandlers = () => {
+      window.addEventListener('pagehide', saveState);
+      window.addEventListener('hashchange', saveState);
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') saveState();
+      });
+    };
+
+    const restoreSession = async () => {
+      const backgroundCall = getBackgroundCall();
+      if (!backgroundCall) return;
+
+      const savedHistory = localStorage.getItem(keys.history);
+      if (savedHistory) {
+        try { await backgroundCall('cli_set_history', { history_json: savedHistory }); } catch (_) {}
+      }
+
+      let savedVfs = localStorage.getItem(keys.pvfs);
+      if (!savedVfs && keys.legacyVfs) {
+        savedVfs = localStorage.getItem(keys.legacyVfs);
+        if (savedVfs) {
+          try { localStorage.setItem(keys.pvfs, savedVfs); } catch (_) {}
+        }
+      }
+      if (savedVfs) {
+        try { await backgroundCall('pvfs_load', { json: savedVfs }); } catch (_) {}
+      }
+    };
+
+    return { saveState, attachAutoSaveHandlers, restoreSession };
+  }
+
+  async function initTraitsTransport(ctx) {
+    let activeSdk = ctx.activeSdk || (window._traitsSDK || null);
+    let backgroundCall = null;
+    let wasm = null;
+
+    if (activeSdk && typeof activeSdk.backgroundCall === 'function') {
+      await activeSdk.initWorkerPool();
+      backgroundCall = (cmd, payload = {}) => activeSdk.backgroundCall(cmd, payload);
+      const status = activeSdk.status || {};
+      if (ctx.setStatus) ctx.setStatus('WASM worker', 'ready');
+      if (window.TraitsWasm && window.TraitsWasm.register_task) {
+        try { window.TraitsWasm.register_task('terminal', 'Terminal', 'service', Date.now(), 'xterm.js CLI session'); } catch (_) {}
+      }
+      if (ctx.onReady) ctx.onReady({ wasm: null, traitCount: status.traits || 0, wasmCount: status.callable || 0, background: true });
+      return { activeSdk, backgroundCall, wasm };
+    }
+
+    if (window.TraitsWasm && window.TraitsWasm.cli_input) {
+      wasm = window.TraitsWasm;
+      const count = wasm.is_registered ? JSON.parse(wasm.callable_traits()).length : 0;
+      if (ctx.setStatus) ctx.setStatus('WASM (SPA)', 'ready');
+      if (ctx.onReady) ctx.onReady({ wasm, traitCount: 0, wasmCount: count, background: false });
+    } else {
+      const wasmJsUrl = '/wasm/traits_wasm.js';
+      const wasmBinUrl = '/wasm/traits_wasm_bg.wasm';
+      const mod = await import(wasmJsUrl);
+      await mod.default(wasmBinUrl);
+      const initResult = JSON.parse(mod.init());
+      wasm = mod;
+      const count = initResult.traits_registered || 0;
+      const wasmCount = initResult.wasm_callable || 0;
+      if (ctx.setStatus) ctx.setStatus(`${count} traits (${wasmCount} WASM)`, 'ready');
+      if (ctx.onReady) ctx.onReady({ wasm, traitCount: count, wasmCount, background: false });
+    }
+
+    if (window.Traits) {
+      activeSdk = new window.Traits({ useWasm: false, useHelper: false, server: '' });
+      activeSdk.attachWasm(wasm);
+      activeSdk.setBackgroundBinding('sdk.background.direct');
+      backgroundCall = (cmd, payload = {}) => activeSdk.backgroundCall(cmd, payload, { impl: 'sdk.background.direct' });
+    }
+
+    if (wasm && wasm.register_task) {
+      try { wasm.register_task('terminal', 'Terminal', 'service', Date.now(), 'xterm.js CLI session'); } catch (_) {}
+    }
+
+    return { activeSdk, backgroundCall, wasm };
+  }
+
+  window.TerminalSharedAdapters = window.TerminalSharedAdapters || {};
+  window.TerminalSharedAdapters.createPersistenceAdapter = createPersistenceAdapter;
+  window.TerminalSharedAdapters.initTraitsTransport = initTraitsTransport;
+})();
 // ═══════════════════════════════════════════
 // ── Shared WASM-powered Terminal ──
 // Thin display layer: all line editing, history,
@@ -75,6 +220,9 @@ async function createTerminal(mountEl, opts = {}) {
         fontFamily: "'SF Mono', 'Fira Code', 'Cascadia Code', 'Menlo', monospace",
         lineHeight: 1.3,
         scrollback: 5000,
+        // Ensure macOS Option key emits Meta/Alt escape sequences (
+        // so word-wise navigation like Opt+Arrow can be parsed by the CLI).
+        macOptionIsMeta: true,
         theme: {
             background: '#0d1117',
             foreground: '#c9d1d9',
@@ -97,6 +245,18 @@ async function createTerminal(mountEl, opts = {}) {
     if (serializeAddon) term.loadAddon(serializeAddon);
     term.loadAddon(new WebLinksAddon());
     term.open(mountEl);
+    // Keep focus/navigation keys inside terminal input stream.
+    term.attachCustomKeyEventHandler((ev) => {
+        const key = ev.key || '';
+        const isTab = key === 'Tab';
+        const isWordArrow = (ev.altKey || ev.metaKey) && (key === 'ArrowLeft' || key === 'ArrowRight');
+        if (isTab || isWordArrow) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            return true;
+        }
+        return true;
+    });
     fitAddon.fit();
 
     // ── Persist scrollback + history to localStorage ──
