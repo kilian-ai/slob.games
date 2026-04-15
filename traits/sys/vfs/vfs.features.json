@@ -55,6 +55,18 @@
           }
         }
       ]
+    },
+    {
+      "name": "Create directory",
+      "description": "Create a directory in the VFS",
+      "examples": [
+        {
+          "input": ["mkdir", "test/assets"],
+          "output": {
+            "contains": [{"ok": true}, {"path": "test/assets"}]
+          }
+        }
+      ]
     }
   ]
 }

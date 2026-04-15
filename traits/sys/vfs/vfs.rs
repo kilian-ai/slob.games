@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 ///   list  [prefix]          — list files (optional prefix filter)
 ///   delete <path>           — delete a file
 ///   exists <path>           — check if file exists
+///   mkdir <path>            — create a directory
 pub fn vfs(args: &[Value]) -> Value {
     let action = args.get(0).and_then(|v| v.as_str()).unwrap_or("list");
     let path = args.get(1).and_then(|v| v.as_str()).unwrap_or("");
@@ -69,6 +70,13 @@ pub fn vfs(args: &[Value]) -> Value {
             let exists = kernel_logic::platform::vfs_read(path).is_some();
             json!({"ok": true, "exists": exists, "path": path})
         }
-        _ => json!({"ok": false, "error": format!("Unknown action: {}. Use: read, write, list, delete, exists", action)}),
+        "mkdir" => {
+            if path.is_empty() {
+                return json!({"ok": false, "error": "Path required"});
+            }
+            let created = kernel_logic::platform::vfs_mkdir(path);
+            json!({"ok": true, "created": created, "path": path})
+        }
+        _ => json!({"ok": false, "error": format!("Unknown action: {}. Use: read, write, list, delete, exists, mkdir", action)}),
     }
 }

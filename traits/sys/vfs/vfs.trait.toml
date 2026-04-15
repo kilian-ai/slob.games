@@ -7,7 +7,7 @@ tags = ["sys", "vfs", "filesystem", "storage", "persistence"]
 
 [signature]
 params = [
-  { name = "action", type = "string", description = "Operation: read, write, list, delete, exists", required = true },
+  { name = "action", type = "string", description = "Operation: read, write, list, delete, exists, mkdir", required = true },
   { name = "path", type = "string", description = "File path (relative, no leading /)", required = false },
   { name = "content", type = "string", description = "File content (for write action)", required = false },
 ]

@@ -149,6 +149,21 @@ fn pvfs_delete(path: &str) -> bool {
     })
 }
 
+fn pvfs_mkdir(path: &str) -> bool {
+    ensure_pvfs();
+    PERSISTENT_VFS.with(|cell| {
+        if let Some(vfs) = cell.borrow_mut().as_mut() {
+            let created = vfs.mkdir(path);
+            if created {
+                ls_set("traits.pvfs", &vfs.dump());
+            }
+            created
+        } else {
+            false
+        }
+    })
+}
+
 /// Read from localStorage.
 fn ls_get(key: &str) -> Option<String> {
     web_sys::window()?.local_storage().ok()??.get_item(key).ok()?
@@ -255,6 +270,7 @@ pub fn init() -> Result<JsValue, JsValue> {
         vfs_write: pvfs_write,
         vfs_list: pvfs_list,
         vfs_delete: pvfs_delete,
+        vfs_mkdir: pvfs_mkdir,
     });
 
     Ok(serde_json::to_string(&serde_json::json!({
