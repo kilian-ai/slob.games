@@ -449,13 +449,16 @@ const JS: &str = r##"
   }
 
   async function activateAndGoCanvas(id){
-    // Persist selection first so canvas route always opens the clicked game,
-    // even if SDK activation is delayed or unavailable.
-    setActiveGame(id);
     var sdk=window._traitsSDK;
     if(sdk){
-      try{await sdk.call('sys.canvas',['activate',id])}catch(_){}
+      try{
+        await sdk.call('sys.canvas',['activate',id]);
+        goCanvas();
+        return;
+      }catch(_){}
     }
+    // Fallback when SDK is unavailable.
+    setActiveGame(id);
     goCanvas();
   }
 
@@ -978,8 +981,28 @@ const JS: &str = r##"
       var res=await fetch(RELAY+'/game/'+hash);
       var data=await res.json();
       if(!data.content)return;
+      var safeHash=String(hash||'').trim().toLowerCase();
+      var id='s-'+safeHash.substring(0,16);
+      var gameId=safeHash.substring(0,16)||slugify(name||'game');
+      var sdk=window._traitsSDK;
+      if(sdk){
+        try{
+          await sdk.call('sys.canvas',[
+            'load_game',
+            id,
+            String(name||'Game'),
+            '',
+            String(data.content||''),
+            'external',
+            'community',
+            gameId,
+            safeHash
+          ]);
+          goCanvas();
+          return;
+        }catch(_){ }
+      }
       var col=readGamesCollection();
-      var id='s-'+hash.substring(0,16);
       col.games[id]={name:name,content:data.content,scope:'external',version:'',created:new Date().toISOString(),updated:new Date().toISOString()};
       col.active=id;
       writeGamesCollection(col);

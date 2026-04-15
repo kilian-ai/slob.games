@@ -268,6 +268,56 @@ pub fn canvas(args: &[Value]) -> Value {
                     "name": name, "version": version, "content": content, "length": content.len()})
         }
 
+        // ── load_game: upsert game content by id and activate it ──
+        "load_game" => {
+            let requested_id = args.get(1).and_then(|v| v.as_str()).unwrap_or("").trim();
+            let name = args.get(2).and_then(|v| v.as_str()).unwrap_or("untitled");
+            let version = args.get(3).and_then(|v| v.as_str()).unwrap_or("");
+            let content = args.get(4).and_then(|v| v.as_str()).unwrap_or("");
+            let scope = args.get(5).and_then(|v| v.as_str()).unwrap_or("external");
+            let owner = args.get(6).and_then(|v| v.as_str()).unwrap_or("community");
+            let sync_game_id = args.get(7).and_then(|v| v.as_str()).unwrap_or("");
+            let checksum = args.get(8).and_then(|v| v.as_str()).unwrap_or("");
+
+            let mut col = read_games();
+            let id = if requested_id.is_empty() {
+                gen_id()
+            } else {
+                requested_id.to_string()
+            };
+            let ts = now_ts();
+            let created = col["games"][&id]["created"]
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| ts.clone());
+
+            col["games"][&id] = json!({
+                "name": name,
+                "version": version,
+                "content": content,
+                "scope": scope,
+                "_scope": scope,
+                "owner": owner,
+                "created": created,
+                "updated": ts,
+                "game_id": sync_game_id,
+                "_sync_game_id": sync_game_id,
+                "checksum": checksum,
+                "_sync_hash": checksum
+            });
+            col["active"] = json!(id.clone());
+            write_games(&col);
+
+            json!({
+                "ok": true,
+                "action": "load_game",
+                "game_id": id,
+                "name": name,
+                "version": version,
+                "length": content.len()
+            })
+        }
+
         // ── fork: if active is external, clone to internal and activate clone ──
         "fork" => {
             let mut col = read_games();
@@ -382,6 +432,6 @@ pub fn canvas(args: &[Value]) -> Value {
             canvas(&[json!("delete"), json!(id)])
         }
 
-        _ => json!({"ok": false, "error": format!("Unknown action: {}. Use: set, append, get, clear, new, games, activate, fork, rename, delete", action)}),
+        _ => json!({"ok": false, "error": format!("Unknown action: {}. Use: set, append, get, clear, new, games, activate, load_game, fork, rename, delete", action)}),
     }
 }

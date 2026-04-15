@@ -55,6 +55,15 @@
       ]
     },
     {
+      "name": "load game content and activate",
+      "examples": [
+        {
+          "input": { "args": ["load_game", "seed-1", "Seed", "", "<h1>Seed</h1>", "external", "community", "seed", "abc123"] },
+          "output": { "contains": "\"action\":\"load_game\"" }
+        }
+      ]
+    },
+    {
       "name": "rename active game",
       "examples": [
         {

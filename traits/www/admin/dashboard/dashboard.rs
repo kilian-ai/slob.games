@@ -784,7 +784,7 @@ async function playAdminGame(ownerEnc, gameIdEnc, hashEnc) {
   try {
     var owner = decodeURIComponent(ownerEnc || '');
     var gameId = decodeURIComponent(gameIdEnc || '');
-    var hash = decodeURIComponent(hashEnc || '');
+    var hash = String(decodeURIComponent(hashEnc || '')).toLowerCase();
     var content = '';
     var name = '';
     var version = '';
@@ -796,8 +796,25 @@ async function playAdminGame(ownerEnc, gameIdEnc, hashEnc) {
     name = d.name || gameId || 'Game';
     version = d.version || '';
 
-    await callTrait('sys.canvas', ['new', name, version]);
-    await callTrait('sys.canvas', ['set', content]);
+    var idSeed = (hash || (owner + '-' + gameId))
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '')
+      .slice(0, 16);
+    if (!idSeed) idSeed = String(Date.now());
+    var localId = 's-' + idSeed;
+    var syncGameId = (String(gameId || '').trim().toLowerCase() || idSeed);
+
+    await callTrait('sys.canvas', [
+      'load_game',
+      localId,
+      name,
+      version,
+      content,
+      'external',
+      owner || 'community',
+      syncGameId,
+      hash
+    ]);
     goCanvasRoute();
   } catch (e) {
     alert((e && e.message) ? e.message : 'Failed to play game');
