@@ -11,7 +11,7 @@ routes = [
 [durable_objects]
 bindings = [
   { name = "RELAY", class_name = "RelaySession" },
-  { name = "GAME_ROOM", class_name = "GameRoom" }
+  { name = "GAME_ROOM", class_name = "GameRoomV2" }
 ]
 
 [[migrations]]
@@ -21,3 +21,7 @@ new_sqlite_classes = ["RelaySession"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["GameRoom"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["GameRoomV2"]

@@ -4,7 +4,7 @@
  * One RelaySession DO per pairing code. The DO holds all in-flight state
  * in memory, so long-poll coordination is instant and zero-latency.
  *
- * One GameRoom DO (global) for automatic game sync between all clients.
+ * One GameRoomV2 DO (global) for automatic game sync between all clients.
  * Games are stored in SQLite and synced via WebSocket.
  *
  * Routes:
@@ -16,7 +16,7 @@
  *   POST /relay/respond       { code, id, result }
  *   GET  /relay/status?code=  → { active, age_seconds, code }
  *   GET  /relay/status?token= → same, validated from signed token
- *   GET  /sync                → WebSocket upgrade → GameRoom (automatic game sync)
+ *   GET  /sync                → WebSocket upgrade → GameRoomV2 (automatic game sync)
  *
  * Signed tokens (requires RELAY_SECRET worker secret):
  *   After a client enters the 4-char pairing code, call /relay/connect to get a
@@ -417,7 +417,7 @@ function makeReleaseVersion() {
   return `${y}${mo}${da}.${hh}${mm}${ss}`;
 }
 
-// ── Durable Object: GameRoom ──────────────────────────────────────────────────
+// ── Durable Object: GameRoomV2 ────────────────────────────────────────────────
 //
 // Single global instance for automatic game sync across all slob.games clients.
 // Games stored in SQLite, synced via WebSocket with hibernation.
@@ -434,7 +434,7 @@ const MAX_GAME_PACKAGE_SIZE = 2 * 1024 * 1024; // HTML + resources bundle cap
 const MAX_TOTAL_GAMES = 500;
 const DEFAULT_EXTERNAL_POOL_SIZE = 64;
 
-export class GameRoom {
+export class GameRoomV2 {
   constructor(state, env) {
     this.state = state;
     this.env = env;
@@ -1468,6 +1468,9 @@ export class GameRoom {
   webSocketError(ws, error) {}
 }
 
+// Keep legacy class export so existing DO dependencies can still load.
+export class GameRoom extends GameRoomV2 {}
+
 // ── Main Worker ───────────────────────────────────────────────────────────────
 
 export default {
@@ -1573,7 +1576,7 @@ export default {
       return json({ ...data, code }); // always include resolved code in response
     }
 
-    // /sync routes → global GameRoom
+    // /sync routes → global GameRoomV2
     if (url.pathname === "/sync" || url.pathname.startsWith("/sync/")) {
       const room = env.GAME_ROOM.get(env.GAME_ROOM.idFromName("global"));
 
