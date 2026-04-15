@@ -55,8 +55,6 @@ pub struct Platform {
     pub vfs_list: fn() -> Vec<String>,
     /// Delete a file from the persistent VFS.
     pub vfs_delete: fn(&str) -> bool,
-    /// Create a directory in the persistent VFS.
-    pub vfs_mkdir: fn(&str) -> bool,
 }
 
 static PLATFORM: OnceLock<Platform> = OnceLock::new();
@@ -135,11 +133,6 @@ pub fn vfs_list() -> Vec<String> {
 /// Delete a file from the persistent VFS.
 pub fn vfs_delete(path: &str) -> bool {
     PLATFORM.get().map(|p| (p.vfs_delete)(path)).unwrap_or(false)
-}
-
-/// Create a directory in the persistent VFS.
-pub fn vfs_mkdir(path: &str) -> bool {
-    PLATFORM.get().map(|p| (p.vfs_mkdir)(path)).unwrap_or(false)
 }
 
 /// Return platform-specific process/task status (complete JSON for `sys.ps`).
