@@ -533,6 +533,8 @@ async function syncRelaySecrets() {
       var s = secrets[i];
       if (s.key && s.value) {
         storage.setItem(SECRET_PFX + s.key, s.value);
+        // Hot-inject into WASM kernel and workers
+        try { if (window._traitsSDK) window._traitsSDK.setSecret(s.key.toLowerCase(), s.value); } catch(_) {}
         count++;
       }
     }
@@ -576,6 +578,8 @@ function saveSecret() {
   var v = byId('secretValue').value;
   if (!k || !v) { setStatus('secretStatus', 'Key and value required.', true); return; }
   storage.setItem(SECRET_PFX + k, v);
+  // Hot-inject into WASM kernel and workers so traits (e.g. Rig) pick it up immediately
+  try { if (window._traitsSDK) window._traitsSDK.setSecret(k.toLowerCase(), v); } catch(_) {}
   byId('secretKey').value = '';
   byId('secretValue').value = '';
   renderSecrets();
