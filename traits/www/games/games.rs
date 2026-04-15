@@ -718,7 +718,8 @@ const JS: &str = r##"
     div.className='game-card'+(g.active?' active-game':'');
     var meta='';
     if(g.publishBadge){
-      meta+=' <span class="badge '+g.publishBadge.cls+'" data-publish-local="1">'+esc(g.publishBadge.label)+'</span>';
+      var badgeAttr=g.publishBadge.actionable?' data-publish-local="1"':'';
+      meta+=' <span class="badge '+g.publishBadge.cls+'"'+badgeAttr+'>'+esc(g.publishBadge.label)+'</span>';
     }
     if(g.version) meta+=' <span style="opacity:0.25">\u00b7</span> '+esc(g.version);
     if(g.size) meta+=' <span style="opacity:0.25">\u00b7</span> '+fmtSize(g.size);
@@ -784,6 +785,7 @@ const JS: &str = r##"
 
   async function renderLocal(){
     var grid=document.getElementById('localGrid');
+    var hasToken=!!getToken();
     var col=readGamesCollection();
     var byIdentity={};
     for(var id in (col.games||{})){
@@ -830,26 +832,34 @@ const JS: &str = r##"
     for(var i=0;i<list.length;i++){
       var g=list[i];
       var raw=g.game||{};
+      var localScope=String((raw._scope||raw.scope||'internal')).trim().toLowerCase();
+      var isExternalLocal=(localScope==='external');
+      var hasSyncIdentity=!!String((raw._sync_game_id||'')).trim();
       var gameId=relayGameIdForLocal(g.id,raw);
       var relay=__relayMineByGameId[gameId]||null;
       var localHash='';
       try{localHash=await shortHash(raw.content||'')}catch(_){localHash=''}
       var relayHash=String((relay&&(relay.checksum||relay.content_hash))||raw._sync_hash||raw.checksum||'').trim().toLowerCase();
-      var inSync=!!(relay&&localHash&&relayHash&&localHash===relayHash);
       var isPublished=!!(relay&&relay.published);
       g.gameId=gameId;
       g.isPublished=isPublished;
       g.offline=!__relayHealth.ok;
-      g.unsynced=!relay&&__relayHealth.ok;
+      g.unsynced=!isExternalLocal&&hasToken&&!relay&&__relayHealth.ok;
 
       if(g.offline){
-        g.publishBadge={cls:'offline',label:'offline'};
+        g.publishBadge={cls:'offline',label:'offline',actionable:false};
+      }else if(isExternalLocal){
+        g.publishBadge={cls:'ext',label:'community copy',actionable:false};
+      }else if(!hasToken){
+        g.publishBadge=hasSyncIdentity
+          ?{cls:'draft',label:'draft',actionable:false}
+          :{cls:'local',label:'local',actionable:false};
       }else if(!relay){
-        g.publishBadge={cls:'publish-dim',label:'unsynced'};
+        g.publishBadge={cls:'publish-dim',label:'unsynced',actionable:true};
       }else if(isPublished){
-        g.publishBadge={cls:'pub',label:'published'};
+        g.publishBadge={cls:'pub',label:'published',actionable:true};
       }else{
-        g.publishBadge={cls:'draft',label:'draft'};
+        g.publishBadge={cls:'draft',label:'draft',actionable:true};
       }
 
       g.syncNote='';
