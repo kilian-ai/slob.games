@@ -2306,6 +2306,20 @@ pub fn canvas(_args: &[Value]) -> Value {
                                         String(g.checksum || '')
                                     ]);
                                     applied = !!(res && res.ok && (!res.result || res.result.ok !== false));
+                                    // pvfs_write (called inside load_game) replaces localStorage with
+                                    // Rust {files:{},dirs:[]} format, erasing the JS top-level
+                                    // 'canvas/games.json' key. Re-promote it so the 1s poll and
+                                    // addSyncedGames both see the correct active game, not bowl-toss.
+                                    if (applied) {
+                                        try {
+                                            const _rp = JSON.parse(localStorage.getItem('traits.pvfs') || '{}');
+                                            if (!_rp['canvas/games.json'] && _rp.files && _rp.files['canvas/games.json']) {
+                                                _rp['canvas/games.json'] = _rp.files['canvas/games.json'].content || '';
+                                                if (_rp.files['canvas/app.html']) _rp['canvas/app.html'] = _rp.files['canvas/app.html'].content || '';
+                                                localStorage.setItem('traits.pvfs', JSON.stringify(_rp));
+                                            }
+                                        } catch(_) {}
+                                    }
                                 }
                                 if (!applied && __launchPayload.id) {
                                     const res2 = await sdk.call('sys.canvas', ['activate', String(__launchPayload.id || '')]);
@@ -3518,9 +3532,14 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 try {
                                     const raw = localStorage.getItem('traits.pvfs') || '{}';
                                     const files = JSON.parse(raw);
+                                    // Primary: read from JS flat top-level key.
+                                    // Fallback: read from WASM Rust {files:{}} format when pvfs_write
+                                    // (called by load_game/set) has overwritten the top-level key.
                                     const col = files['canvas/games.json']
                                         ? JSON.parse(files['canvas/games.json'])
-                                        : { active: null, games: {} };
+                                        : (files.files && files.files['canvas/games.json']
+                                            ? JSON.parse(files.files['canvas/games.json'].content || '{}')
+                                            : { active: null, games: {} });
 
                                     // Build set of existing content hashes
                                     const existing = new Set(localHashes || []);
