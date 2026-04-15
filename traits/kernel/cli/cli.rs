@@ -1607,8 +1607,10 @@ pub fn exec_line(
     // This mirrors the common shell convention for feeding file data to commands.
     {
         let vfs_ref = vfs.borrow();
-        for arg in &mut parsed.args {
-            if arg.starts_with('@') {
+        for (idx, arg) in parsed.args.iter_mut().enumerate() {
+            // Keep the first token literal so commands like "@agent" are not
+            // treated as VFS file expansion shortcuts.
+            if idx > 0 && arg.starts_with('@') {
                 let fname = &arg[1..];
                 if let Some(contents) = vfs_ref.read(fname) {
                     *arg = contents;
