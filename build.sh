@@ -61,7 +61,8 @@ out_path = pathlib.Path(sys.argv[3])
 js = js_path.read_text()
 js = re.sub(r'^/\*.*?\*/\s*', '', js, count=1, flags=re.S)
 js = re.sub(r'^export function (\w+)\(', r'function \1(', js, flags=re.M)
-js = js.replace('export { initSync, __wbg_init as default };', '')
+js = re.sub(r'^export class (\w+)', r'class \1', js, flags=re.M)
+js = re.sub(r'^export\s*\{[^}]+\};\s*$', '', js, flags=re.M)
 js = js.replace('import.meta.url', '__traits_runtime_script_url')
 
 exports = [
@@ -118,7 +119,8 @@ out_path = pathlib.Path(sys.argv[3])
 js = js_path.read_text()
 js = re.sub(r'^/\*.*?\*/\s*', '', js, count=1, flags=re.S)
 js = re.sub(r'^export function (\w+)\(', r'function \1(', js, flags=re.M)
-js = js.replace('export { initSync, __wbg_init as default };', '')
+js = re.sub(r'^export class (\w+)', r'class \1', js, flags=re.M)
+js = re.sub(r'^export\s*\{[^}]+\};\s*$', '', js, flags=re.M)
 js = js.replace('import.meta.url', '__traits_runtime_script_url')
 
 exports = [
