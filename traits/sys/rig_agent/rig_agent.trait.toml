@@ -1,0 +1,20 @@
+[trait]
+description = "Create and run LLM agents powered by rig framework. Agents use traits as callable tools."
+version = "v260414.000000"
+author = "system"
+tags = ["sys", "llm", "agent", "rig", "tools"]
+
+[signature]
+params = [
+  { name = "config", type = "string", description = "JSON config: {action, model?, system_prompt?, tools?, sessionId?, message?, stream?}", required = true, example = "{\"action\":\"create\",\"model\":\"gpt-4o-mini\",\"tools\":[\"sys.echo\"]}" },
+]
+
+[signature.returns]
+type = "map"
+description = "{ok: bool, sessionId?: string, response?: string, tool_calls?: any[], error?: string}"
+
+[implementation]
+language = "rust"
+source = "builtin"
+entry = "rig_agent"
+wasm = true

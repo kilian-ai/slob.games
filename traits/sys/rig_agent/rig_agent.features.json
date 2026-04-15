@@ -1,0 +1,32 @@
+{
+  "trait": "sys.rig_agent",
+  "features": [
+    {
+      "name": "Create an agent",
+      "examples": [
+        {
+          "input": ["{\"action\":\"create\",\"model\":\"gpt-4o-mini\",\"system_prompt\":\"You are helpful\",\"tools\":[\"sys.echo\"]}"],
+          "output": { "contains": ["ok", "sessionId", "true"] }
+        }
+      ]
+    },
+    {
+      "name": "Query an agent",
+      "examples": [
+        {
+          "input": ["{\"action\":\"query\",\"sessionId\":\"agent_123\",\"message\":\"hello\"}"],
+          "output": { "contains": ["ok"] }
+        }
+      ]
+    },
+    {
+      "name": "Stop an agent",
+      "examples": [
+        {
+          "input": ["{\"action\":\"stop\",\"sessionId\":\"agent_123\"}"],
+          "output": { "contains": ["ok"] }
+        }
+      ]
+    }
+  ]
+}
