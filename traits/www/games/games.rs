@@ -72,6 +72,7 @@ const JS: &str = r##"
   function fmtSize(b){return b<1024?b+'B':(b/1024).toFixed(1)+'KB'}
   var RELAY='https://relay.slob.games/sync';
   var __relayMineByGameId={};
+  var __relayMineByOwnerGameId={};
   var __relayUser='';
   var __reconcileInFlight=false;
   var __relayHealth={ok:true,status:200,msg:''};
@@ -836,7 +837,10 @@ const JS: &str = r##"
       var isExternalLocal=(localScope==='external');
       var hasSyncIdentity=!!String((raw._sync_game_id||'')).trim();
       var gameId=relayGameIdForLocal(g.id,raw);
-      var relay=__relayMineByGameId[gameId]||null;
+      var syncOwner=String((raw._sync_owner||'')).trim().toLowerCase();
+      var ownerForLookup=syncOwner||String(__relayUser||'').trim().toLowerCase();
+      var relayKey=ownerForLookup?(ownerForLookup+'/'+gameId):'';
+      var relay=relayKey?(__relayMineByOwnerGameId[relayKey]||null):null;
       var localHash='';
       try{localHash=await shortHash(raw.content||'')}catch(_){localHash=''}
       var relayHash=String((relay&&(relay.checksum||relay.content_hash))||raw._sync_hash||raw.checksum||'').trim().toLowerCase();
@@ -880,6 +884,7 @@ const JS: &str = r##"
     var grid=document.getElementById('relayGrid');
     var t=getToken();
     __relayMineByGameId={};
+    __relayMineByOwnerGameId={};
     __relayUser='';
     _setRelayHealth(true,200,'');
 
@@ -930,10 +935,12 @@ const JS: &str = r##"
           var rows=[];
           myGames.forEach(function(g){
             var gid=slugify(g.game_id||g.name||'untitled');
+            var owner=String((g.owner||__relayUser||'')).trim().toLowerCase();
             __relayMineByGameId[gid]=g;
+            if(owner&&gid)__relayMineByOwnerGameId[owner+'/'+gid]=g;
             if(!!g.published){
               myIds[String(g.content_hash||'').trim().toLowerCase()]=true;
-              myKeys[String((g.owner||__relayUser||'')).trim().toLowerCase()+'/'+gid]=true;
+              myKeys[owner+'/'+gid]=true;
             }
           });
           // Also show other community games below

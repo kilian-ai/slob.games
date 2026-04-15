@@ -271,6 +271,7 @@ const JS: &str = r##"
 var API_CANDIDATES = ['https://relay.slob.games/sync', 'https://relay.traits.build/sync'];
 var API = API_CANDIDATES[0];
 var token = '';
+var currentUsername = '';
 var usersData = [];
 var gamesData = { external: [], internal: [] };
 var currentTab = 'byOwner';
@@ -404,6 +405,7 @@ async function load() {
     document.querySelector('.page').innerHTML = '<div class="denied"><h2>Access Denied</h2><p>Admin role required. Your role: ' + esc(me.role || me.error || 'unknown') + '</p></div>';
     return;
   }
+  currentUsername = String(me.username || '').trim().toLowerCase();
 
   // Fetch users and games in parallel
   var p = await Promise.all([apiFetch('/admin/users'), apiFetch('/admin/games')]);
@@ -412,6 +414,7 @@ async function load() {
 
   renderUsers();
   renderGames();
+  renderPvfsGames();
 }
 
 function renderUsers() {
@@ -844,6 +847,18 @@ function renderPvfsGames() {
     return;
   }
   status.textContent = ids.length + ' local game' + (ids.length === 1 ? '' : 's') + ' in PVFS';
+
+  var relayIndex = {};
+  var allRelay = [];
+  if (Array.isArray(gamesData.external)) allRelay = allRelay.concat(gamesData.external);
+  if (Array.isArray(gamesData.internal)) allRelay = allRelay.concat(gamesData.internal);
+  for (var ri = 0; ri < allRelay.length; ri++) {
+    var rg = allRelay[ri] || {};
+    var ro = String(rg.owner || '').trim().toLowerCase();
+    var rgid = String(rg.game_id || '').trim().toLowerCase();
+    if (ro && rgid) relayIndex[ro + '/' + rgid] = true;
+  }
+
   var h = '<table><tr><th>Name</th><th>Version</th><th>Size</th><th>Scope</th><th>Local ID</th><th>Relay ID</th><th>Status</th><th></th></tr>';
   for (var i = 0; i < ids.length; i++) {
     var id = ids[i];
@@ -855,12 +870,24 @@ function renderPvfsGames() {
     var syncOwner = g._sync_owner || '';
     var syncGameId = g._sync_game_id || '';
     var syncHash = g._sync_hash || '';
-    var isSynced = !!syncGameId;
-    var statusBadge = isSynced
-      ? '<span class="badge-pub">synced</span>'
-      : '<span class="badge-draft">local only</span>';
-    var relayCell = isSynced
-      ? ('<code title="' + esc(syncOwner) + '">' + esc(syncGameId.slice(0,10)) + '…</code>')
+    var ownerNorm = String(syncOwner || currentUsername || '').trim().toLowerCase();
+    var gameNorm = String(syncGameId || '').trim().toLowerCase();
+    var syncKey = (ownerNorm && gameNorm) ? (ownerNorm + '/' + gameNorm) : '';
+    var ownerMismatch = !!(syncGameId && syncOwner && currentUsername && String(syncOwner).trim().toLowerCase() !== currentUsername);
+    var linkedHere = !!(syncKey && relayIndex[syncKey]);
+    var isSynced = !!(syncGameId && !ownerMismatch && (linkedHere || !currentUsername));
+
+    var statusBadge = '<span class="badge-draft">local only</span>';
+    if (isSynced) {
+      statusBadge = '<span class="badge-pub">synced</span>';
+    } else if (syncGameId && ownerMismatch) {
+      statusBadge = '<span class="badge-draft">linked to other owner</span>';
+    } else if (syncGameId && !linkedHere) {
+      statusBadge = '<span class="badge-draft">stale relay link</span>';
+    }
+
+    var relayCell = syncGameId
+      ? ('<code title="' + esc(syncOwner || currentUsername || 'unknown') + '">' + esc(syncGameId.slice(0,10)) + '…</code>')
       : '<span style="opacity:0.3">—</span>';
     var idEnc = encodeURIComponent(id);
     h += '<tr>';
