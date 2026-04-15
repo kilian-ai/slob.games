@@ -1,0 +1,24 @@
+[trait]
+description = "Rig-backed Groq agent shim for WASM"
+version = "v260415"
+author = "system"
+tags = ["llm", "rig", "groq", "agent", "wasm"]
+
+[signature]
+params = [
+  { name = "prompt", type = "string", description = "User message to send to the agent", required = true },
+  { name = "model", type = "string", description = "Groq model name (default: llama-3.1-70b-versatile)", required = false, default = "llama-3.1-70b-versatile" },
+  { name = "preamble", type = "string", description = "Rig agent system preamble", required = false },
+  { name = "context", type = "string", description = "Comma-separated VFS paths or globs to inject as Rig context docs", required = false },
+  { name = "temperature", type = "float", description = "Optional Rig agent temperature", required = false }
+]
+
+[signature.returns]
+type = "map"
+description = "Result map with provider/model/content metadata"
+
+[implementation]
+language = "rust"
+source = "builtin"
+entry = "rig_groq_agent"
+wasm = true

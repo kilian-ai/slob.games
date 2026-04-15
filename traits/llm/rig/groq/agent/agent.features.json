@@ -1,0 +1,14 @@
+{
+  "trait": "llm.rig.groq.agent",
+  "features": [
+    {
+      "name": "Build and run rig-backed groq agent shim",
+      "examples": [
+        {
+          "input": ["Say hi in five words.", "llama-3.1-70b-versatile", "You are concise."],
+          "output": { "contains": ["provider", "rig.groq.agent", "model"] }
+        }
+      ]
+    }
+  ]
+}

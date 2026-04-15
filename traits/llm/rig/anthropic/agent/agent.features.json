@@ -1,0 +1,14 @@
+{
+  "trait": "llm.rig.anthropic.agent",
+  "features": [
+    {
+      "name": "Build and run rig-backed anthropic agent shim",
+      "examples": [
+        {
+          "input": ["Say hi in five words.", "claude-sonnet-4-5", "You are concise."],
+          "output": { "contains": ["provider", "rig.anthropic.agent", "model"] }
+        }
+      ]
+    }
+  ]
+}

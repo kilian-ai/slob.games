@@ -1,0 +1,14 @@
+{
+  "trait": "llm.rig.together.agent",
+  "features": [
+    {
+      "name": "Build and run rig-backed together agent shim",
+      "examples": [
+        {
+          "input": ["Say hi in five words.", "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo", "You are concise."],
+          "output": { "contains": ["provider", "rig.together.agent", "model"] }
+        }
+      ]
+    }
+  ]
+}

@@ -23,22 +23,22 @@ pub fn rig_providers(_args: &[Value]) -> Value {
             {
                 "provider": "anthropic",
                 "chat_model": "claude-sonnet-4-5",
-                "note": "available in rig-core, not yet shimmed here"
+                "traits": ["llm.rig.anthropic.agent"]
             },
             {
                 "provider": "groq",
                 "chat_model": "llama-3.1-70b-versatile",
-                "note": "available in rig-core, not yet shimmed here"
+                "traits": ["llm.rig.groq.agent"]
             },
             {
                 "provider": "openrouter",
                 "chat_model": "anthropic/claude-3.5-sonnet",
-                "note": "available in rig-core, not yet shimmed here"
+                "traits": ["llm.rig.openrouter.agent"]
             },
             {
                 "provider": "together",
                 "chat_model": "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
-                "note": "available in rig-core, not yet shimmed here"
+                "traits": ["llm.rig.together.agent"]
             }
         ]
     })

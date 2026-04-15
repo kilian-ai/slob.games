@@ -1,0 +1,24 @@
+[trait]
+description = "Rig-backed OpenRouter agent shim for WASM"
+version = "v260415"
+author = "system"
+tags = ["llm", "rig", "openrouter", "agent", "wasm"]
+
+[signature]
+params = [
+  { name = "prompt", type = "string", description = "User message to send to the agent", required = true },
+  { name = "model", type = "string", description = "OpenRouter model name (default: anthropic/claude-3.5-sonnet)", required = false, default = "anthropic/claude-3.5-sonnet" },
+  { name = "preamble", type = "string", description = "Rig agent system preamble", required = false },
+  { name = "context", type = "string", description = "Comma-separated VFS paths or globs to inject as Rig context docs", required = false },
+  { name = "temperature", type = "float", description = "Optional Rig agent temperature", required = false }
+]
+
+[signature.returns]
+type = "map"
+description = "Result map with provider/model/content metadata"
+
+[implementation]
+language = "rust"
+source = "builtin"
+entry = "rig_openrouter_agent"
+wasm = true

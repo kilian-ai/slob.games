@@ -1,0 +1,14 @@
+{
+  "trait": "llm.rig.openrouter.agent",
+  "features": [
+    {
+      "name": "Build and run rig-backed openrouter agent shim",
+      "examples": [
+        {
+          "input": ["Say hi in five words.", "anthropic/claude-3.5-sonnet", "You are concise."],
+          "output": { "contains": ["provider", "rig.openrouter.agent", "model"] }
+        }
+      ]
+    }
+  ]
+}

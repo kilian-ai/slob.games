@@ -70,6 +70,63 @@ pub fn call_openai_chat(messages: Vec<Value>, model: &str) -> Value {
     .unwrap_or_else(|| json!({ "ok": false, "error": "sys.call not available" }))
 }
 
+pub fn call_bearer_chat(
+    url: &str,
+    messages: Vec<Value>,
+    model: &str,
+    secret_id: &str,
+) -> Value {
+    let body = json!({
+        "model": model,
+        "messages": messages,
+    });
+
+    kernel_logic::platform::dispatch(
+        "sys.call",
+        &[
+            Value::String(url.to_string()),
+            body,
+            Value::String(secret_id.to_string()),
+            Value::String("POST".into()),
+            Value::Null,
+        ],
+    )
+    .unwrap_or_else(|| json!({ "ok": false, "error": "sys.call not available" }))
+}
+
+pub fn call_json_with_headers(url: &str, body: Value, headers: Value) -> Value {
+    kernel_logic::platform::dispatch(
+        "sys.call",
+        &[
+            Value::String(url.to_string()),
+            body,
+            Value::Null,
+            Value::String("POST".into()),
+            headers,
+        ],
+    )
+    .unwrap_or_else(|| json!({ "ok": false, "error": "sys.call not available" }))
+}
+
+pub fn get_secret_any(secret_id: &str) -> Option<String> {
+    let upper = secret_id.to_uppercase();
+    let lower = secret_id.to_lowercase();
+
+    kernel_logic::platform::secret_get(secret_id)
+        .or_else(|| kernel_logic::platform::secret_get(&upper))
+        .or_else(|| kernel_logic::platform::secret_get(&lower))
+}
+
+pub fn extract_error(result: &Value, fallback: &str) -> String {
+    result.get("body")
+        .and_then(|b| b.get("error"))
+        .and_then(|e| e.get("message").or_else(|| e.get("error")))
+        .and_then(|m| m.as_str())
+        .or_else(|| result.get("error").and_then(|e| e.as_str()))
+        .unwrap_or(fallback)
+        .to_string()
+}
+
 pub fn call_openai_embeddings(input: &str, model: &str) -> Value {
     let body = json!({
         "model": model,
