@@ -45,6 +45,7 @@ jobs:
         run: |
           mkdir -p _site
           cp index.html _site/
+          [ -f agent-terminal-runtime.js ] && cp agent-terminal-runtime.js _site/ || true
           cp CNAME _site/
           [ -f sitemap.xml ] && cp sitemap.xml _site/ || true
           [ -f robots.txt ] && cp robots.txt _site/ || true
@@ -54,6 +55,7 @@ jobs:
         run: |
           mkdir -p _snapshots/site
           cp index.html _snapshots/site/
+          [ -f agent-terminal-runtime.js ] && cp agent-terminal-runtime.js _snapshots/site/ || true
           [ -f CNAME ] && cp CNAME _snapshots/site/ || true
           [ -f sitemap.xml ] && cp sitemap.xml _snapshots/site/ || true
           [ -f robots.txt ] && cp robots.txt _snapshots/site/ || true
