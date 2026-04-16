@@ -317,6 +317,8 @@ a.game-link:hover { text-decoration: underline; }
 const JS: &str = r##"
 (function() {
 var QUOTA = 5 * 1024 * 1024; // 5 MB standard localStorage quota
+var _gameSortColumn = 'active'; // '' for active/size default, 'name', 'size'
+var _gameSortAsc = false; // false = descending, true = ascending
 
 function fmtSize(n) {
   n = n || 0;
@@ -537,8 +539,24 @@ async function render() {
 
   // Games table
   byId('gamesCount').textContent = d.games.length + ' games, ' + fmtSize(d.gamesTotal) + ' total';
+  
+  // Apply sort if a custom sort column is set
+  if (_gameSortColumn === 'name') {
+    d.games.sort(function(a, b) {
+      var aName = (a.name || '').toLowerCase();
+      var bName = (b.name || '').toLowerCase();
+      return _gameSortAsc ? (aName > bName ? 1 : -1) : (aName < bName ? 1 : -1);
+    });
+  } else if (_gameSortColumn === 'size') {
+    d.games.sort(function(a, b) {
+      return _gameSortAsc ? (a.size - b.size) : (b.size - a.size);
+    });
+  }
+  
   var gt = '<tr style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.06em">'
-         + '<td>Name</td><td>Size</td><td>Scope</td><td>Hash</td><td></td></tr>';
+         + '<td style="cursor:pointer;user-select:none" onclick="sortGamesBy(\'name\')">Name' + (_gameSortColumn === 'name' ? (_gameSortAsc ? ' ▲' : ' ▼') : '') + '</td>'
+         + '<td style="cursor:pointer;user-select:none" onclick="sortGamesBy(\'size\')">Size' + (_gameSortColumn === 'size' ? (_gameSortAsc ? ' ▲' : ' ▼') : '') + '</td>'
+         + '<td>Scope</td><td>Hash</td><td></td></tr>';
   for (var i = 0; i < d.games.length; i++) {
     var g = d.games[i];
     var idx = i;
@@ -581,6 +599,16 @@ async function render() {
         + '</tr>';
   }
   byId('otherTable').innerHTML = d.otherVfs.length ? ot : '<tr><td>(none)</td></tr>';
+}
+
+function sortGamesBy(column) {
+  if (_gameSortColumn === column) {
+    _gameSortAsc = !_gameSortAsc;
+  } else {
+    _gameSortColumn = column;
+    _gameSortAsc = false;
+  }
+  render();
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -1010,6 +1038,7 @@ window.deletePreviewItem = deletePreviewItem;
 window.renameGame = renameGame;
 window.deleteGame = deleteGame;
 window.deleteVfs = deleteVfs;
+window.sortGamesBy = sortGamesBy;
 
 })();
 "##;
