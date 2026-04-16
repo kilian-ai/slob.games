@@ -578,14 +578,46 @@ pub fn canvas(_args: &[Value]) -> Value {
                         // ── Games collection: single source of truth in VFS canvas/games.json ──
                         // VFS auto-syncs to localStorage['traits.pvfs'] on every write.
 
+                        function _readGamesCollectionFromStore(files) {
+                            try {
+                                const json = files['canvas/games.json']
+                                    || (files.files && files.files['canvas/games.json'] && files.files['canvas/games.json'].content)
+                                    || '';
+                                if (!json) return { active: null, games: {} };
+                                return JSON.parse(json);
+                            } catch(_) { return { active: null, games: {} }; }
+                        }
+
+                        function _writeGamesCollectionIntoStore(files, col) {
+                            const json = JSON.stringify(col || { active: null, games: {} });
+                            files['canvas/games.json'] = json;
+                            if (files.files && typeof files.files === 'object') {
+                                const prev = files.files['canvas/games.json'] || {};
+                                files.files['canvas/games.json'] = Object.assign({}, prev, { content: json });
+                            }
+                            return json;
+                        }
+
+                        function _syncGamesCollectionToWasmVfs(col) {
+                            try {
+                                const wasm = window.TraitsWasm;
+                                if (!wasm || typeof wasm.vfs_write !== 'function') return;
+                                const json = JSON.stringify(col || { active: null, games: {} });
+                                wasm.vfs_write('canvas/games.json', json);
+                                const activeId = col && col.active ? String(col.active) : '';
+                                const active = activeId && col && col.games ? col.games[activeId] : null;
+                                if (active && typeof active.content === 'string') {
+                                    wasm.vfs_write('canvas/app.html', active.content || '');
+                                }
+                            } catch (_) {}
+                        }
+
                         function readGamesCollection() {
                             try {
                                 const raw = localStorage.getItem('traits.pvfs');
                                 if (!raw) return { active: null, games: {} };
                                 const files = JSON.parse(raw);
-                                const json = files['canvas/games.json'];
-                                if (!json) return { active: null, games: {} };
-                                return JSON.parse(json);
+                                return _readGamesCollectionFromStore(files);
                             } catch(_) { return { active: null, games: {} }; }
                         }
 
@@ -593,8 +625,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                             try {
                                 const raw = localStorage.getItem('traits.pvfs') || '{}';
                                 const files = JSON.parse(raw);
-                                files['canvas/games.json'] = JSON.stringify(col || { active: null, games: {} });
+                                _writeGamesCollectionIntoStore(files, col);
                                 localStorage.setItem('traits.pvfs', JSON.stringify(files));
+                                _syncGamesCollectionToWasmVfs(col || { active: null, games: {} });
                             } catch(_) {}
                         }
 
@@ -789,9 +822,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             try {
                                 const raw = localStorage.getItem('traits.pvfs') || '{}';
                                 const files = JSON.parse(raw);
-                                const col = files['canvas/games.json']
-                                    ? JSON.parse(files['canvas/games.json'])
-                                    : { active: null, games: {} };
+                                const col = _readGamesCollectionFromStore(files);
                                 const id = makeLocalId();
                                 const ts = nowIso();
                                 col.games[id] = {
@@ -804,9 +835,10 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     updated: ts
                                 };
                                 col.active = id;
-                                files['canvas/games.json'] = JSON.stringify(col);
+                                _writeGamesCollectionIntoStore(files, col);
                                 files['canvas/app.html'] = '';
                                 localStorage.setItem('traits.pvfs', JSON.stringify(files));
+                                _syncGamesCollectionToWasmVfs(col);
                                 return id;
                             } catch(_) { return ''; }
                         }
@@ -815,9 +847,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             try {
                                 const raw = localStorage.getItem('traits.pvfs') || '{}';
                                 const files = JSON.parse(raw);
-                                const col = files['canvas/games.json']
-                                    ? JSON.parse(files['canvas/games.json'])
-                                    : { active: null, games: {} };
+                                const col = _readGamesCollectionFromStore(files);
                                 var byIdentity = {};
                                 for (var id in col.games) {
                                     var g = col.games[id];
@@ -891,8 +921,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 }
 
                                 if (removed > 0) {
-                                    files['canvas/games.json'] = JSON.stringify(col);
+                                    _writeGamesCollectionIntoStore(files, col);
                                     localStorage.setItem('traits.pvfs', JSON.stringify(files));
+                                    _syncGamesCollectionToWasmVfs(col);
                                 }
                                 return removed;
                             } catch(_) { return 0; }
@@ -2308,7 +2339,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                         // Also reconcile orphaned content (agent wrote canvas/app.html but games.json wasn't updated).
                         let __lastContent = '';
                         const __launchPayload = _consumeCanvasLaunchPayload();
-                        const __launchHasHint = !!(__launchPayload && (__launchPayload.id || __launchPayload.content));
+                        let __launchHasHint = !!(__launchPayload && (__launchPayload.id || __launchPayload.content));
                         if (__launchHasHint && __launchPayload.content) {
                             __lastContent = String(__launchPayload.content || '');
                             if (__lastContent) renderCanvas(__lastContent);
@@ -2318,53 +2349,58 @@ pub fn canvas(_args: &[Value]) -> Value {
                         const _existingHtml = readCanvasFromStorage();
                         if (__launchHasHint) {
                             (async () => {
-                                let tries = 0;
-                                while (!window._traitsSDK && tries < 40) {
-                                    await new Promise(r => setTimeout(r, 250));
-                                    tries++;
-                                }
-                                const sdk = window._traitsSDK;
-                                if (!sdk) return;
-                                let applied = false;
-                                if (__launchPayload.content) {
-                                    const g = __launchPayload;
-                                    const res = await sdk.call('sys.canvas', [
-                                        'load_game',
-                                        String(g.id || ''),
-                                        String(g.name || 'Game'),
-                                        String(g.version || ''),
-                                        String(g.content || ''),
-                                        String(g.scope || 'internal'),
-                                        String(g.owner || 'local'),
-                                        String(g.game_id || ''),
-                                        String(g.checksum || '')
-                                    ]);
-                                    applied = !!(res && res.ok && (!res.result || res.result.ok !== false));
-                                    // pvfs_write (called inside load_game) replaces localStorage with
-                                    // Rust {files:{},dirs:[]} format, erasing the JS top-level
-                                    // 'canvas/games.json' key. Re-promote it so the 1s poll and
-                                    // addSyncedGames both see the correct active game, not bowl-toss.
-                                    if (applied) {
-                                        try {
-                                            const _rp = JSON.parse(localStorage.getItem('traits.pvfs') || '{}');
-                                            if (!_rp['canvas/games.json'] && _rp.files && _rp.files['canvas/games.json']) {
-                                                _rp['canvas/games.json'] = _rp.files['canvas/games.json'].content || '';
-                                                if (_rp.files['canvas/app.html']) _rp['canvas/app.html'] = _rp.files['canvas/app.html'].content || '';
-                                                localStorage.setItem('traits.pvfs', JSON.stringify(_rp));
-                                            }
-                                        } catch(_) {}
+                                try {
+                                    let tries = 0;
+                                    while (!window._traitsSDK && tries < 40) {
+                                        await new Promise(r => setTimeout(r, 250));
+                                        tries++;
                                     }
+                                    const sdk = window._traitsSDK;
+                                    if (!sdk) return;
+                                    let applied = false;
+                                    if (__launchPayload.content) {
+                                        const g = __launchPayload;
+                                        const res = await sdk.call('sys.canvas', [
+                                            'load_game',
+                                            String(g.id || ''),
+                                            String(g.name || 'Game'),
+                                            String(g.version || ''),
+                                            String(g.content || ''),
+                                            String(g.scope || 'internal'),
+                                            String(g.owner || 'local'),
+                                            String(g.game_id || ''),
+                                            String(g.checksum || '')
+                                        ]);
+                                        applied = !!(res && res.ok && (!res.result || res.result.ok !== false));
+                                        // pvfs_write (called inside load_game) replaces localStorage with
+                                        // Rust {files:{},dirs:[]} format, erasing the JS top-level
+                                        // 'canvas/games.json' key. Re-promote it so the 1s poll and
+                                        // addSyncedGames both see the correct active game, not bowl-toss.
+                                        if (applied) {
+                                            try {
+                                                const _rp = JSON.parse(localStorage.getItem('traits.pvfs') || '{}');
+                                                if (!_rp['canvas/games.json'] && _rp.files && _rp.files['canvas/games.json']) {
+                                                    _rp['canvas/games.json'] = _rp.files['canvas/games.json'].content || '';
+                                                    if (_rp.files['canvas/app.html']) _rp['canvas/app.html'] = _rp.files['canvas/app.html'].content || '';
+                                                    localStorage.setItem('traits.pvfs', JSON.stringify(_rp));
+                                                }
+                                            } catch(_) {}
+                                        }
+                                    }
+                                    if (!applied && __launchPayload.id) {
+                                        const res2 = await sdk.call('sys.canvas', ['activate', String(__launchPayload.id || '')]);
+                                        applied = !!(res2 && res2.ok && (!res2.result || res2.result.ok !== false));
+                                    }
+                                    const activeContent = getActiveGameContent();
+                                    if (activeContent) {
+                                        __lastContent = activeContent;
+                                        renderCanvas(activeContent);
+                                    }
+                                    if (applied) renderProjectBar();
+                                } finally {
+                                    __launchHasHint = false;
+                                    _restoreLastCommunityCursor().catch(() => {});
                                 }
-                                if (!applied && __launchPayload.id) {
-                                    const res2 = await sdk.call('sys.canvas', ['activate', String(__launchPayload.id || '')]);
-                                    applied = !!(res2 && res2.ok && (!res2.result || res2.result.ok !== false));
-                                }
-                                const activeContent = getActiveGameContent();
-                                if (activeContent) {
-                                    __lastContent = activeContent;
-                                    renderCanvas(activeContent);
-                                }
-                                if (applied) renderProjectBar();
                             })();
                         } else if (!_initHasGames && _existingHtml) {
                             // Bootstrap: call sys.canvas set to create first game entry
@@ -3585,6 +3621,67 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 return result;
                             }
 
+                            async function hydrateCommunityGamesFromRest(force) {
+                                try {
+                                    const col = readGamesCollection();
+                                    const externalCount = Object.values(col.games || {}).filter(function(g) {
+                                        return (g.scope || g._scope || 'internal') === 'external';
+                                    }).length;
+                                    if (!force && externalCount > 0) return 0;
+
+                                    const listResp = await fetch('https://relay.slob.games/sync/games');
+                                    if (!listResp.ok) return 0;
+                                    const catalog = await listResp.json();
+                                    if (!Array.isArray(catalog) || !catalog.length) return 0;
+
+                                    const localHashes = (await localGamesWithHashes()).map(function(g) { return g.hash; });
+                                    const existing = new Set(localHashes);
+                                    for (const g of Object.values(col.games || {})) {
+                                        const h = String(g._sync_hash || g.checksum || '').trim().toLowerCase();
+                                        if (h) existing.add(h);
+                                    }
+
+                                    const missing = catalog.filter(function(g) {
+                                        const h = String(g && g.content_hash || '').trim().toLowerCase();
+                                        return !!h && !existing.has(h);
+                                    });
+                                    if (!missing.length) return 0;
+
+                                    const downloads = await Promise.all(missing.map(async function(g) {
+                                        try {
+                                            const hash = String(g && g.content_hash || '').trim().toLowerCase();
+                                            if (!hash) return null;
+                                            const resp = await fetch('https://relay.slob.games/sync/game/' + encodeURIComponent(hash));
+                                            if (!resp.ok) return null;
+                                            return await resp.json();
+                                        } catch (_) {
+                                            return null;
+                                        }
+                                    }));
+
+                                    const payload = downloads.filter(function(g) {
+                                        return !!(g && g.content && g.content_hash);
+                                    });
+                                    if (!payload.length) return 0;
+
+                                    const hadGames = getGamesList().length > 0;
+                                    const added = addSyncedGames(payload, localHashes);
+                                    if (added > 0) {
+                                        console.log('[sync] hydrated', added, 'community game(s) from REST bootstrap');
+                                        if (!hadGames && !__launchHasHint) {
+                                            const nextCol = readGamesCollection();
+                                            const firstId = nextCol.active || Object.keys(nextCol.games || {})[0];
+                                            if (firstId) activateGame(firstId);
+                                        }
+                                        _restoreLastCommunityCursor().catch(() => {});
+                                    }
+                                    return added;
+                                } catch (e) {
+                                    console.warn('[sync] rest bootstrap failed:', e);
+                                    return 0;
+                                }
+                            }
+
                             // Add synced games to local collection without disrupting active game
                             function addSyncedGames(games, localHashes) {
                                 if (!games.length) return 0;
@@ -3600,11 +3697,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     // Primary: read from JS flat top-level key.
                                     // Fallback: read from WASM Rust {files:{}} format when pvfs_write
                                     // (called by load_game/set) has overwritten the top-level key.
-                                    const col = files['canvas/games.json']
-                                        ? JSON.parse(files['canvas/games.json'])
-                                        : (files.files && files.files['canvas/games.json']
-                                            ? JSON.parse(files.files['canvas/games.json'].content || '{}')
-                                            : { active: null, games: {} });
+                                    const col = _readGamesCollectionFromStore(files);
 
                                     // Build set of existing content hashes
                                     const existing = new Set(localHashes || []);
@@ -3682,16 +3775,18 @@ pub fn canvas(_args: &[Value]) -> Value {
                                         if (!col.active && Object.keys(col.games).length > 0) {
                                             col.active = Object.keys(col.games)[0];
                                         }
-                                        files['canvas/games.json'] = JSON.stringify(col);
+                                        _writeGamesCollectionIntoStore(files, col);
                                         try {
                                             localStorage.setItem('traits.pvfs', JSON.stringify(files));
+                                            _syncGamesCollectionToWasmVfs(col);
                                         } catch (qe) {
                                             if (qe && qe.name === 'QuotaExceededError') {
                                                 dedupeLocalGames();
                                                 try {
                                                     var fresh = JSON.parse(localStorage.getItem('traits.pvfs') || '{}');
-                                                    fresh['canvas/games.json'] = files['canvas/games.json'];
+                                                    _writeGamesCollectionIntoStore(fresh, col);
                                                     localStorage.setItem('traits.pvfs', JSON.stringify(fresh));
+                                                    _syncGamesCollectionToWasmVfs(col);
                                                 } catch (_) {
                                                     console.warn('[sync] localStorage full, skipping sync write');
                                                     return 0;
@@ -3922,6 +4017,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 ws.onopen = () => {
                                     reconnectDelay = 2000;
                                     console.log('[sync] connected');
+                                    setTimeout(() => {
+                                        hydrateCommunityGamesFromRest(false).catch(() => {});
+                                    }, 900);
                                     // After catalog sync settles, check for missing resources
                                     setTimeout(_checkAllGamesForMissingResources, 4000);
                                     setTimeout(() => { _restoreLastCommunityCursor().catch(() => {}); }, 450);
@@ -3947,6 +4045,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                                             ws.send(JSON.stringify({ type: 'need', hashes: need }));
                                         }
 
+                                                                    setTimeout(() => {
+                                                                        hydrateCommunityGamesFromRest(false).catch(() => {});
+                                                                    }, 1600);
                                         // Prune stale external games only when catalog is non-empty.
                                         // Empty/transient catalogs (auth or relay hiccups) must not wipe local state.
                                         try {
