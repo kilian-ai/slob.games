@@ -1142,31 +1142,18 @@ const JS: &str = r##"
       var safeHash=String(hash||'').trim().toLowerCase();
       var id='s-'+safeHash.substring(0,16);
       var gameId=safeHash.substring(0,16)||slugify(gameName||'game');
-      var sdk=window._traitsSDK;
-      if(sdk){
-        try{
-          var loaded=await sdk.call('sys.canvas',[
-            'load_game',
-            id,
-            String(gameName||'Game'),
-            '',
-            String(content||''),
-            'external',
-            'community',
-            gameId,
-            safeHash
-          ]);
-          if(isTraitCallOk(loaded)){
-            goCanvas();
-            return;
-          }
-        }catch(_){ }
-      }
-      var col=readGamesCollection();
-      col.games[id]={name:gameName,content:content,scope:'external',version:'',created:new Date().toISOString(),updated:new Date().toISOString()};
-      col.active=id;
-      writeGamesCollection(col);
-      await activateAndGoCanvas(id);
+      // Build game object and use activateAndGoCanvas which properly
+      // sets the launch payload so canvas renders the correct game
+      var gameObj={
+        name:gameName,
+        content:content,
+        _scope:'external',
+        _sync_owner:'community',
+        _sync_game_id:gameId,
+        _sync_hash:safeHash,
+        version:''
+      };
+      await activateAndGoCanvas(id,gameObj);
     }catch(e){console.error('Failed to load game:',e)}
   }
 
