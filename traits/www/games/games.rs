@@ -72,6 +72,7 @@ const JS: &str = r##"
 (function(){
   function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
   function fmtSize(b){return b<1024?b+'B':(b/1024).toFixed(1)+'KB'}
+  var RELAY_BASES=['https://relay.slob.games/sync','https://relay.traits.build/sync'];
   var RELAY='https://relay.slob.games/sync';
   var __relayMineByGameId={};
   var __relayMineByOwnerGameId={};
@@ -83,14 +84,56 @@ const JS: &str = r##"
     __relayHealth={ok:!!ok,status:Number(status||0),msg:String(msg||'')};
   }
 
+  function relayCandidates(){
+    var out=[];
+    try{
+      var stored=String(localStorage.getItem('traits.relay.server')||'').trim().replace(/\/+$/,'');
+      if(stored&&/^https?:\/\//i.test(stored))out.push(stored+'/sync');
+    }catch(_){ }
+    RELAY_BASES.forEach(function(url){if(out.indexOf(url)<0)out.push(url)});
+    return out;
+  }
+
+  function rememberRelayBase(base){
+    RELAY=String(base||RELAY).replace(/\/+$/,'');
+    try{localStorage.setItem('traits.relay.server',RELAY.replace(/\/sync$/,''))}catch(_){ }
+  }
+
+  async function ensureRelayBase(){
+    var candidates=relayCandidates();
+    for(var i=0;i<candidates.length;i++){
+      var base=candidates[i];
+      try{
+        var res=await fetch(base+'/health',{cache:'no-store'});
+        var body=(await res.text()).trim().toLowerCase();
+        if(res.ok&&body.indexOf('ok')>=0){
+          rememberRelayBase(base);
+          return true;
+        }
+      }catch(_){ }
+    }
+    return false;
+  }
+
   async function fetchJson(path,headers){
     var h=headers||{};
     try{
-      var res=await fetch(RELAY+path,{headers:h,cache:'no-store'});
-      var text=await res.text();
-      var data=null;
-      try{data=text?JSON.parse(text):null}catch(_){data=null}
-      return {ok:res.ok,status:res.status,text:text,data:data};
+      var candidates=relayCandidates();
+      var lastErr='';
+      for(var i=0;i<candidates.length;i++){
+        var base=candidates[i];
+        try{
+          var res=await fetch(base+path,{headers:h,cache:'no-store'});
+          rememberRelayBase(base);
+          var text=await res.text();
+          var data=null;
+          try{data=text?JSON.parse(text):null}catch(_){data=null}
+          return {ok:res.ok,status:res.status,text:text,data:data};
+        }catch(e){
+          lastErr=String(e&&e.message||e||'network error');
+        }
+      }
+      return {ok:false,status:0,text:lastErr||'network error',data:null};
     }catch(e){
       return {ok:false,status:0,text:String(e&&e.message||e),data:null};
     }
@@ -1300,6 +1343,8 @@ const JS: &str = r##"
     }catch(e){console.error('Failed to load game:',e)}
   }
 
-  renderRelay().catch(function(){renderLocal()});
+  ensureRelayBase().finally(function(){
+    renderRelay().catch(function(){renderLocal()});
+  });
 })();
 "##;

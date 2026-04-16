@@ -402,6 +402,38 @@ let _relayServerKnown = false;
 let _relayPairAlive = false;
 let _relayPairKnown = false;
 let _relayPollTimer = null;
+const RELAY_CANDIDATES = ['https://relay.slob.games', 'https://relay.traits.build'];
+
+function relayCandidates() {
+  const out = [];
+  try {
+    const stored = String(localStorage.getItem('traits.relay.server') || '').trim().replace(/\/+$/, '');
+    if (stored && /^https?:\/\//i.test(stored)) out.push(stored);
+  } catch(_) {}
+  RELAY_CANDIDATES.forEach((url) => { if (!out.includes(url)) out.push(url); });
+  return out;
+}
+
+function rememberRelayServer(server) {
+  const clean = String(server || '').trim().replace(/\/+$/, '');
+  if (!clean) return;
+  try { localStorage.setItem('traits.relay.server', clean); } catch(_) {}
+}
+
+async function relayFetch(path, init) {
+  const reqPath = String(path || '').startsWith('/') ? String(path) : ('/' + String(path || ''));
+  let lastErr = new Error('relay unreachable');
+  for (const base of relayCandidates()) {
+    try {
+      const res = await fetch(base + reqPath, init || {});
+      rememberRelayServer(base);
+      return res;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr;
+}
 
 // ── Page rendering ──
 // Inject page HTML from a trait call into the frame.
@@ -843,11 +875,10 @@ function updateStatusBar() {
 async function refreshRelayStatus() {
   if (!sdk || typeof sdk.relayStatus !== 'function') return;
   const s = sdk.status || {};
-  const relayServer = s.relayServer || 'https://relay.slob.games';
   const relayEnabled = !!(s.relay || s.relayRememberedCode);
 
   try {
-    const r = await fetch(`${relayServer}/health`, { cache: 'no-store' });
+    const r = await relayFetch('/health', { cache: 'no-store' });
     const body = (await r.text()).trim().toLowerCase();
     _relayServerKnown = true;
     _relayServerAlive = r.ok && body.includes('ok');
@@ -1020,7 +1051,7 @@ async function _checkUserRole() {
   try {
     const token = (localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '').trim();
     if (!token) return;
-    const r = await fetch('https://relay.slob.games/sync/auth/me', {
+    const r = await relayFetch('/sync/auth/me', {
       headers: { 'Authorization': 'Bearer ' + token }
     });
     const data = await r.json();
@@ -1092,7 +1123,7 @@ function _initAuth() {
     const err = document.getElementById('authLoginError');
     btn.disabled = true; err.textContent = '';
     try {
-      const res = await fetch('https://relay.slob.games/sync/auth/login', {
+      const res = await relayFetch('/sync/auth/login', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: document.getElementById('authLoginUser').value.trim(), password: document.getElementById('authLoginPass').value })
       });
@@ -1114,7 +1145,7 @@ function _initAuth() {
     const err = document.getElementById('authRegError');
     btn.disabled = true; err.textContent = '';
     try {
-      const res = await fetch('https://relay.slob.games/sync/auth/register', {
+      const res = await relayFetch('/sync/auth/register', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: document.getElementById('authRegUser').value.trim(), email: document.getElementById('authRegEmail').value.trim(), password: document.getElementById('authRegPass').value })
       });
