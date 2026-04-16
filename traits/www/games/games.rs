@@ -1118,21 +1118,39 @@ const JS: &str = r##"
 
   async function fetchAndPlay(hash,name){
     try{
-      var res=await fetch(RELAY+'/game/'+hash);
-      var data=await res.json();
-      if(!data.content)return;
+      var content=null;
+      var gameName=name||'Game';
+      // Try P2P download first (relay WS + peer mesh, 3s timeout)
+      if(window.__requestGameP2P){
+        try{
+          var p2p=await window.__requestGameP2P(hash,3000);
+          if(p2p&&p2p.content){
+            content=p2p.content;
+            gameName=p2p.name||gameName;
+            console.log('[games] loaded via P2P:',gameName);
+          }
+        }catch(_){}
+      }
+      // Fall back to REST endpoint
+      if(!content){
+        var res=await fetch(RELAY+'/game/'+hash);
+        var data=await res.json();
+        content=data.content;
+        gameName=data.name||gameName;
+      }
+      if(!content)return;
       var safeHash=String(hash||'').trim().toLowerCase();
       var id='s-'+safeHash.substring(0,16);
-      var gameId=safeHash.substring(0,16)||slugify(name||'game');
+      var gameId=safeHash.substring(0,16)||slugify(gameName||'game');
       var sdk=window._traitsSDK;
       if(sdk){
         try{
           var loaded=await sdk.call('sys.canvas',[
             'load_game',
             id,
-            String(name||'Game'),
+            String(gameName||'Game'),
             '',
-            String(data.content||''),
+            String(content||''),
             'external',
             'community',
             gameId,
@@ -1145,7 +1163,7 @@ const JS: &str = r##"
         }catch(_){ }
       }
       var col=readGamesCollection();
-      col.games[id]={name:name,content:data.content,scope:'external',version:'',created:new Date().toISOString(),updated:new Date().toISOString()};
+      col.games[id]={name:gameName,content:content,scope:'external',version:'',created:new Date().toISOString(),updated:new Date().toISOString()};
       col.active=id;
       writeGamesCollection(col);
       await activateAndGoCanvas(id);

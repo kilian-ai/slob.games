@@ -1462,6 +1462,40 @@ export class GameRoomV3 {
         }
         break;
       }
+
+      case 'need-game': {
+        // P2P game request — check DB first, then forward to peers
+        const hash = String(data.hash || '').trim();
+        const nonce = String(data.nonce || '');
+        if (!hash || !nonce) return;
+        const row = this.sql.exec(
+          "SELECT content_hash, name, content, updated, owner, game_id, scope, version, checksum, resources FROM games WHERE content_hash = ? AND published = 1",
+          hash
+        ).toArray()[0];
+        if (row && row.content) {
+          const norm = this.normalizeExternalGameRow(row, true);
+          ws.send(JSON.stringify({ type: 'have-game', nonce, hash, name: norm.name || '', content: norm.content || '' }));
+        } else {
+          // Forward to all other clients
+          const fwd = JSON.stringify({ type: 'need-game', hash, nonce });
+          for (const sock of this.state.getWebSockets()) {
+            if (sock !== ws) try { sock.send(fwd); } catch (_) {}
+          }
+        }
+        break;
+      }
+
+      case 'have-game': {
+        // P2P game response from a peer — forward to all other clients
+        const nonce = String(data.nonce || '');
+        if (!nonce) return;
+        const raw2 = JSON.stringify(data);
+        if (raw2.length > 900_000) return;
+        for (const sock of this.state.getWebSockets()) {
+          if (sock !== ws) try { sock.send(raw2); } catch (_) {}
+        }
+        break;
+      }
     }
   }
 

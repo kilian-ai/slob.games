@@ -3771,6 +3771,63 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 }
                             }
 
+                            // ── P2P Game Download ──
+                            var _p2pGameResolvers = {}; // nonce → {resolve, timer}
+
+                            // Request a game by hash from peers via WS. Returns Promise<{name,content}|null>.
+                            window.__requestGameP2P = function(hash, timeoutMs) {
+                                return new Promise(function(resolve) {
+                                    if (!ws || ws.readyState !== WebSocket.OPEN) { resolve(null); return; }
+                                    var nonce = String(Date.now()) + Math.random().toString(36).slice(2, 8);
+                                    var timer = setTimeout(function() {
+                                        delete _p2pGameResolvers[nonce];
+                                        resolve(null);
+                                    }, timeoutMs || 3000);
+                                    _p2pGameResolvers[nonce] = { resolve: resolve, timer: timer };
+                                    ws.send(JSON.stringify({ type: 'need-game', hash: hash, nonce: nonce }));
+                                    console.log('[p2p] requesting game', hash.slice(0,8));
+                                });
+                            };
+
+                            function _handleNeedGame(data) {
+                                if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                                var hash = String(data.hash || '').trim();
+                                var nonce = String(data.nonce || '');
+                                if (!hash || !nonce) return;
+                                var col = readGamesCollection();
+                                for (var id in (col.games || {})) {
+                                    if (!Object.prototype.hasOwnProperty.call(col.games, id)) continue;
+                                    var g = col.games[id];
+                                    var gh = String(g._sync_hash || g.checksum || '').trim().toLowerCase();
+                                    if (gh === hash && g.content) {
+                                        console.log('[p2p] serving game', hash.slice(0,8), 'to peer');
+                                        ws.send(JSON.stringify({
+                                            type: 'have-game',
+                                            nonce: nonce,
+                                            hash: hash,
+                                            name: String(g.name || 'Untitled'),
+                                            content: String(g.content)
+                                        }));
+                                        return;
+                                    }
+                                }
+                            }
+
+                            function _handleHaveGame(data) {
+                                var nonce = String(data.nonce || '');
+                                var entry = _p2pGameResolvers[nonce];
+                                if (!entry) return;
+                                delete _p2pGameResolvers[nonce];
+                                clearTimeout(entry.timer);
+                                var content = String(data.content || '');
+                                if (content) {
+                                    console.log('[p2p] received game', String(data.hash || '').slice(0,8), 'from peer');
+                                    entry.resolve({ name: String(data.name || 'Untitled'), content: content });
+                                } else {
+                                    entry.resolve(null);
+                                }
+                            }
+
                             function connect() {
                                 if (ws) return;
                                 try {
@@ -3954,6 +4011,14 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     }
                                     if (data.type === 'have-resources') {
                                         _handleHaveResources(data);
+                                    }
+
+                                    // ── P2P Game Download ──
+                                    if (data.type === 'need-game') {
+                                        _handleNeedGame(data);
+                                    }
+                                    if (data.type === 'have-game') {
+                                        _handleHaveGame(data);
                                     }
                                 };
 
