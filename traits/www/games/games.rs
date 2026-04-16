@@ -102,7 +102,8 @@ const JS: &str = r##"
     return String(s||'').trim().toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'')||'untitled';
   }
   function relayGameIdForLocal(id,g){
-    return String((g&&(g._sync_game_id||g.game_id))||slugify((g&&g.name)||id||'untitled')).trim().toLowerCase();
+    // Use stable IDs, never name-derived slug, so rename cannot change relay identity.
+    return String((g&&(g._sync_game_id||g.game_id))||id||'untitled').trim().toLowerCase();
   }
   function relayOwnerForLocal(g){
     return String((g&&(g._sync_owner||g.owner))||__relayUser||'').trim().toLowerCase();
@@ -936,15 +937,19 @@ const JS: &str = r##"
         col=readGamesCollection();
       }
 
-      // Mirror rule: when logged in, keep only relay-linked entries for this user.
+      // Mirror rule: be conservative.
+      // Never prune internal/local games from a transient relay snapshot.
+      // Only prune external mirror copies that are truly absent server-side.
       if(getToken()&&__relayUser){
         var removed=false;
         for(var rid in (col.games||{})){
           var rg2=col.games[rid]||{};
           var gid2=String(rg2._sync_game_id||'').trim().toLowerCase();
           var own2=String(rg2._sync_owner||__relayUser||'').trim().toLowerCase();
+          var scope2=String((rg2._scope||rg2.scope||'internal')).trim().toLowerCase();
           // Keep true orphan entries locally until auto-sync succeeds.
           if(!gid2){continue}
+          if(scope2!=='external'){continue}
           if(!mirrorKeys[own2+'/'+gid2]){delete col.games[rid];removed=true;continue}
         }
         if(removed)changed=true;
@@ -1071,7 +1076,7 @@ const JS: &str = r##"
         updated:g.updated||'',
         game:g
       };
-      var ident=slugify(g.name||id||'untitled');
+      var ident=String((g&&g._sync_game_id)||id||'untitled').trim().toLowerCase();
       var prev=byIdentity[ident];
       if(!prev){
         byIdentity[ident]=row;
@@ -1196,9 +1201,9 @@ const JS: &str = r##"
         }
 
         if(myGames){
-          if(await mergeDuplicateGamesByName(myGames)){
-            myGames=await fetchInternalGames();
-          }
+          // Do not auto-merge by name during normal render flow.
+          // It is destructive (can rewrite IDs/delete variants) and can hide
+          // a just-renamed game before relay state settles.
           await reconcileLocalAndRelay(myGames);
           var rows=[];
           myGames.forEach(function(g){
