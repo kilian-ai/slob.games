@@ -2090,6 +2090,10 @@ fn execute_leaf_command(
                     "command": "relay-monitor",
                     "args": args,
                 })
+            } else if first == "storage-inspector" {
+                serde_json::json!({
+                    "command": "storage-inspector",
+                })
             } else {
                 serde_json::json!({
                     "path": first,
@@ -3259,6 +3263,7 @@ fn format_help() -> String {
     s.push_str(&format!("  {GRAY}list sys{RESET}\r\n"));
     s.push_str(&format!("  {GRAY}search checksum{RESET}\r\n"));
     s.push_str(&format!("  {GRAY}lua relay-monitor{RESET}\r\n"));
+    s.push_str(&format!("  {GRAY}lua storage-inspector{RESET}\r\n"));
     s
 }
 

@@ -253,6 +253,7 @@ export async function createTerminal(mountEl, opts = {}) {
         const trimmed = String(name || '').trim();
         if (!trimmed) return '';
         if (trimmed === 'relay-monitor') return 'tools/relay-monitor.lua';
+        if (trimmed === 'storage-inspector') return 'tools/storage-inspector.lua';
         return trimmed.replace(/^\.\//, '');
     };
 
@@ -357,6 +358,89 @@ export async function createTerminal(mountEl, opts = {}) {
         }
 
         const script = await readVfsText('tools/relay-monitor.lua');
+        return runLuaCode(script, input);
+    };
+
+    const runLuaStorageInspector = async () => {
+        const input = { keys: [], games: [], sprites: [], other_vfs: [] };
+        try {
+            // Estimate quota (most browsers: 5MB for localStorage)
+            input.quota_bytes = 5 * 1024 * 1024;
+
+            // Enumerate all localStorage keys and sizes
+            let totalUsed = 0;
+            const keyList = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (!k) continue;
+                const val = localStorage.getItem(k) || '';
+                // JS strings are UTF-16, each char = 2 bytes in storage
+                const bytes = (k.length + val.length) * 2;
+                totalUsed += bytes;
+                keyList.push({ key: k, size: bytes });
+            }
+            keyList.sort((a, b) => b.size - a.size);
+            input.keys = keyList;
+            input.used_bytes = totalUsed;
+
+            // Parse traits.pvfs
+            const pvfsRaw = localStorage.getItem('traits.pvfs') || '{}';
+            input.pvfs_bytes = (('traits.pvfs').length + pvfsRaw.length) * 2;
+
+            const files = JSON.parse(pvfsRaw);
+            // Detect WASM Rust {files:{}} format vs flat format
+            const flat = files.files ? Object.fromEntries(
+                Object.entries(files.files).map(([k, v]) => [k, typeof v === 'object' && v.content ? v.content : v])
+            ) : files;
+
+            // Parse games collection
+            let gamesTotal = 0;
+            const gamesJson = flat['canvas/games.json'];
+            if (gamesJson) {
+                const col = JSON.parse(gamesJson);
+                const gamesMap = col.games || {};
+                for (const [id, g] of Object.entries(gamesMap)) {
+                    const content = g.content || '';
+                    const sz = content.length * 2;
+                    gamesTotal += sz;
+                    input.games.push({
+                        id: id,
+                        name: g.name || id,
+                        scope: g.scope || g._scope || 'internal',
+                        size: sz,
+                        hash: g._sync_hash || g.checksum || '',
+                        active: col.active === id,
+                    });
+                }
+                // Sort: active first, then by size desc
+                input.games.sort((a, b) => {
+                    if (a.active !== b.active) return a.active ? -1 : 1;
+                    return b.size - a.size;
+                });
+            }
+            input.games_total = gamesTotal;
+
+            // Categorize other VFS entries
+            let spritesTotal = 0;
+            for (const [path, val] of Object.entries(flat)) {
+                if (path === 'canvas/games.json') continue;
+                const sz = (typeof val === 'string' ? val.length : JSON.stringify(val).length) * 2;
+                const isSprite = /^canvas\/sprites\/|\.png$|\.svg$|\.gif$|\.jpg$|\.webp$/i.test(path);
+                if (isSprite) {
+                    spritesTotal += sz;
+                    input.sprites.push({ path: path, size: sz });
+                } else {
+                    input.other_vfs.push({ path: path, size: sz });
+                }
+            }
+            input.sprites.sort((a, b) => b.size - a.size);
+            input.other_vfs.sort((a, b) => b.size - a.size);
+            input.sprites_total = spritesTotal;
+        } catch (e) {
+            input.error = e && e.message ? e.message : String(e);
+        }
+
+        const script = await readVfsText('tools/storage-inspector.lua');
         return runLuaCode(script, input);
     };
 
@@ -590,8 +674,11 @@ export async function createTerminal(mountEl, opts = {}) {
                     const payloadObj = payload && typeof payload === 'object' ? payload : {};
                     const path = resolveLuaPath(payloadObj.path || '');
                     const isRelayMonitor = payloadObj.command === 'relay-monitor' || path === 'tools/relay-monitor.lua';
+                    const isStorageInspector = payloadObj.command === 'storage-inspector' || path === 'tools/storage-inspector.lua';
                     if (isRelayMonitor) {
                         outcome = await runLuaRelayMonitor(Array.isArray(payloadObj.args) ? payloadObj.args : []);
+                    } else if (isStorageInspector) {
+                        outcome = await runLuaStorageInspector();
                     } else {
                         if (!path) throw new Error('missing lua script path');
                         const script = await readVfsText(path);
