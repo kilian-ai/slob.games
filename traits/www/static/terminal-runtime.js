@@ -10,151 +10,6 @@
   style.textContent = "/* \u2500\u2500 Shared Terminal Panel \u2500\u2500 */\n.terminal-wrap {\n    position: fixed;\n    bottom: 0;\n    left: 0;\n    right: 0;\n    z-index: 9999;\n    background: #0d1117;\n    border-top: 1px solid #30363d;\n}\n.terminal-header {\n    display: flex;\n    align-items: center;\n    gap: 1rem;\n    padding: 0.4rem 1rem;\n    background: #161b22;\n    cursor: pointer;\n    user-select: none;\n}\n.terminal-toggle {\n    background: none;\n    border: none;\n    color: #8b949e;\n    font-size: 0.85rem;\n    font-weight: 600;\n    cursor: pointer;\n    padding: 0;\n}\n.terminal-hint {\n    font-size: 0.75rem;\n    color: #484f58;\n}\n.terminal-status {\n    font-size: 0.7rem;\n    color: #484f58;\n    margin-left: auto;\n}\n.terminal-status.ready { color: #3fb950; }\n.terminal-status.loading { color: #d29922; }\n.terminal-status.error { color: #f85149; }\n.terminal-container {\n    height: 300px;\n    padding: 4px;\n    overflow: hidden;\n}\n.terminal-container.collapsed {\n    height: 0;\n    padding: 0;\n    overflow: hidden;\n}\n.xterm-mount {\n    height: 100%;\n}\n";
   document.head.appendChild(style);
 })();
-// Shared terminal surface for traits.build and sibling SPAs.
-// Keep this file dependency-free so it can be concatenated into classic scripts.
-(function() {
-  if (typeof window === 'undefined') return;
-
-  const defaults = {
-    sentinels: {
-      clear: '\\x1b[CLEAR]',
-      restOpen: '\\x1b[REST]',
-      restClose: '\\x1b[/REST]',
-      webllmOpen: '\\x1b[WEBLLM]',
-      webllmClose: '\\x1b[/WEBLLM]',
-      voiceOpen: '\\x1b[VOICE]',
-      voiceClose: '\\x1b[/VOICE]'
-    },
-    prompt: '\\x1b[32mtraits \\x1b[0m',
-    storageKeys: {
-      scrollback: 'traits.terminal.scrollback',
-      history: 'traits.terminal.history',
-      pvfs: 'traits.pvfs',
-      legacyVfs: 'traits.terminal.vfs'
-    }
-  };
-
-  window.TerminalShared = window.TerminalShared || {};
-  window.TerminalShared.defaults = defaults;
-})();
-// Shared terminal adapters: transport + persistence.
-// Host repos can override/extend these adapters while keeping terminal core stable.
-(function() {
-  if (typeof window === 'undefined') return;
-
-  function createPersistenceAdapter(opts) {
-    const keys = opts && opts.keys ? opts.keys : {};
-    const getBackgroundCall = opts && opts.getBackgroundCall ? opts.getBackgroundCall : () => null;
-    const serializeAddon = opts && opts.serializeAddon ? opts.serializeAddon : null;
-
-    const saveState = () => {
-      if (serializeAddon) {
-        try { localStorage.setItem(keys.scrollback, serializeAddon.serialize()); } catch (_) {}
-      }
-      const backgroundCall = getBackgroundCall();
-      if (!backgroundCall) return;
-
-      backgroundCall('cli_get_history').then(res => {
-        if (res && res.ok && typeof res.result === 'string') {
-          try { localStorage.setItem(keys.history, res.result); } catch (_) {}
-        }
-      }).catch(() => {});
-
-      backgroundCall('pvfs_dump').then(res => {
-        if (res && res.ok && typeof res.result === 'string') {
-          try {
-            localStorage.setItem(keys.pvfs, res.result);
-            if (keys.legacyVfs) localStorage.setItem(keys.legacyVfs, res.result);
-          } catch (_) {}
-        }
-      }).catch(() => {});
-    };
-
-    const attachAutoSaveHandlers = () => {
-      window.addEventListener('pagehide', saveState);
-      window.addEventListener('hashchange', saveState);
-      document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'hidden') saveState();
-      });
-    };
-
-    const restoreSession = async () => {
-      const backgroundCall = getBackgroundCall();
-      if (!backgroundCall) return;
-
-      const savedHistory = localStorage.getItem(keys.history);
-      if (savedHistory) {
-        try { await backgroundCall('cli_set_history', { history_json: savedHistory }); } catch (_) {}
-      }
-
-      let savedVfs = localStorage.getItem(keys.pvfs);
-      if (!savedVfs && keys.legacyVfs) {
-        savedVfs = localStorage.getItem(keys.legacyVfs);
-        if (savedVfs) {
-          try { localStorage.setItem(keys.pvfs, savedVfs); } catch (_) {}
-        }
-      }
-      if (savedVfs) {
-        try { await backgroundCall('pvfs_load', { json: savedVfs }); } catch (_) {}
-      }
-    };
-
-    return { saveState, attachAutoSaveHandlers, restoreSession };
-  }
-
-  async function initTraitsTransport(ctx) {
-    let activeSdk = ctx.activeSdk || (window._traitsSDK || null);
-    let backgroundCall = null;
-    let wasm = null;
-
-    if (activeSdk && typeof activeSdk.backgroundCall === 'function') {
-      await activeSdk.initWorkerPool();
-      backgroundCall = (cmd, payload = {}) => activeSdk.backgroundCall(cmd, payload);
-      const status = activeSdk.status || {};
-      if (ctx.setStatus) ctx.setStatus('WASM worker', 'ready');
-      if (window.TraitsWasm && window.TraitsWasm.register_task) {
-        try { window.TraitsWasm.register_task('terminal', 'Terminal', 'service', Date.now(), 'xterm.js CLI session'); } catch (_) {}
-      }
-      if (ctx.onReady) ctx.onReady({ wasm: null, traitCount: status.traits || 0, wasmCount: status.callable || 0, background: true });
-      return { activeSdk, backgroundCall, wasm };
-    }
-
-    if (window.TraitsWasm && window.TraitsWasm.cli_input) {
-      wasm = window.TraitsWasm;
-      const count = wasm.is_registered ? JSON.parse(wasm.callable_traits()).length : 0;
-      if (ctx.setStatus) ctx.setStatus('WASM (SPA)', 'ready');
-      if (ctx.onReady) ctx.onReady({ wasm, traitCount: 0, wasmCount: count, background: false });
-    } else {
-      const wasmJsUrl = '/wasm/traits_wasm.js';
-      const wasmBinUrl = '/wasm/traits_wasm_bg.wasm';
-      const mod = await import(wasmJsUrl);
-      await mod.default(wasmBinUrl);
-      const initResult = JSON.parse(mod.init());
-      wasm = mod;
-      const count = initResult.traits_registered || 0;
-      const wasmCount = initResult.wasm_callable || 0;
-      if (ctx.setStatus) ctx.setStatus(`${count} traits (${wasmCount} WASM)`, 'ready');
-      if (ctx.onReady) ctx.onReady({ wasm, traitCount: count, wasmCount, background: false });
-    }
-
-    if (window.Traits) {
-      activeSdk = new window.Traits({ useWasm: false, useHelper: false, server: '' });
-      activeSdk.attachWasm(wasm);
-      activeSdk.setBackgroundBinding('sdk.background.direct');
-      backgroundCall = (cmd, payload = {}) => activeSdk.backgroundCall(cmd, payload, { impl: 'sdk.background.direct' });
-    }
-
-    if (wasm && wasm.register_task) {
-      try { wasm.register_task('terminal', 'Terminal', 'service', Date.now(), 'xterm.js CLI session'); } catch (_) {}
-    }
-
-    return { activeSdk, backgroundCall, wasm };
-  }
-
-  window.TerminalSharedAdapters = window.TerminalSharedAdapters || {};
-  window.TerminalSharedAdapters.createPersistenceAdapter = createPersistenceAdapter;
-  window.TerminalSharedAdapters.initTraitsTransport = initTraitsTransport;
-})();
 // ═══════════════════════════════════════════
 // ── Shared WASM-powered Terminal ──
 // Thin display layer: all line editing, history,
@@ -174,6 +29,7 @@ const _sentinels = _sharedDefaults?.sentinels || {};
 const CLEAR_SENTINEL = _sentinels.clear || '\x1b[CLEAR]';
 const REST_RE = new RegExp(`${(_sentinels.restOpen || '\\x1b\\[REST\\]').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([\\s\\S]*?)${(_sentinels.restClose || '\\x1b\\[/REST\\]').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
 const WEBLLM_RE = new RegExp(`${(_sentinels.webllmOpen || '\\x1b\\[WEBLLM\\]').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([\\s\\S]*?)${(_sentinels.webllmClose || '\\x1b\\[/WEBLLM\\]').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
+const LUA_RE = new RegExp(`${(_sentinels.luaOpen || '\\x1b\\[LUA\\]').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([\\s\\S]*?)${(_sentinels.luaClose || '\\x1b\\[/LUA\\]').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
 const VOICE_RE = new RegExp(`${(_sentinels.voiceOpen || '\\x1b\\[VOICE\\]').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([\\s\\S]*?)${(_sentinels.voiceClose || '\\x1b\\[/VOICE\\]').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
 // Source of truth: kernel/cli/cli.rs PROMPT constant. Must stay in sync.
 const PROMPT = _sharedDefaults?.prompt || '\x1b[32mtraits \x1b[0m';
@@ -381,6 +237,140 @@ async function createTerminal(mountEl, opts = {}) {
 
     // ── Input → WASM session → output (with REST fallback) ──
     let restPending = false;
+
+    const writeText = (text) => {
+        const s = String(text || '');
+        if (s) term.write(s.replace(/\n/g, '\r\n'));
+    };
+
+    const writeLine = (text = '') => {
+        writeText(text);
+        term.write('\r\n');
+    };
+
+    const parseLuaJson = (raw) => {
+        const text = String(raw || '').trim();
+        if (!text) return {};
+        try { return JSON.parse(text); } catch (_) { return text; }
+    };
+
+    const unwrapResult = (res) => {
+        if (res && typeof res === 'object' && Object.prototype.hasOwnProperty.call(res, 'result')) {
+            return res.result;
+        }
+        return res;
+    };
+
+    const resolveLuaPath = (name) => {
+        const trimmed = String(name || '').trim();
+        if (!trimmed) return '';
+        if (trimmed === 'relay-monitor') return 'tools/relay-monitor.lua';
+        return trimmed.replace(/^\.\//, '');
+    };
+
+    const parseRelayMonitorToken = (args) => {
+        for (let i = 0; i < args.length; i++) {
+            if (args[i] === '--token') return args[i + 1] || '';
+            if (args[i] && args[i].startsWith('--token=')) return args[i].slice('--token='.length);
+        }
+        try {
+            return (localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '').trim();
+        } catch (_) {
+            return '';
+        }
+    };
+
+    const readVfsText = async (path) => {
+        if (!activeSdk) throw new Error('SDK unavailable');
+        const res = await activeSdk.call('sys.vfs', ['read', path]);
+        const data = unwrapResult(res);
+        if (!res?.ok || !data?.ok) {
+            throw new Error(data?.error || res?.error || `failed to read ${path}`);
+        }
+        return String(data.content || '');
+    };
+
+    const runLuaCode = async (code, input) => {
+        if (!activeSdk) return { ok: false, error: 'SDK unavailable' };
+        const res = await activeSdk.call('sys.lua', [String(code || ''), input || {}]);
+        if (!res?.ok) return { ok: false, error: res?.error || 'sys.lua call failed' };
+        return unwrapResult(res) || { ok: false, error: 'empty lua result' };
+    };
+
+    const printLuaOutcome = (outcome) => {
+        if (!outcome || typeof outcome !== 'object') {
+            writeLine('\x1b[31mLua error: invalid result\x1b[0m');
+            return;
+        }
+        const stdout = Array.isArray(outcome.stdout) ? outcome.stdout : [];
+        const stderr = Array.isArray(outcome.stderr) ? outcome.stderr : [];
+        stdout.forEach((line) => writeLine(String(line)));
+        stderr.forEach((line) => writeLine(`\x1b[31m${String(line)}\x1b[0m`));
+        if (outcome.ok === false) {
+            writeLine(`\x1b[31mLua error: ${String(outcome.error || 'unknown error')}\x1b[0m`);
+            return;
+        }
+        if (!stdout.length && outcome.result !== undefined && outcome.result !== null && outcome.result !== '') {
+            const text = typeof outcome.result === 'string'
+                ? outcome.result
+                : JSON.stringify(outcome.result, null, 2);
+            writeLine(text);
+        }
+    };
+
+    const fetchJson = async (url, headers) => {
+        const res = await fetch(url, { headers: headers || {} });
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
+        return res.json();
+    };
+
+    const fetchText = async (url, headers) => {
+        const res = await fetch(url, { headers: headers || {} });
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
+        return res.text();
+    };
+
+    const runLuaRelayMonitor = async (args) => {
+        const token = parseRelayMonitorToken(args);
+        const headers = token ? { Authorization: `Bearer ${token}` } : {};
+        const input = {
+            relay: 'https://relay.slob.games',
+            token_provided: !!token,
+        };
+
+        try {
+            input.games = await fetchJson('https://relay.slob.games/sync/games');
+        } catch (e) {
+            input.games = [];
+            input.games_error = e && e.message ? e.message : String(e);
+        }
+
+        try {
+            input.scores = await fetchJson('https://relay.slob.games/sync/scores');
+        } catch (e) {
+            input.scores = [];
+            input.scores_error = e && e.message ? e.message : String(e);
+        }
+
+        try {
+            input.manifest = await fetchText('https://relay.slob.games/sync/games.toml');
+        } catch (e) {
+            input.manifest = '';
+            input.manifest_error = e && e.message ? e.message : String(e);
+        }
+
+        if (token) {
+            try {
+                input.my_games = await fetchJson('https://relay.slob.games/sync/internal/games', headers);
+            } catch (e) {
+                input.my_games = [];
+                input.my_games_error = e && e.message ? e.message : String(e);
+            }
+        }
+
+        const script = await readVfsText('tools/relay-monitor.lua');
+        return runLuaCode(script, input);
+    };
 
     // ── WebLLM progress — show model loading status inline ──
     window.addEventListener('webllm-progress', (e) => {
@@ -595,6 +585,34 @@ async function createTerminal(mountEl, opts = {}) {
                 } catch (e) {
                     term.write(`\x1b[31mWebLLM parse error: ${e.message}\x1b[0m\r\n`);
                     term.write(PROMPT);
+                    restPending = false;
+                    requestAnimationFrame(saveState);
+                }
+                return;
+            }
+
+            const luaMatch = output.match(LUA_RE);
+            if (luaMatch) {
+                const visible = output.replace(LUA_RE, '');
+                if (visible) term.write(visible);
+                try {
+                    const payload = parseLuaJson(luaMatch[1]);
+                    restPending = true;
+                    let outcome;
+                    if (payload && typeof payload === 'object' && payload.command === 'relay-monitor') {
+                        outcome = await runLuaRelayMonitor(Array.isArray(payload.args) ? payload.args : []);
+                    } else {
+                        const path = resolveLuaPath(payload && typeof payload === 'object' ? payload.path : '');
+                        if (!path) throw new Error('missing lua script path');
+                        const script = await readVfsText(path);
+                        outcome = await runLuaCode(script, payload && typeof payload === 'object' ? (payload.input || {}) : {});
+                    }
+                    printLuaOutcome(outcome);
+                    term.write(PROMPT);
+                } catch (e) {
+                    term.write(`\x1b[31mLua error: ${e && e.message ? e.message : String(e)}\x1b[0m\r\n`);
+                    term.write(PROMPT);
+                } finally {
                     restPending = false;
                     requestAnimationFrame(saveState);
                 }

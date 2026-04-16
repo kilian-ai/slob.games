@@ -49,6 +49,10 @@ pub const REST_SENTINEL_END: &str = "\x1b[/REST]";
 pub const WEBLLM_SENTINEL_START: &str = "\x1b[WEBLLM]";
 pub const WEBLLM_SENTINEL_END: &str = "\x1b[/WEBLLM]";
 
+/// Lua dispatch sentinels — frontend intercepts and runs browser-side Lua helpers.
+pub const LUA_SENTINEL_START: &str = "\x1b[LUA]";
+pub const LUA_SENTINEL_END: &str = "\x1b[/LUA]";
+
 // ── Key events ──
 
 pub enum KeyEvent {
@@ -503,9 +507,12 @@ impl CliSession {
                 if result.contains(CLEAR_SENTINEL) {
                     return format!("{CLEAR_SENTINEL}{PROMPT}");
                 }
-                if result.contains(REST_SENTINEL_START) || result.contains(WEBLLM_SENTINEL_START) {
+                if result.contains(REST_SENTINEL_START)
+                    || result.contains(WEBLLM_SENTINEL_START)
+                    || result.contains(LUA_SENTINEL_START)
+                {
                     out.push_str(&result);
-                    return out; // No prompt — JS handles async REST/WebLLM
+                    return out; // No prompt — JS handles async REST/WebLLM/Lua
                 }
                 if !result.is_empty() {
                     out.push_str(&result);
@@ -787,9 +794,10 @@ impl CliSession {
 
                     if result.contains(REST_SENTINEL_START)
                         || result.contains(WEBLLM_SENTINEL_START)
+                        || result.contains(LUA_SENTINEL_START)
                     {
                         out.push_str(&result);
-                        return out; // No prompt — JS handles async REST/WebLLM
+                        return out; // No prompt — JS handles async REST/WebLLM/Lua
                     }
                     if !result.is_empty() && !result.contains(CLEAR_SENTINEL) {
                         out.push_str(&result);
@@ -2072,6 +2080,23 @@ fn execute_leaf_command(
         }
         "version" | "v" => format!("{CYAN}traits.build{RESET} {}", backend.version()),
         "clear" | "cls" => CLEAR_SENTINEL.to_string(),
+        "lua" => {
+            if args.is_empty() {
+                return format!("{RED}Usage: lua <script>{RESET}");
+            }
+            let first = args.first().map(|s| s.as_str()).unwrap_or("");
+            let payload = if first == "relay-monitor" {
+                serde_json::json!({
+                    "command": "relay-monitor",
+                    "args": args,
+                })
+            } else {
+                serde_json::json!({
+                    "path": first,
+                })
+            };
+            format!("{LUA_SENTINEL_START}{}{LUA_SENTINEL_END}", payload)
+        }
 
         _ => {
             let all = backend.all_paths();
@@ -3162,6 +3187,9 @@ fn format_help() -> String {
         "  {GREEN}cat{RESET} {GRAY}<file>{RESET}              Read a VFS file\r\n"
     ));
     s.push_str(&format!(
+        "  {GREEN}lua{RESET} {GRAY}<script>{RESET}            Run a seeded Lua tool or VFS Lua file\r\n"
+    ));
+    s.push_str(&format!(
         "  {GREEN}write{RESET} {GRAY}<file> <content>{RESET}  Write text to a VFS file\r\n"
     ));
     s.push_str(&format!(
@@ -3230,6 +3258,7 @@ fn format_help() -> String {
     s.push_str(&format!("  {GRAY}info sys.list{RESET}\r\n"));
     s.push_str(&format!("  {GRAY}list sys{RESET}\r\n"));
     s.push_str(&format!("  {GRAY}search checksum{RESET}\r\n"));
+    s.push_str(&format!("  {GRAY}lua relay-monitor{RESET}\r\n"));
     s
 }
 
@@ -3486,7 +3515,7 @@ pub fn tab_completions(prefix: &str, all_paths: &[String]) -> (Vec<String>, Stri
 fn shell_builtin_commands() -> Vec<String> {
     [
         "help", "h", "?", "list", "info", "i", "call", "c", "search", "s", "version", "v", "clear", "cls",
-        "echo", "pwd", "true", "false", "cat", "head", "tail", "grep", "wc", "sed", "test", "[", "find", "curl",
+        "echo", "pwd", "true", "false", "cat", "head", "tail", "grep", "wc", "sed", "test", "[", "find", "curl", "lua",
         "vi", "ee", "stat", "mkdir", "write", "tee", "rm", "ls", "cd", "chat",
     ]
     .iter()
@@ -3505,7 +3534,7 @@ fn should_complete_vfs_paths(cmd: &str, parts: &[String], ends_space: bool) -> b
 
     match cmd {
         // first-arg path commands
-        "ls" | "cd" | "find" | "mkdir" | "rm" | "stat" | "vi" | "ee" => arg_index == 0,
+        "ls" | "cd" | "find" | "mkdir" | "rm" | "stat" | "vi" | "ee" | "lua" => arg_index == 0,
         // read/write commands where additional args can still be file paths
         "cat" | "head" | "tail" | "grep" | "wc" | "sed" => arg_index <= 1,
         // write/tee complete only destination path (first arg), not content payload

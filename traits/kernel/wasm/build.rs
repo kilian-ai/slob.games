@@ -96,6 +96,10 @@ fn main() {
     if docs_dir_watch.is_dir() {
         watch_dirs_recursive(&docs_dir_watch);
     }
+    let data_vfs_tools_dir_watch = root_dir.join("data/vfs/tools");
+    if data_vfs_tools_dir_watch.is_dir() {
+        watch_dirs_recursive(&data_vfs_tools_dir_watch);
+    }
 
     let mut entries: Vec<(String, String)> = Vec::new();
     let mut wasm_traits: Vec<WasmTrait> = Vec::new();
@@ -172,6 +176,29 @@ fn main() {
                 bt.push_str(&format!(
                     "    ({:?}, include_str!({:?}), {}),\n",
                     rel_str, md_path.to_string_lossy(), mtime
+                ));
+            }
+        }
+    }
+    bt.push_str("];\n");
+
+    // ── Generate BUILTIN_VFS ──
+    // Embeds curated seeded VFS files from data/vfs/tools/** for browser startup.
+    // Tuple: (vfs_rel_path, content, mtime_unix)
+    bt.push_str("\npub const BUILTIN_VFS: &[(&str, &str, u64)] = &[\n");
+    let data_vfs_dir = root_dir.join("data/vfs");
+    let data_vfs_tools_dir = data_vfs_dir.join("tools");
+    if data_vfs_tools_dir.is_dir() {
+        let mut vfs_paths: Vec<PathBuf> = Vec::new();
+        collect_all_files(&data_vfs_tools_dir, &mut vfs_paths);
+        vfs_paths.sort();
+        for vfs_path in &vfs_paths {
+            if let Ok(rel) = vfs_path.strip_prefix(&data_vfs_dir) {
+                let rel_str = rel.to_string_lossy().to_string();
+                let mtime = file_mtime(vfs_path);
+                bt.push_str(&format!(
+                    "    ({:?}, include_str!({:?}), {}),\n",
+                    rel_str, vfs_path.to_string_lossy(), mtime
                 ));
             }
         }
@@ -505,6 +532,20 @@ fn collect_md_files(dir: &Path, out: &mut Vec<PathBuf>) {
             if path.is_dir() {
                 collect_md_files(&path, out);
             } else if path.extension().map(|e| e == "md").unwrap_or(false) {
+                out.push(path);
+            }
+        }
+    }
+}
+
+/// Recursively collect all files under a directory.
+fn collect_all_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    if let Ok(rd) = fs::read_dir(dir) {
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_all_files(&path, out);
+            } else {
                 out.push(path);
             }
         }

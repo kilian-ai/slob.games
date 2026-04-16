@@ -45,12 +45,9 @@ pub fn lua(args: &[Value]) -> Value {
 
 #[cfg(target_arch = "wasm32")]
 fn run_in_browser_lua(code: &str, input: &Value) -> Value {
-    let window = match web_sys::window() {
-        Some(w) => w,
-        None => return json!({ "ok": false, "error": "window is unavailable" }),
-    };
+    let global = js_sys::global();
 
-    let runner = match js_sys::Reflect::get(&window, &JsValue::from_str("__traitsLuaRun")) {
+    let runner = match js_sys::Reflect::get(&global, &JsValue::from_str("__traitsLuaRun")) {
         Ok(v) => v,
         Err(_) => return json!({ "ok": false, "error": "Lua runtime bridge not found" }),
     };

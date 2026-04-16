@@ -175,6 +175,49 @@ function _installLuaBridge() {
     if (typeof window === 'undefined') return;
     if (typeof window.__traitsLuaRun === 'function') return;
 
+    function pushJsValueToLua(L, lua, to_luastring, value, depth) {
+        const nextDepth = (depth || 0) + 1;
+        if (nextDepth > 32) {
+            lua.lua_pushnil(L);
+            return;
+        }
+        if (value === null || value === undefined) {
+            lua.lua_pushnil(L);
+            return;
+        }
+        if (typeof value === 'string') {
+            lua.lua_pushstring(L, to_luastring(value));
+            return;
+        }
+        if (typeof value === 'number') {
+            lua.lua_pushnumber(L, value);
+            return;
+        }
+        if (typeof value === 'boolean') {
+            lua.lua_pushboolean(L, value ? 1 : 0);
+            return;
+        }
+        if (Array.isArray(value)) {
+            lua.lua_createtable(L, value.length, 0);
+            value.forEach((item, index) => {
+                pushJsValueToLua(L, lua, to_luastring, item, nextDepth);
+                lua.lua_rawseti(L, -2, index + 1);
+            });
+            return;
+        }
+        if (typeof value === 'object') {
+            const entries = Object.entries(value);
+            lua.lua_createtable(L, 0, entries.length);
+            for (const [key, item] of entries) {
+                lua.lua_pushstring(L, to_luastring(String(key)));
+                pushJsValueToLua(L, lua, to_luastring, item, nextDepth);
+                lua.lua_settable(L, -3);
+            }
+            return;
+        }
+        lua.lua_pushstring(L, to_luastring(String(value)));
+    }
+
     window.__traitsLuaRun = function __traitsLuaRun(code, inputJson) {
         try {
             if (!_isLuaRuntimeReady() && !_loadLuaRuntimeSync()) {
@@ -221,9 +264,12 @@ function _installLuaBridge() {
             lua.lua_pushstring(L, to_luastring(safeInputJson));
             lua.lua_setglobal(L, to_luastring('__traits_input_json'));
 
-            // Also expose top-level primitive keys as globals for convenience.
             let parsedInput = null;
             try { parsedInput = JSON.parse(safeInputJson); } catch (_) { parsedInput = null; }
+            pushJsValueToLua(L, lua, to_luastring, parsedInput, 0);
+            lua.lua_setglobal(L, to_luastring('input'));
+
+            // Also expose top-level primitive keys as globals for convenience.
             if (parsedInput && typeof parsedInput === 'object' && !Array.isArray(parsedInput)) {
                 for (const [k, v] of Object.entries(parsedInput)) {
                     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) continue;

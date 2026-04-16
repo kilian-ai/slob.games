@@ -17,6 +17,7 @@ const _sentinels = _sharedDefaults?.sentinels || {};
 const CLEAR_SENTINEL = _sentinels.clear || '\x1b[CLEAR]';
 const REST_RE = new RegExp(`${(_sentinels.restOpen || '\\x1b\\[REST\\]').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([\\s\\S]*?)${(_sentinels.restClose || '\\x1b\\[/REST\\]').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
 const WEBLLM_RE = new RegExp(`${(_sentinels.webllmOpen || '\\x1b\\[WEBLLM\\]').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([\\s\\S]*?)${(_sentinels.webllmClose || '\\x1b\\[/WEBLLM\\]').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
+const LUA_RE = new RegExp(`${(_sentinels.luaOpen || '\\x1b\\[LUA\\]').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([\\s\\S]*?)${(_sentinels.luaClose || '\\x1b\\[/LUA\\]').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
 const VOICE_RE = new RegExp(`${(_sentinels.voiceOpen || '\\x1b\\[VOICE\\]').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([\\s\\S]*?)${(_sentinels.voiceClose || '\\x1b\\[/VOICE\\]').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
 // Source of truth: kernel/cli/cli.rs PROMPT constant. Must stay in sync.
 const PROMPT = _sharedDefaults?.prompt || '\x1b[32mtraits \x1b[0m';
@@ -224,6 +225,140 @@ export async function createTerminal(mountEl, opts = {}) {
 
     // ── Input → WASM session → output (with REST fallback) ──
     let restPending = false;
+
+    const writeText = (text) => {
+        const s = String(text || '');
+        if (s) term.write(s.replace(/\n/g, '\r\n'));
+    };
+
+    const writeLine = (text = '') => {
+        writeText(text);
+        term.write('\r\n');
+    };
+
+    const parseLuaJson = (raw) => {
+        const text = String(raw || '').trim();
+        if (!text) return {};
+        try { return JSON.parse(text); } catch (_) { return text; }
+    };
+
+    const unwrapResult = (res) => {
+        if (res && typeof res === 'object' && Object.prototype.hasOwnProperty.call(res, 'result')) {
+            return res.result;
+        }
+        return res;
+    };
+
+    const resolveLuaPath = (name) => {
+        const trimmed = String(name || '').trim();
+        if (!trimmed) return '';
+        if (trimmed === 'relay-monitor') return 'tools/relay-monitor.lua';
+        return trimmed.replace(/^\.\//, '');
+    };
+
+    const parseRelayMonitorToken = (args) => {
+        for (let i = 0; i < args.length; i++) {
+            if (args[i] === '--token') return args[i + 1] || '';
+            if (args[i] && args[i].startsWith('--token=')) return args[i].slice('--token='.length);
+        }
+        try {
+            return (localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '').trim();
+        } catch (_) {
+            return '';
+        }
+    };
+
+    const readVfsText = async (path) => {
+        if (!activeSdk) throw new Error('SDK unavailable');
+        const res = await activeSdk.call('sys.vfs', ['read', path]);
+        const data = unwrapResult(res);
+        if (!res?.ok || !data?.ok) {
+            throw new Error(data?.error || res?.error || `failed to read ${path}`);
+        }
+        return String(data.content || '');
+    };
+
+    const runLuaCode = async (code, input) => {
+        if (!activeSdk) return { ok: false, error: 'SDK unavailable' };
+        const res = await activeSdk.call('sys.lua', [String(code || ''), input || {}]);
+        if (!res?.ok) return { ok: false, error: res?.error || 'sys.lua call failed' };
+        return unwrapResult(res) || { ok: false, error: 'empty lua result' };
+    };
+
+    const printLuaOutcome = (outcome) => {
+        if (!outcome || typeof outcome !== 'object') {
+            writeLine('\x1b[31mLua error: invalid result\x1b[0m');
+            return;
+        }
+        const stdout = Array.isArray(outcome.stdout) ? outcome.stdout : [];
+        const stderr = Array.isArray(outcome.stderr) ? outcome.stderr : [];
+        stdout.forEach((line) => writeLine(String(line)));
+        stderr.forEach((line) => writeLine(`\x1b[31m${String(line)}\x1b[0m`));
+        if (outcome.ok === false) {
+            writeLine(`\x1b[31mLua error: ${String(outcome.error || 'unknown error')}\x1b[0m`);
+            return;
+        }
+        if (!stdout.length && outcome.result !== undefined && outcome.result !== null && outcome.result !== '') {
+            const text = typeof outcome.result === 'string'
+                ? outcome.result
+                : JSON.stringify(outcome.result, null, 2);
+            writeLine(text);
+        }
+    };
+
+    const fetchJson = async (url, headers) => {
+        const res = await fetch(url, { headers: headers || {} });
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
+        return res.json();
+    };
+
+    const fetchText = async (url, headers) => {
+        const res = await fetch(url, { headers: headers || {} });
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
+        return res.text();
+    };
+
+    const runLuaRelayMonitor = async (args) => {
+        const token = parseRelayMonitorToken(args);
+        const headers = token ? { Authorization: `Bearer ${token}` } : {};
+        const input = {
+            relay: 'https://relay.slob.games',
+            token_provided: !!token,
+        };
+
+        try {
+            input.games = await fetchJson('https://relay.slob.games/sync/games');
+        } catch (e) {
+            input.games = [];
+            input.games_error = e && e.message ? e.message : String(e);
+        }
+
+        try {
+            input.scores = await fetchJson('https://relay.slob.games/sync/scores');
+        } catch (e) {
+            input.scores = [];
+            input.scores_error = e && e.message ? e.message : String(e);
+        }
+
+        try {
+            input.manifest = await fetchText('https://relay.slob.games/sync/games.toml');
+        } catch (e) {
+            input.manifest = '';
+            input.manifest_error = e && e.message ? e.message : String(e);
+        }
+
+        if (token) {
+            try {
+                input.my_games = await fetchJson('https://relay.slob.games/sync/internal/games', headers);
+            } catch (e) {
+                input.my_games = [];
+                input.my_games_error = e && e.message ? e.message : String(e);
+            }
+        }
+
+        const script = await readVfsText('tools/relay-monitor.lua');
+        return runLuaCode(script, input);
+    };
 
     // ── WebLLM progress — show model loading status inline ──
     window.addEventListener('webllm-progress', (e) => {
@@ -438,6 +573,34 @@ export async function createTerminal(mountEl, opts = {}) {
                 } catch (e) {
                     term.write(`\x1b[31mWebLLM parse error: ${e.message}\x1b[0m\r\n`);
                     term.write(PROMPT);
+                    restPending = false;
+                    requestAnimationFrame(saveState);
+                }
+                return;
+            }
+
+            const luaMatch = output.match(LUA_RE);
+            if (luaMatch) {
+                const visible = output.replace(LUA_RE, '');
+                if (visible) term.write(visible);
+                try {
+                    const payload = parseLuaJson(luaMatch[1]);
+                    restPending = true;
+                    let outcome;
+                    if (payload && typeof payload === 'object' && payload.command === 'relay-monitor') {
+                        outcome = await runLuaRelayMonitor(Array.isArray(payload.args) ? payload.args : []);
+                    } else {
+                        const path = resolveLuaPath(payload && typeof payload === 'object' ? payload.path : '');
+                        if (!path) throw new Error('missing lua script path');
+                        const script = await readVfsText(path);
+                        outcome = await runLuaCode(script, payload && typeof payload === 'object' ? (payload.input || {}) : {});
+                    }
+                    printLuaOutcome(outcome);
+                    term.write(PROMPT);
+                } catch (e) {
+                    term.write(`\x1b[31mLua error: ${e && e.message ? e.message : String(e)}\x1b[0m\r\n`);
+                    term.write(PROMPT);
+                } finally {
                     restPending = false;
                     requestAnimationFrame(saveState);
                 }

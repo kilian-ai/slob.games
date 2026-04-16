@@ -100,6 +100,9 @@ fn ensure_pvfs() {
             for (rel_path, content, mtime) in BUILTIN_DOCS {
                 vfs.seed_with_mtime(rel_path, *content, *mtime);
             }
+            for (rel_path, content, mtime) in BUILTIN_VFS {
+                vfs.seed_with_mtime(rel_path, *content, *mtime);
+            }
             // Restore user layer from localStorage
             if let Some(json) = ls_get("traits.pvfs") {
                 vfs.load(&json);
@@ -283,6 +286,9 @@ impl PersistingVfs {
             vfs.seed_with_mtime(rel_path, *feat, *mtime);
         }
         for (rel_path, content, mtime) in BUILTIN_DOCS {
+            vfs.seed_with_mtime(rel_path, *content, *mtime);
+        }
+        for (rel_path, content, mtime) in BUILTIN_VFS {
             vfs.seed_with_mtime(rel_path, *content, *mtime);
         }
         // Restore from the persistent mirror first so Worker mode (no window/localStorage)
