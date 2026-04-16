@@ -853,7 +853,10 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     var g = col.games[id];
                                     var scope = (g.scope || g._scope || 'internal');
                                     var identity = '';
-                                    if ((g._sync_owner || g.owner) && (g._sync_game_id || g.game_id)) {
+                                    // For internal forks of external games, use the fork relationship as identity
+                                    if (scope === 'internal' && g.forked_from) {
+                                        identity = 'forked|' + String(g.forked_from);
+                                    } else if ((g._sync_owner || g.owner) && (g._sync_game_id || g.game_id)) {
                                         identity = 'relay|' + String(g._sync_owner || g.owner).trim().toLowerCase() + '|' + String(g._sync_game_id || g.game_id).trim().toLowerCase();
                                     } else if (scope === 'external' && g.owner && g.game_id) {
                                         identity = 'external|' + String(g.owner).trim().toLowerCase() + '|' + String(g.game_id).trim().toLowerCase();

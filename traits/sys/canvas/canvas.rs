@@ -37,6 +37,7 @@ fn now_ts() -> String {
 }
 
 /// If the active game is external, fork it into an internal game before mutating.
+/// First checks if an internal fork already exists for this external game (via forked_from field).
 fn ensure_internal_active(col: &mut Value) -> Option<String> {
     let active_id = col["active"].as_str().map(|s| s.to_string())?;
     if !col["games"][&active_id].is_object() {
@@ -52,6 +53,28 @@ fn ensure_internal_active(col: &mut Value) -> Option<String> {
         return Some(active_id);
     }
 
+    // Check if there's already an internal fork of this external game
+    let existing_fork_id = {
+        if let Some(games_obj) = col["games"].as_object() {
+            games_obj.iter()
+                .find(|(_, game)| {
+                    let g_scope = game["scope"].as_str()
+                        .or_else(|| game["_scope"].as_str())
+                        .unwrap_or("internal");
+                    g_scope == "internal" && game["forked_from"].as_str() == Some(&active_id)
+                })
+                .map(|(id, _)| id.clone())
+        } else {
+            None
+        }
+    };
+    
+    if let Some(existing_id) = existing_fork_id {
+        col["active"] = json!(existing_id.clone());
+        return Some(existing_id);
+    }
+
+    // No existing fork found, create a new one
     let mut new_id = format!("{}f", gen_id());
     let mut n = 1;
     while col["games"][&new_id].is_object() {
