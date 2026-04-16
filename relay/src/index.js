@@ -973,7 +973,7 @@ export class GameRoomV3 {
                   s.score AS highscore, s.player AS highscore_player
            FROM games g
            LEFT JOIN scores s ON s.game_hash = g.content_hash
-           WHERE g.published = 1 AND g.scope = 'external'
+           WHERE g.published = 1
            ORDER BY g.name ASC`
         ).toArray().map((r) => this.normalizeExternalGameRow(r));
         return json(rows);
@@ -994,6 +994,7 @@ export class GameRoomV3 {
             `version = "${g.version || ''}"`,
             `checksum = "${g.checksum || g.content_hash}"`,
             `content_hash = "${g.content_hash}"`,
+            `published = true`,
             `size = ${Number(g.size || 0)}`,
             `updated = "${g.updated}"`,
           ].join('\n');

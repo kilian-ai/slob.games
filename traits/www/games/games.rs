@@ -1086,29 +1086,16 @@ const JS: &str = r##"
             myGames=await fetchInternalGames();
           }
           await reconcileLocalAndRelay(myGames);
-          var myIds={};
-          var myKeys={};
           var rows=[];
           myGames.forEach(function(g){
             var gid=slugify(g.game_id||g.name||'untitled');
             var owner=String((g.owner||__relayUser||'')).trim().toLowerCase();
             __relayMineByGameId[gid]=g;
             if(owner&&gid)__relayMineByOwnerGameId[owner+'/'+gid]=g;
-            if(!!g.published){
-              myIds[String(g.content_hash||'').trim().toLowerCase()]=true;
-              myKeys[owner+'/'+gid]=true;
-            }
           });
-          // Also show other community games below
-          var others=publicGames.filter(function(g){
-              var owner=String(g.owner||'').trim().toLowerCase();
-              var gid=slugify(g.game_id||g.name||'untitled');
-              var key=owner+'/'+gid;
-              var hash=String(g.content_hash||'').trim().toLowerCase();
-              return !myIds[hash] && !myKeys[key];
-          });
-          if(others.length){
-            others.forEach(function(g){rows.push({kind:'community',name:String(g.name||'Untitled'),game:g})});
+          // Show the full published community catalog regardless of auth state.
+          if(publicGames.length){
+            publicGames.forEach(function(g){rows.push({kind:'community',name:String(g.name||'Untitled'),game:g})});
           }
           grid.innerHTML='';
           rows.sort(function(a,b){return a.name.toLowerCase().localeCompare(b.name.toLowerCase())});

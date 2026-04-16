@@ -10,8 +10,6 @@
       restClose: '\\x1b[/REST]',
       webllmOpen: '\\x1b[WEBLLM]',
       webllmClose: '\\x1b[/WEBLLM]',
-      luaOpen: '\\x1b[LUA]',
-      luaClose: '\\x1b[/LUA]',
       voiceOpen: '\\x1b[VOICE]',
       voiceClose: '\\x1b[/VOICE]'
     },
