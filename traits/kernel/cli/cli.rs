@@ -48,6 +48,9 @@ pub const REST_SENTINEL_END: &str = "\x1b[/REST]";
 /// WebLLM dispatch sentinels — frontend intercepts and calls WebLLM engine.
 pub const WEBLLM_SENTINEL_START: &str = "\x1b[WEBLLM]";
 pub const WEBLLM_SENTINEL_END: &str = "\x1b[/WEBLLM]";
+/// Agent dispatch sentinels — frontend intercepts and runs JS agent handler.
+pub const AGENT_SENTINEL_START: &str = "\x1b[AGENT]";
+pub const AGENT_SENTINEL_END: &str = "\x1b[/AGENT]";
 
 // ── Key events ──
 
@@ -503,9 +506,9 @@ impl CliSession {
                 if result.contains(CLEAR_SENTINEL) {
                     return format!("{CLEAR_SENTINEL}{PROMPT}");
                 }
-                if result.contains(REST_SENTINEL_START) || result.contains(WEBLLM_SENTINEL_START) {
+                if result.contains(REST_SENTINEL_START) || result.contains(WEBLLM_SENTINEL_START) || result.contains(AGENT_SENTINEL_START) {
                     out.push_str(&result);
-                    return out; // No prompt — JS handles async REST/WebLLM
+                    return out; // No prompt — JS handles async REST/WebLLM/Agent
                 }
                 if !result.is_empty() {
                     out.push_str(&result);
@@ -787,9 +790,10 @@ impl CliSession {
 
                     if result.contains(REST_SENTINEL_START)
                         || result.contains(WEBLLM_SENTINEL_START)
+                        || result.contains(AGENT_SENTINEL_START)
                     {
                         out.push_str(&result);
-                        return out; // No prompt — JS handles async REST/WebLLM
+                        return out; // No prompt — JS handles async REST/WebLLM/Agent
                     }
                     if !result.is_empty() && !result.contains(CLEAR_SENTINEL) {
                         out.push_str(&result);
@@ -2072,6 +2076,14 @@ fn execute_leaf_command(
         }
         "version" | "v" => format!("{CYAN}traits.build{RESET} {}", backend.version()),
         "clear" | "cls" => CLEAR_SENTINEL.to_string(),
+        "@agent" | "agent" => {
+            let full_line = cmd.args.join(" ");
+            let sentinel = serde_json::json!({
+                "line": full_line,
+                "args": args,
+            });
+            format!("{AGENT_SENTINEL_START}{}{AGENT_SENTINEL_END}", sentinel)
+        }
 
         _ => {
             let all = backend.all_paths();

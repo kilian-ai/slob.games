@@ -1,0 +1,20 @@
+[trait]
+description = "Inspect the slob.games relay — show published games, scores, and manifest"
+version = "v260415"
+author = "system"
+tags = ["www", "relay", "inspect", "admin"]
+
+[signature]
+params = [
+  { name = "token", type = "string", description = "Optional JWT auth token (to also show your draft games)", required = false, example = "" },
+]
+
+[signature.returns]
+type = "string"
+description = "Formatted relay status report"
+
+[implementation]
+language = "rust"
+source = "builtin"
+entry = "relay_inspect"
+wasm = true
