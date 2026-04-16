@@ -599,13 +599,15 @@ async function createTerminal(mountEl, opts = {}) {
                     const payload = parseLuaJson(luaMatch[1]);
                     restPending = true;
                     let outcome;
-                    if (payload && typeof payload === 'object' && payload.command === 'relay-monitor') {
-                        outcome = await runLuaRelayMonitor(Array.isArray(payload.args) ? payload.args : []);
+                    const payloadObj = payload && typeof payload === 'object' ? payload : {};
+                    const path = resolveLuaPath(payloadObj.path || '');
+                    const isRelayMonitor = payloadObj.command === 'relay-monitor' || path === 'tools/relay-monitor.lua';
+                    if (isRelayMonitor) {
+                        outcome = await runLuaRelayMonitor(Array.isArray(payloadObj.args) ? payloadObj.args : []);
                     } else {
-                        const path = resolveLuaPath(payload && typeof payload === 'object' ? payload.path : '');
                         if (!path) throw new Error('missing lua script path');
                         const script = await readVfsText(path);
-                        outcome = await runLuaCode(script, payload && typeof payload === 'object' ? (payload.input || {}) : {});
+                        outcome = await runLuaCode(script, payloadObj.input || {});
                     }
                     printLuaOutcome(outcome);
                     term.write(PROMPT);
