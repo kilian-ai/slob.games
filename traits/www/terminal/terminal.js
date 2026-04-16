@@ -18,7 +18,6 @@ const CLEAR_SENTINEL = _sentinels.clear || '\x1b[CLEAR]';
 const REST_RE = new RegExp(`${(_sentinels.restOpen || '\\x1b\\[REST\\]').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([\\s\\S]*?)${(_sentinels.restClose || '\\x1b\\[/REST\\]').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
 const WEBLLM_RE = new RegExp(`${(_sentinels.webllmOpen || '\\x1b\\[WEBLLM\\]').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([\\s\\S]*?)${(_sentinels.webllmClose || '\\x1b\\[/WEBLLM\\]').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
 const VOICE_RE = new RegExp(`${(_sentinels.voiceOpen || '\\x1b\\[VOICE\\]').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([\\s\\S]*?)${(_sentinels.voiceClose || '\\x1b\\[/VOICE\\]').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
-const AGENT_RE = /\x1b\[AGENT\]([\s\S]*?)\x1b\[\/AGENT\]/;
 // Source of truth: kernel/cli/cli.rs PROMPT constant. Must stay in sync.
 const PROMPT = _sharedDefaults?.prompt || '\x1b[32mtraits \x1b[0m';
 
@@ -439,37 +438,6 @@ export async function createTerminal(mountEl, opts = {}) {
                 } catch (e) {
                     term.write(`\x1b[31mWebLLM parse error: ${e.message}\x1b[0m\r\n`);
                     term.write(PROMPT);
-                    restPending = false;
-                    requestAnimationFrame(saveState);
-                }
-                return;
-            }
-
-            // Check for Agent dispatch sentinel
-            const agentMatch = output.match(AGENT_RE);
-            if (agentMatch) {
-                const visible = output.replace(AGENT_RE, '');
-                if (visible) term.write(visible);
-                if (!activeSdk || typeof window.handleAgentCommand !== 'function') {
-                    term.write('\x1b[31mAgent handler unavailable\x1b[0m\r\n');
-                    term.write(PROMPT);
-                    restPending = false;
-                    requestAnimationFrame(saveState);
-                    return;
-                }
-                try {
-                    const payload = JSON.parse(agentMatch[1] || '{}');
-                    const line = String(payload.line || '').trim();
-                    restPending = true;
-                    const write = (text) => { const s = String(text || ''); term.write(s.replace(/\n/g, '\r\n')); };
-                    const writeln = (text) => { write(text || ''); term.write('\r\n'); };
-                    const handled = await window.handleAgentCommand({ line, sdk: activeSdk, write, writeln, term, backgroundCall });
-                    if (!handled) writeln(`\x1b[31mUnknown agent command: ${line}\x1b[0m`);
-                    term.write(PROMPT);
-                } catch (e) {
-                    term.write(`\x1b[31mAgent parse error: ${e.message}\x1b[0m\r\n`);
-                    term.write(PROMPT);
-                } finally {
                     restPending = false;
                     requestAnimationFrame(saveState);
                 }
