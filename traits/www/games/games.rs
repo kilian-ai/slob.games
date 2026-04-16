@@ -796,7 +796,26 @@ const JS: &str = r##"
     ag._scope='internal';
     fresh.games[localId]=ag;
     writeGamesCollection(fresh);
-    return {gameId:gameId,data:data};
+    var canonicalGameId=String(data.game_id||ag._sync_game_id||gameId||'').trim().toLowerCase();
+    var canonicalOwner=String(data.owner||ag._sync_owner||__relayUser||'').trim().toLowerCase();
+    if(canonicalGameId){
+      __relayMineByGameId[canonicalGameId]={
+        owner:canonicalOwner,
+        game_id:canonicalGameId,
+        name:ag.name||g.name||'Untitled',
+        checksum:ag.checksum||ag._sync_hash||'',
+        content_hash:ag._sync_hash||ag.checksum||'',
+        published:false,
+        scope:'internal',
+        version:ag.version||g.version||'',
+        size:String(ag.content||g.content||'').length,
+        updated:ag.updated||new Date().toISOString()
+      };
+      if(canonicalOwner){
+        __relayMineByOwnerGameId[canonicalOwner+'/'+canonicalGameId]=__relayMineByGameId[canonicalGameId];
+      }
+    }
+    return {gameId:canonicalGameId||gameId,data:data};
   }
 
   async function publishLocalGame(localId){
@@ -1015,7 +1034,10 @@ const JS: &str = r##"
           return;
         }
         if(g.unsynced){
-          syncLocalToRelay(g.id).then(function(){renderRelay()}).catch(function(err){alert((err&&err.message)||'Sync failed')});
+          syncLocalToRelay(g.id).then(async function(){
+            await renderLocal();
+            await renderRelay();
+          }).catch(function(err){alert((err&&err.message)||'Sync failed')});
           return;
         }
         if(g.gameId){
