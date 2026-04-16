@@ -538,6 +538,50 @@ const JS: &str = r##"
     localStorage.setItem('traits.pvfs',JSON.stringify(pvfs));
   }
 
+  function _compactGamesCollection(){
+    // Evict duplicate and inactive games to free localStorage space.
+    // Strategy: for each game name, keep only the newest entry (by id timestamp).
+    // Then strip content from all non-active games that share a name with the active one.
+    var pvfs=JSON.parse(localStorage.getItem('traits.pvfs')||'{}');
+    var raw=pvfs['canvas/games.json'];
+    if(!raw&&pvfs.files&&pvfs.files['canvas/games.json'])raw=String((pvfs.files['canvas/games.json']||{}).content||'');
+    if(!raw)return;
+    var col=JSON.parse(raw);
+    if(!col.games)return;
+    // Group by name → keep newest per name
+    var byName={};
+    for(var gid in col.games){
+      var gm=col.games[gid];
+      var key=String(gm.name||'').toLowerCase().trim();
+      if(!key)key=gid;
+      if(!byName[key])byName[key]=[];
+      byName[key].push(gid);
+    }
+    var removed=0;
+    for(var nk in byName){
+      var ids=byName[nk];
+      if(ids.length<=1)continue;
+      // Sort descending by id (timestamp-based) — newest first
+      ids.sort(function(a,b){return b.localeCompare(a)});
+      for(var i=1;i<ids.length;i++){
+        if(ids[i]===col.active)continue; // never remove active
+        delete col.games[ids[i]];
+        removed++;
+      }
+    }
+    if(removed>0){
+      var json=JSON.stringify(col);
+      pvfs['canvas/games.json']=json;
+      if(pvfs.files&&typeof pvfs.files==='object'){
+        var ts=Date.now();
+        var prev=(pvfs.files['canvas/games.json']||{});
+        pvfs.files['canvas/games.json']={content:json,created:(typeof prev.created==='number'?prev.created:ts),modified:ts};
+      }
+      localStorage.setItem('traits.pvfs',JSON.stringify(pvfs));
+      console.log('[games] compacted: removed',removed,'duplicate game(s)');
+    }
+  }
+
   function persistCanvasLaunchPayload(id, g){
     try{
       var payload={
@@ -609,7 +653,18 @@ const JS: &str = r##"
       try{g=await fetchContentForGame(g,id);}catch(_){}
     }
     // 3. Write game into JS pvfs so Canvas can also read it directly
-    setActiveGameFromPayload(id,g);
+    try{
+      setActiveGameFromPayload(id,g);
+    }catch(quotaErr){
+      // localStorage full — evict duplicate/inactive games and retry
+      try{
+        _compactGamesCollection();
+        setActiveGameFromPayload(id,g);
+      }catch(_){
+        // Still full — skip pvfs write; sessionStorage launch payload is the fallback
+        console.warn('[games] localStorage quota exceeded, skipping pvfs write');
+      }
+    }
     // 4. Write launch payload to sessionStorage — Canvas init reads this and calls load_game
     persistCanvasLaunchPayload(id,g);
     goCanvas();
