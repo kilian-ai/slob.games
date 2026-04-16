@@ -412,7 +412,7 @@ function inspect() {
       sprites.push({ path: path, size: sz });
     } else {
       otherTotal += sz;
-      otherVfs.push({ path: path, size: sz });
+      otherVfs.push({ path: path, size: sz, content: typeof val === 'string' ? val : JSON.stringify(val) });
     }
   }
   sprites.sort(function(a, b) { return b.size - a.size; });
@@ -504,30 +504,58 @@ function render() {
   byId('spritesTable').innerHTML = st || '<tr><td>(none)</td></tr>';
 
   // Other VFS
-  var ot = '';
+  var ot = '<tr style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.06em">'
+         + '<td>Path</td><td>Size</td><td></td></tr>';
   for (var i = 0; i < d.otherVfs.length; i++) {
     var f = d.otherVfs[i];
-    ot += '<tr><td><code>' + esc(f.path) + '</code></td>'
-        + '<td style="text-align:right;font-family:Courier New,monospace;font-size:13px">' + fmtSize(f.size) + '</td></tr>';
+    ot += '<tr>'
+        + '<td><a class="game-link" onclick="previewVfs(' + i + ')">' + esc(f.path) + '</a></td>'
+        + '<td style="font-family:Courier New,monospace;font-size:13px">' + fmtSize(f.size) + '</td>'
+        + '<td style="text-align:right"><button class="sm danger" onclick="deleteVfs(\'' + esc(f.path).replace(/'/g, "\\'") + '\')">' + 'Del</button></td>'
+        + '</tr>';
   }
-  byId('otherTable').innerHTML = ot || '<tr><td>(none)</td></tr>';
+  byId('otherTable').innerHTML = d.otherVfs.length ? ot : '<tr><td>(none)</td></tr>';
 }
 
 // ══════════════════════════════════════════════════════════════
 // Preview modal
 // ══════════════════════════════════════════════════════════════
 var _previewIdx = -1;
+var _previewMode = 'game'; // 'game' or 'vfs'
 
 function previewGame(idx) {
   if (!_data || !_data.games[idx]) return;
   _previewIdx = idx;
+  _previewMode = 'game';
   var g = _data.games[idx];
   byId('modalTitle').textContent = g.name;
-  var frame = byId('modalFrame');
-  frame.srcdoc = g.content;
-  byId('gameModal').style.display = 'flex';
-  // Show/hide unhide button: always visible (unhide re-inserts into collection as internal)
+  byId('modalFrame').srcdoc = g.content;
+  byId('modalUnhide').textContent = 'Unhide \u2192 Games';
   byId('modalUnhide').style.display = '';
+  byId('gameModal').style.display = 'flex';
+}
+
+function previewVfs(idx) {
+  if (!_data || !_data.otherVfs[idx]) return;
+  _previewIdx = idx;
+  _previewMode = 'vfs';
+  var f = _data.otherVfs[idx];
+  byId('modalTitle').textContent = f.path;
+  var content = f.content;
+  // If content looks like HTML, render directly; otherwise wrap in pre
+  var isHtml = /^\s*<(!doctype|html|head|body|div|script)/i.test(content);
+  if (isHtml) {
+    byId('modalFrame').srcdoc = content;
+  } else {
+    var wrapped = '<!DOCTYPE html><html><head><style>'
+      + 'body{margin:0;padding:16px;background:#0a0a0f;color:#e8e6e3;'
+      + 'font-family:Courier New,monospace;font-size:13px;white-space:pre-wrap;word-break:break-all}'
+      + '</style></head><body>' + esc(content) + '</body></html>';
+    byId('modalFrame').srcdoc = wrapped;
+  }
+  byId('modalUnhide').textContent = 'Unhide \u2192 Games';
+  byId('modalUnhide').style.display = '';
+  byId('gameModal').style.display = 'flex';
 }
 
 function closeModal() {
@@ -550,7 +578,9 @@ document.addEventListener('keydown', function(e) {
 // Unhide: save game to games.json as visible internal game
 // ══════════════════════════════════════════════════════════════
 function unhideGame() {
-  if (_previewIdx < 0 || !_data || !_data.games[_previewIdx]) return;
+  if (_previewIdx < 0 || !_data) return;
+  if (_previewMode === 'vfs') return unhideVfs();
+  if (!_data.games[_previewIdx]) return;
   var g = _data.games[_previewIdx];
 
   try {
@@ -632,6 +662,99 @@ function unhideGame() {
 }
 
 // ══════════════════════════════════════════════════════════════
+// Unhide VFS file: save content as a game in games.json
+// ══════════════════════════════════════════════════════════════
+function unhideVfs() {
+  if (_previewIdx < 0 || !_data || !_data.otherVfs[_previewIdx]) return;
+  var f = _data.otherVfs[_previewIdx];
+  var content = f.content;
+  // Derive a name from the path (last segment, strip extension)
+  var name = f.path.replace(/^.*\//, '').replace(/\.[^.]+$/, '') || f.path;
+
+  try {
+    var pvfs = JSON.parse(localStorage.getItem('traits.pvfs') || '{}');
+    var raw = pvfs['canvas/games.json'];
+    if (!raw && pvfs.files && pvfs.files['canvas/games.json'])
+      raw = String((pvfs.files['canvas/games.json'] || {}).content || '');
+    var col = raw ? JSON.parse(raw) : { active: null, games: {} };
+    if (!col.games) col.games = {};
+
+    var targetId = 'g-' + Date.now();
+    col.games[targetId] = {
+      name: name,
+      content: content,
+      scope: 'internal',
+      _scope: 'internal',
+      owner: 'local',
+      _sync_owner: 'local',
+      game_id: '',
+      _sync_game_id: '',
+      checksum: '',
+      _sync_hash: '',
+      created: new Date().toISOString(),
+      updated: new Date().toISOString(),
+      version: '',
+    };
+    col.active = targetId;
+
+    var json = JSON.stringify(col);
+    pvfs['canvas/games.json'] = json;
+    if (pvfs.files && typeof pvfs.files === 'object') {
+      var ts = Date.now();
+      var prev = pvfs.files['canvas/games.json'] || {};
+      pvfs.files['canvas/games.json'] = {
+        content: json,
+        created: typeof prev.created === 'number' ? prev.created : ts,
+        modified: ts,
+      };
+    }
+    pvfs['canvas/app.html'] = content;
+    if (pvfs.files && typeof pvfs.files === 'object') {
+      var tsA = Date.now();
+      var prevA = pvfs.files['canvas/app.html'] || {};
+      pvfs.files['canvas/app.html'] = {
+        content: content,
+        created: typeof prevA.created === 'number' ? prevA.created : tsA,
+        modified: tsA,
+      };
+    }
+    localStorage.setItem('traits.pvfs', JSON.stringify(pvfs));
+
+    var btn = byId('modalUnhide');
+    btn.textContent = 'Saved!';
+    btn.style.color = 'var(--green)';
+    btn.style.borderColor = 'rgba(0,255,136,0.25)';
+    setTimeout(function() {
+      btn.textContent = 'Unhide \u2192 Games';
+      btn.style.color = '';
+      btn.style.borderColor = '';
+    }, 2000);
+    render();
+  } catch (e) {
+    alert('Failed to save: ' + (e.message || e));
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// Delete VFS file from pvfs
+// ══════════════════════════════════════════════════════════════
+function deleteVfs(path) {
+  if (!confirm('Delete VFS file "' + path + '"?')) return;
+  try {
+    var pvfs = JSON.parse(localStorage.getItem('traits.pvfs') || '{}');
+    if (pvfs.files && typeof pvfs.files === 'object') {
+      delete pvfs.files[path];
+    } else {
+      delete pvfs[path];
+    }
+    localStorage.setItem('traits.pvfs', JSON.stringify(pvfs));
+  } catch(e) {
+    alert('Failed to delete: ' + (e.message || e));
+  }
+  render();
+}
+
+// ══════════════════════════════════════════════════════════════
 // Delete game from collection
 // ══════════════════════════════════════════════════════════════
 function deleteGame(id) {
@@ -674,9 +797,12 @@ render();
 
 // Expose to onclick handlers
 window.previewGame = previewGame;
+window.previewVfs = previewVfs;
 window.closeModal = closeModal;
 window.unhideGame = unhideGame;
+window.unhideVfs = unhideVfs;
 window.deleteGame = deleteGame;
+window.deleteVfs = deleteVfs;
 
 })();
 "##;
