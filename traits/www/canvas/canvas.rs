@@ -1294,21 +1294,48 @@ pub fn canvas(_args: &[Value]) -> Value {
                             });
                         }
 
+                        const LAST_COMMUNITY_KEY = 'traits.canvas.last_community_game';
+
+                        function _rememberLastCommunity(game, id) {
+                            try {
+                                if (!game) return;
+                                const payload = {
+                                    id: String(id || '').trim(),
+                                    name: String(game.name || 'untitled'),
+                                    hash: String(game._sync_hash || game.checksum || '').trim().toLowerCase(),
+                                    at: Date.now()
+                                };
+                                localStorage.setItem(LAST_COMMUNITY_KEY, JSON.stringify(payload));
+                            } catch (_) {}
+                        }
+
+                        function _lastCommunityRef() {
+                            try {
+                                const raw = localStorage.getItem(LAST_COMMUNITY_KEY) || '';
+                                if (!raw) return null;
+                                const data = JSON.parse(raw);
+                                if (!data || typeof data !== 'object') return null;
+                                return {
+                                    id: String(data.id || '').trim(),
+                                    hash: String(data.hash || '').trim().toLowerCase()
+                                };
+                            } catch (_) { return null; }
+                        }
+
                         function renderProjectBar() {
                             dedupeLocalGames();
-                            const games = getGamesList();
+                            const pub = _publicGamesList();
+                            const games = pub.list || [];
                             const sel = gameSelect;
                             sel.innerHTML = '';
                             if (!games.length) {
-                                sel.innerHTML = '<option value="" disabled selected>no games</option>';
+                                sel.innerHTML = '<option value="" disabled selected>no community games</option>';
                                 return;
                             }
                             games.forEach(g => {
                                 const opt = document.createElement('option');
                                 opt.value = g.id;
-                                const scopeTag = (g.scope === 'external') ? '🌐' : '🏠';
-                                const vv = g.version ? (' v' + g.version) : '';
-                                opt.textContent = scopeTag + ' ' + (g.name || 'untitled') + vv;
+                                opt.textContent = '🌐 ' + (g.name || 'untitled');
                                 if (g.active) opt.selected = true;
                                 sel.appendChild(opt);
                             });
@@ -1329,6 +1356,13 @@ pub fn canvas(_args: &[Value]) -> Value {
                             _currentContent = ''; // force re-render
                             renderCanvas(content);
                             renderProjectBar();
+                            try {
+                                const col = readGamesCollection();
+                                const g = (col.games || {})[id];
+                                if ((g && (g.scope || g._scope || 'internal')) === 'external') {
+                                    _rememberLastCommunity(g, id);
+                                }
+                            } catch (_) {}
                         }
 
                         function _authToken() {
@@ -3042,10 +3076,36 @@ pub fn canvas(_args: &[Value]) -> Value {
                             const list = [];
                             for (const [id, g] of Object.entries(col.games || {})) {
                                 if ((g.scope || g._scope || 'internal') !== 'external') continue;
-                                list.push({ id, name: g.name || 'untitled' });
+                                list.push({
+                                    id,
+                                    name: g.name || 'untitled',
+                                    hash: String(g._sync_hash || g.checksum || '').trim().toLowerCase(),
+                                    active: col.active === id
+                                });
                             }
                             list.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
                             return { list, activeId: col.active };
+                        }
+
+                        let __restoringCommunityCursor = false;
+                        async function _restoreLastCommunityCursor() {
+                            if (__launchHasHint || __restoringCommunityCursor) return;
+                            const { list, activeId } = _publicGamesList();
+                            if (!list.length) return;
+                            const ref = _lastCommunityRef();
+                            let target = null;
+                            if (ref && ref.id) target = list.find(g => g.id === ref.id) || null;
+                            if (!target && ref && ref.hash) target = list.find(g => g.hash === ref.hash) || null;
+                            if (!target) target = list[0];
+                            if (!target || !target.id) return;
+                            if (activeId === target.id) {
+                                const col = readGamesCollection();
+                                _rememberLastCommunity((col.games || {})[target.id], target.id);
+                                return;
+                            }
+                            __restoringCommunityCursor = true;
+                            try { await activateGame(target.id); } catch (_) {}
+                            __restoringCommunityCursor = false;
                         }
 
                         const isMobile = window.matchMedia('(max-width:768px) and (pointer:coarse)').matches;
@@ -3143,8 +3203,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 hideTimer = null;
                                 // Prepare carousel labels
                                 createCarouselLabels();
-                                _carouselPrevLabel.textContent = '\u25C0 ' + (getGameLabel('prev') || 'prev');
-                                _carouselNextLabel.textContent = (getGameLabel('next') || 'next') + ' \u25B6';
+                                _carouselPrevLabel.textContent = '\u25C0 ' + (getGameLabel('next') || 'next');
+                                _carouselNextLabel.textContent = (getGameLabel('prev') || 'prev') + ' \u25B6';
                                 const vp = document.getElementById('phone-viewport');
                                 if (vp) vp.style.transition = 'none';
                             }
@@ -3199,7 +3259,7 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                                 if (Math.abs(pct) >= SWIPE_THRESHOLD) {
                                     // Animate off-screen then switch
-                                    const direction = pct > 0 ? 'prev' : 'next';
+                                    const direction = pct > 0 ? 'next' : 'prev';
                                     if (vp) {
                                         vp.style.transition = 'transform 0.2s ease-out';
                                         vp.style.transform = 'translateX(' + (pct > 0 ? sw : -sw) + 'px)';
@@ -3380,7 +3440,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 }
 
                                 if (Math.abs(pct) >= SWIPE_THRESHOLD) {
-                                    const direction = pct > 0 ? 'prev' : 'next';
+                                    const direction = pct > 0 ? 'next' : 'prev';
                                     animateSwitch(direction);
                                 } else {
                                     // Small swipe: snap back and stay paused, like mobile.
@@ -3463,6 +3523,11 @@ pub fn canvas(_args: &[Value]) -> Value {
                             if (nextBracket) nextBracket.addEventListener('click', () => onDesktopBracket('next'));
                             document.addEventListener('keydown', onDesktopKeydown);
                         }
+
+                        // Entering canvas should always continue from the last community game cursor.
+                        setTimeout(() => {
+                            _restoreLastCommunityCursor().catch(() => {});
+                        }, 120);
 
                         // ── Game Sync: auto-share games via relay WebSocket ──
                         (async function initGameSync() {
@@ -3859,6 +3924,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     console.log('[sync] connected');
                                     // After catalog sync settles, check for missing resources
                                     setTimeout(_checkAllGamesForMissingResources, 4000);
+                                    setTimeout(() => { _restoreLastCommunityCursor().catch(() => {}); }, 450);
                                     if (_resourceResyncTimer) clearInterval(_resourceResyncTimer);
                                     _resourceResyncTimer = setInterval(function(){
                                         _checkAllGamesForMissingResources();
@@ -3931,6 +3997,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                             const firstId = col.active || Object.keys(col.games || {})[0];
                                             if (firstId) activateGame(firstId);
                                         }
+                                        _restoreLastCommunityCursor().catch(() => {});
                                         // Request any missing resources from peers
                                         _requestMissingResources(data.games);
                                     }
@@ -3950,6 +4017,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                                 if (firstId) activateGame(firstId);
                                             }
                                         }
+                                        _restoreLastCommunityCursor().catch(() => {});
                                         // Request any missing resources from peers
                                         _requestMissingResources(data.games);
                                     }
