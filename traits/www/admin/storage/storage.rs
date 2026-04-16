@@ -102,6 +102,7 @@ pub fn storage(_args: &[Value]) -> Value {
                             span.modal-title id="modalTitle" { "" }
                             div.modal-actions {
                                 button.primary id="modalUnhide" onclick="unhideGame()" { "Unhide → Games" }
+                            button.primary id="modalMoveIdb" style="display:none" onclick="movePreviewToIndexedDb()" { "Move → IndexedDB" }
                             button.danger id="modalDelete" style="display:none" onclick="deletePreviewItem()" { "Delete" }
                                 button.danger onclick="closeModal()" { "Close" }
                             }
@@ -332,10 +333,47 @@ function esc(v) {
 
 function byId(id) { return document.getElementById(id); }
 
+function browserVfs() {
+  return (typeof window !== 'undefined' && window.__traitsBrowserVfs) ? window.__traitsBrowserVfs : null;
+}
+
+async function listIndexedDbEntries() {
+  var vfs = browserVfs();
+  if (!vfs || typeof vfs.listIndexedDbEntries !== 'function') return [];
+  try { return await vfs.listIndexedDbEntries(''); } catch(_) { return []; }
+}
+
+async function movePathToIndexedDb(path) {
+  var vfs = browserVfs();
+  if (!vfs || typeof vfs.moveToIndexedDb !== 'function') throw new Error('IndexedDB VFS unavailable');
+  return vfs.moveToIndexedDb(path);
+}
+
+async function deletePathEverywhere(path) {
+  var vfs = browserVfs();
+  if (vfs && typeof vfs.deletePath === 'function') {
+    return vfs.deletePath(path);
+  }
+  var deleted = false;
+  try {
+    var pvfs = JSON.parse(localStorage.getItem('traits.pvfs') || '{}');
+    if (Object.prototype.hasOwnProperty.call(pvfs, path)) {
+      delete pvfs[path];
+      deleted = true;
+    }
+    if (pvfs.files && typeof pvfs.files === 'object' && Object.prototype.hasOwnProperty.call(pvfs.files, path)) {
+      delete pvfs.files[path];
+      deleted = true;
+    }
+    if (deleted) localStorage.setItem('traits.pvfs', JSON.stringify(pvfs));
+  } catch(_) {}
+  return { deleted: deleted };
+}
+
 // ══════════════════════════════════════════════════════════════
 // Parse all localStorage data
 // ══════════════════════════════════════════════════════════════
-function inspect() {
+async function inspect() {
   var totalUsed = 0;
   var keys = [];
   for (var i = 0; i < localStorage.length; i++) {
@@ -403,6 +441,7 @@ function inspect() {
   var spritesTotal = 0;
   var otherVfs = [];
   var otherTotal = 0;
+  var seenPaths = {};
   for (var path in flat) {
     if (!flat.hasOwnProperty(path) || path === 'canvas/games.json') continue;
     var val = flat[path];
@@ -410,10 +449,27 @@ function inspect() {
     var isSprite = /^canvas\/sprites\/|\.png$|\.svg$|\.gif$|\.jpg$|\.webp$/i.test(path);
     if (isSprite) {
       spritesTotal += sz;
-      sprites.push({ path: path, size: sz, content: typeof val === 'string' ? val : JSON.stringify(val) });
+      sprites.push({ path: path, size: sz, content: typeof val === 'string' ? val : JSON.stringify(val), storage: 'localStorage' });
     } else {
       otherTotal += sz;
-      otherVfs.push({ path: path, size: sz, content: typeof val === 'string' ? val : JSON.stringify(val) });
+      otherVfs.push({ path: path, size: sz, content: typeof val === 'string' ? val : JSON.stringify(val), storage: 'localStorage' });
+    }
+    seenPaths[path] = true;
+  }
+
+  var idbEntries = await listIndexedDbEntries();
+  for (var j = 0; j < idbEntries.length; j++) {
+    var entry = idbEntries[j];
+    if (!entry || !entry.path || seenPaths[entry.path] || entry.path === 'canvas/games.json') continue;
+    var idbContent = typeof entry.content === 'string' ? entry.content : JSON.stringify(entry.content);
+    var idbSize = idbContent.length * 2;
+    var idbSprite = /^canvas\/sprites\/|\.png$|\.svg$|\.gif$|\.jpg$|\.webp$/i.test(entry.path);
+    if (idbSprite) {
+      spritesTotal += idbSize;
+      sprites.push({ path: entry.path, size: idbSize, content: idbContent, storage: 'indexeddb' });
+    } else {
+      otherTotal += idbSize;
+      otherVfs.push({ path: entry.path, size: idbSize, content: idbContent, storage: 'indexeddb' });
     }
   }
   sprites.sort(function(a, b) { return b.size - a.size; });
@@ -439,8 +495,13 @@ function inspect() {
 // ══════════════════════════════════════════════════════════════
 var _data = null;
 
-function render() {
-  _data = inspect();
+function storageBadge(storage) {
+  var s = String(storage || 'localStorage');
+  return '<span class="hash-tag">' + (s === 'indexeddb' ? 'idb' : 'local') + '</span>';
+}
+
+async function render() {
+  _data = await inspect();
   var d = _data;
   var pct = d.quota > 0 ? Math.round(d.totalUsed / d.quota * 100) : 0;
 
@@ -501,7 +562,7 @@ function render() {
   for (var i = 0; i < d.sprites.length; i++) {
     var sp = d.sprites[i];
     st += '<tr>'
-        + '<td><a class="game-link" onclick="previewSprite(' + i + ')"><code>' + esc(sp.path) + '</code></a></td>'
+      + '<td><a class="game-link" onclick="previewSprite(' + i + ')"><code>' + esc(sp.path) + '</code></a> ' + storageBadge(sp.storage) + '</td>'
         + '<td style="text-align:right;font-family:Courier New,monospace;font-size:13px">' + fmtSize(sp.size) + '</td>'
         + '<td style="text-align:right"><button class="sm danger" onclick="deleteVfs(\'' + esc(sp.path).replace(/'/g, "\\'") + '\')">Del</button></td>'
         + '</tr>';
@@ -514,7 +575,7 @@ function render() {
   for (var i = 0; i < d.otherVfs.length; i++) {
     var f = d.otherVfs[i];
     ot += '<tr>'
-        + '<td><a class="game-link" onclick="previewVfs(' + i + ')">' + esc(f.path) + '</a></td>'
+      + '<td><a class="game-link" onclick="previewVfs(' + i + ')">' + esc(f.path) + '</a> ' + storageBadge(f.storage) + '</td>'
         + '<td style="font-family:Courier New,monospace;font-size:13px">' + fmtSize(f.size) + '</td>'
         + '<td style="text-align:right"><button class="sm danger" onclick="deleteVfs(\'' + esc(f.path).replace(/'/g, "\\'") + '\')">' + 'Del</button></td>'
         + '</tr>';
@@ -570,6 +631,7 @@ function previewGame(idx) {
   byId('modalFrame').srcdoc = g.content;
   byId('modalUnhide').textContent = 'Unhide \u2192 Games';
   byId('modalUnhide').style.display = '';
+  byId('modalMoveIdb').style.display = 'none';
   byId('modalDelete').style.display = 'none';
   byId('gameModal').style.display = 'flex';
 }
@@ -582,6 +644,7 @@ function previewSprite(idx) {
   byId('modalTitle').textContent = sp.path;
   byId('modalFrame').srcdoc = spritePreviewDoc(sp.path, sp.content);
   byId('modalUnhide').style.display = 'none';
+  byId('modalMoveIdb').style.display = sp.storage === 'indexeddb' ? 'none' : '';
   byId('modalDelete').style.display = '';
   byId('gameModal').style.display = 'flex';
 }
@@ -614,8 +677,30 @@ function previewVfs(idx) {
   }
   byId('modalUnhide').textContent = 'Unhide \u2192 Games';
   byId('modalUnhide').style.display = '';
+  byId('modalMoveIdb').style.display = 'none';
   byId('modalDelete').style.display = '';
   byId('gameModal').style.display = 'flex';
+}
+
+async function movePreviewToIndexedDb() {
+  if (_previewIdx < 0 || !_data || _previewMode !== 'sprite' || !_data.sprites[_previewIdx]) return;
+  var sp = _data.sprites[_previewIdx];
+  try {
+    await movePathToIndexedDb(sp.path);
+    var btn = byId('modalMoveIdb');
+    btn.textContent = 'Moved!';
+    btn.style.color = 'var(--green)';
+    btn.style.borderColor = 'rgba(0,255,136,0.25)';
+    setTimeout(function() {
+      btn.textContent = 'Move → IndexedDB';
+      btn.style.color = '';
+      btn.style.borderColor = '';
+    }, 2000);
+    closeModal();
+    render();
+  } catch (e) {
+    alert('Failed to move: ' + (e.message || e));
+  }
 }
 
 function deletePreviewItem() {
@@ -639,6 +724,7 @@ function closeModal() {
   byId('gameModal').style.display = 'none';
   byId('modalFrame').srcdoc = '';
   byId('modalUnhide').style.display = '';
+  byId('modalMoveIdb').style.display = 'none';
   byId('modalDelete').style.display = 'none';
   _previewIdx = -1;
 }
@@ -828,17 +914,13 @@ function unhideVfs() {
 function deleteVfs(path) {
   if (!confirm('Delete VFS file "' + path + '"?')) return;
   try {
-    var pvfs = JSON.parse(localStorage.getItem('traits.pvfs') || '{}');
-    if (pvfs.files && typeof pvfs.files === 'object') {
-      delete pvfs.files[path];
-    } else {
-      delete pvfs[path];
-    }
-    localStorage.setItem('traits.pvfs', JSON.stringify(pvfs));
+    deletePathEverywhere(path).then(function() { render(); }).catch(function(e) {
+      alert('Failed to delete: ' + (e.message || e));
+    });
+    return;
   } catch(e) {
     alert('Failed to delete: ' + (e.message || e));
   }
-  render();
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -921,6 +1003,7 @@ window.previewGame = previewGame;
 window.previewSprite = previewSprite;
 window.previewVfs = previewVfs;
 window.closeModal = closeModal;
+window.movePreviewToIndexedDb = movePreviewToIndexedDb;
 window.unhideGame = unhideGame;
 window.unhideVfs = unhideVfs;
 window.deletePreviewItem = deletePreviewItem;

@@ -119,6 +119,333 @@ async function callRelay(path, args) {
     } catch(e) { return null; }
 }
 
+// ── Browser-layered VFS (localStorage + IndexedDB) ──
+const BROWSER_VFS_DB = 'traits.browser.vfs';
+const BROWSER_VFS_STORE = 'files';
+let _browserVfsDbPromise = null;
+
+function _normalizeBrowserVfsPath(path) {
+    let s = String(path || '').trim().replace(/^\/+/, '');
+    while (s.startsWith('./')) s = s.slice(2);
+    while (s.startsWith('../')) s = s.slice(3);
+    return s.includes('..') ? '' : s;
+}
+
+function _isOffloadableVfsPath(path) {
+    const p = String(path || '').trim().toLowerCase();
+    return /^sprites\//.test(p)
+        || /^canvas\/sprites\//.test(p)
+        || /\.(png|jpe?g|gif|webp|svg|bmp|ico|mp3|wav|ogg|atlas|json)$/i.test(p);
+}
+
+function _readBrowserPvfsRoot() {
+    try { return JSON.parse(localStorage.getItem('traits.pvfs') || '{}') || {}; }
+    catch (_) { return {}; }
+}
+
+function _writeBrowserPvfsRoot(pvfs) {
+    localStorage.setItem('traits.pvfs', JSON.stringify(pvfs || {}));
+}
+
+function _readLocalPvfsEntry(path) {
+    const key = _normalizeBrowserVfsPath(path);
+    if (!key) return null;
+    const pvfs = _readBrowserPvfsRoot();
+    if (typeof pvfs[key] === 'string') {
+        return { path: key, content: pvfs[key], storage: 'localStorage', created: 0, modified: 0 };
+    }
+    if (pvfs.files && pvfs.files[key] && typeof pvfs.files[key].content === 'string') {
+        return {
+            path: key,
+            content: pvfs.files[key].content,
+            storage: 'localStorage',
+            created: Number(pvfs.files[key].created || 0),
+            modified: Number(pvfs.files[key].modified || 0),
+        };
+    }
+    return null;
+}
+
+function _writeLocalPvfsEntry(path, content) {
+    const key = _normalizeBrowserVfsPath(path);
+    if (!key) throw new Error('Invalid VFS path');
+    const pvfs = _readBrowserPvfsRoot();
+    const now = Date.now();
+    pvfs[key] = String(content || '');
+    if (pvfs.files && typeof pvfs.files === 'object') {
+        const prev = pvfs.files[key] || {};
+        pvfs.files[key] = {
+            content: String(content || ''),
+            created: typeof prev.created === 'number' ? prev.created : now,
+            modified: now,
+        };
+    }
+    _writeBrowserPvfsRoot(pvfs);
+    return { path: key, content: String(content || ''), storage: 'localStorage', created: now, modified: now };
+}
+
+function _deleteLocalPvfsEntry(path) {
+    const key = _normalizeBrowserVfsPath(path);
+    if (!key) return false;
+    const pvfs = _readBrowserPvfsRoot();
+    let changed = false;
+    if (Object.prototype.hasOwnProperty.call(pvfs, key)) {
+        delete pvfs[key];
+        changed = true;
+    }
+    if (pvfs.files && typeof pvfs.files === 'object' && Object.prototype.hasOwnProperty.call(pvfs.files, key)) {
+        delete pvfs.files[key];
+        changed = true;
+    }
+    if (changed) _writeBrowserPvfsRoot(pvfs);
+    return changed;
+}
+
+function _listLocalPvfsEntries() {
+    const pvfs = _readBrowserPvfsRoot();
+    const out = [];
+    const seen = new Set();
+    Object.keys(pvfs || {}).forEach((key) => {
+        if (key === 'files') return;
+        if (typeof pvfs[key] !== 'string') return;
+        seen.add(key);
+        out.push({ path: key, content: pvfs[key], storage: 'localStorage', created: 0, modified: 0 });
+    });
+    if (pvfs.files && typeof pvfs.files === 'object') {
+        Object.keys(pvfs.files).forEach((key) => {
+            const rec = pvfs.files[key] || {};
+            if (seen.has(key) || typeof rec.content !== 'string') return;
+            out.push({
+                path: key,
+                content: rec.content,
+                storage: 'localStorage',
+                created: Number(rec.created || 0),
+                modified: Number(rec.modified || 0),
+            });
+        });
+    }
+    return out;
+}
+
+function _openBrowserVfsDb() {
+    if (typeof indexedDB === 'undefined') return Promise.resolve(null);
+    if (_browserVfsDbPromise) return _browserVfsDbPromise;
+    _browserVfsDbPromise = new Promise((resolve) => {
+        try {
+            const req = indexedDB.open(BROWSER_VFS_DB, 1);
+            req.onupgradeneeded = function() {
+                const db = req.result;
+                if (!db.objectStoreNames.contains(BROWSER_VFS_STORE)) {
+                    db.createObjectStore(BROWSER_VFS_STORE, { keyPath: 'path' });
+                }
+            };
+            req.onsuccess = function() { resolve(req.result || null); };
+            req.onerror = function() { resolve(null); };
+        } catch (_) { resolve(null); }
+    });
+    return _browserVfsDbPromise;
+}
+
+async function _idbGetVfsEntry(path) {
+    const key = _normalizeBrowserVfsPath(path);
+    if (!key) return null;
+    const db = await _openBrowserVfsDb();
+    if (!db) return null;
+    return new Promise((resolve) => {
+        try {
+            const tx = db.transaction(BROWSER_VFS_STORE, 'readonly');
+            const req = tx.objectStore(BROWSER_VFS_STORE).get(key);
+            req.onsuccess = function() {
+                const rec = req.result;
+                resolve(rec ? {
+                    path: rec.path,
+                    content: String(rec.content || ''),
+                    storage: 'indexeddb',
+                    created: Number(rec.created || 0),
+                    modified: Number(rec.modified || 0),
+                } : null);
+            };
+            req.onerror = function() { resolve(null); };
+        } catch (_) { resolve(null); }
+    });
+}
+
+async function _idbPutVfsEntry(path, content, meta = {}) {
+    const key = _normalizeBrowserVfsPath(path);
+    if (!key) throw new Error('Invalid VFS path');
+    const db = await _openBrowserVfsDb();
+    if (!db) throw new Error('IndexedDB unavailable');
+    const now = Date.now();
+    const record = {
+        path: key,
+        content: String(content || ''),
+        created: Number(meta.created || now),
+        modified: Number(meta.modified || now),
+    };
+    return new Promise((resolve, reject) => {
+        try {
+            const tx = db.transaction(BROWSER_VFS_STORE, 'readwrite');
+            tx.objectStore(BROWSER_VFS_STORE).put(record);
+            tx.oncomplete = function() { resolve({ ...record, storage: 'indexeddb' }); };
+            tx.onerror = function() { reject(tx.error || new Error('IndexedDB write failed')); };
+        } catch (e) { reject(e); }
+    });
+}
+
+async function _idbDeleteVfsEntry(path) {
+    const key = _normalizeBrowserVfsPath(path);
+    if (!key) return false;
+    const db = await _openBrowserVfsDb();
+    if (!db) return false;
+    return new Promise((resolve) => {
+        try {
+            const tx = db.transaction(BROWSER_VFS_STORE, 'readwrite');
+            tx.objectStore(BROWSER_VFS_STORE).delete(key);
+            tx.oncomplete = function() { resolve(true); };
+            tx.onerror = function() { resolve(false); };
+        } catch (_) { resolve(false); }
+    });
+}
+
+async function _idbListVfsEntries(prefix = '') {
+    const db = await _openBrowserVfsDb();
+    if (!db) return [];
+    const want = _normalizeBrowserVfsPath(prefix);
+    return new Promise((resolve) => {
+        try {
+            const tx = db.transaction(BROWSER_VFS_STORE, 'readonly');
+            const req = tx.objectStore(BROWSER_VFS_STORE).getAll();
+            req.onsuccess = function() {
+                const rows = Array.isArray(req.result) ? req.result : [];
+                resolve(rows
+                    .filter((row) => row && row.path && (!want || String(row.path).startsWith(want)))
+                    .map((row) => ({
+                        path: String(row.path),
+                        content: String(row.content || ''),
+                        storage: 'indexeddb',
+                        created: Number(row.created || 0),
+                        modified: Number(row.modified || 0),
+                    })));
+            };
+            req.onerror = function() { resolve([]); };
+        } catch (_) { resolve([]); }
+    });
+}
+
+function _refreshBrowserPvfsWasm() {
+    if (wasm && wasm.pvfs_refresh) {
+        try { wasm.pvfs_refresh(); } catch (_) {}
+    }
+}
+
+async function _readBrowserVfsEntry(path) {
+    return _readLocalPvfsEntry(path) || await _idbGetVfsEntry(path);
+}
+
+async function _moveBrowserVfsToIndexedDb(path) {
+    const entry = _readLocalPvfsEntry(path);
+    if (!entry || typeof entry.content !== 'string') {
+        throw new Error('Local VFS file not found: ' + path);
+    }
+    const saved = await _idbPutVfsEntry(path, entry.content, entry);
+    _deleteLocalPvfsEntry(path);
+    _refreshBrowserPvfsWasm();
+    return saved;
+}
+
+async function _deleteBrowserVfsPath(path) {
+    const localDeleted = _deleteLocalPvfsEntry(path);
+    const indexedDbDeleted = await _idbDeleteVfsEntry(path);
+    if (localDeleted) _refreshBrowserPvfsWasm();
+    return { path: _normalizeBrowserVfsPath(path), localDeleted, indexedDbDeleted, deleted: !!(localDeleted || indexedDbDeleted) };
+}
+
+async function _maybeHandleBrowserVfsCall(args) {
+    const action = String((args && args[0]) || '').trim().toLowerCase();
+    const path = _normalizeBrowserVfsPath((args && args[1]) || '');
+    if (!action) return null;
+    if (['read', 'write', 'append', 'delete', 'exists', 'stat'].includes(action) && !path) {
+        return { ok: false, error: 'Path required', dispatch: 'browser-vfs' };
+    }
+    if (action === 'read') {
+        const entry = await _readBrowserVfsEntry(path);
+        if (!entry) return null;
+        return { ok: true, result: { ok: true, path, content: entry.content, storage: entry.storage }, dispatch: 'browser-vfs' };
+    }
+    if (action === 'exists') {
+        const entry = await _readBrowserVfsEntry(path);
+        if (!entry) return null;
+        return { ok: true, result: { ok: true, path, exists: true, storage: entry.storage }, dispatch: 'browser-vfs' };
+    }
+    if (action === 'stat') {
+        const entry = await _readBrowserVfsEntry(path);
+        if (!entry) return null;
+        return {
+            ok: true,
+            result: { ok: true, path, created: Number(entry.created || 0), modified: Number(entry.modified || 0), storage: entry.storage },
+            dispatch: 'browser-vfs'
+        };
+    }
+    if (action === 'delete') {
+        const res = await _deleteBrowserVfsPath(path);
+        if (!res.deleted) return null;
+        return { ok: true, result: { ok: true, path, deleted: true }, dispatch: 'browser-vfs' };
+    }
+    if (action === 'write') {
+        const content = String((args && args[2]) || '');
+        const indexedEntry = await _idbGetVfsEntry(path);
+        if (indexedEntry) {
+            const saved = await _idbPutVfsEntry(path, content, indexedEntry);
+            return { ok: true, result: { ok: true, path, bytes: content.length, storage: saved.storage }, dispatch: 'browser-vfs' };
+        }
+        if (_isOffloadableVfsPath(path)) {
+            try {
+                _writeLocalPvfsEntry(path, content);
+                _refreshBrowserPvfsWasm();
+                return { ok: true, result: { ok: true, path, bytes: content.length, storage: 'localStorage' }, dispatch: 'browser-vfs' };
+            } catch (e) {
+                if (e && (e.name === 'QuotaExceededError' || /quota/i.test(String(e.message || e)))) {
+                    const saved = await _idbPutVfsEntry(path, content, {});
+                    _deleteLocalPvfsEntry(path);
+                    _refreshBrowserPvfsWasm();
+                    return { ok: true, result: { ok: true, path, bytes: content.length, storage: saved.storage }, dispatch: 'browser-vfs' };
+                }
+                throw e;
+            }
+        }
+        return null;
+    }
+    if (action === 'append') {
+        const entry = await _readBrowserVfsEntry(path);
+        if (!entry) return null;
+        const next = String(entry.content || '') + String((args && args[2]) || '');
+        if (entry.storage === 'indexeddb') {
+            await _idbPutVfsEntry(path, next, entry);
+            return { ok: true, result: { ok: true, path, bytes: next.length, storage: 'indexeddb' }, dispatch: 'browser-vfs' };
+        }
+        if (_isOffloadableVfsPath(path)) {
+            _writeLocalPvfsEntry(path, next);
+            _refreshBrowserPvfsWasm();
+            return { ok: true, result: { ok: true, path, bytes: next.length, storage: 'localStorage' }, dispatch: 'browser-vfs' };
+        }
+    }
+    return null;
+}
+
+const __traitsBrowserVfs = {
+    read: _readBrowserVfsEntry,
+    listIndexedDbEntries: _idbListVfsEntries,
+    moveToIndexedDb: _moveBrowserVfsToIndexedDb,
+    writeIndexedDb: _idbPutVfsEntry,
+    deletePath: _deleteBrowserVfsPath,
+    readLocalEntry: _readLocalPvfsEntry,
+    listLocalEntries: _listLocalPvfsEntries,
+};
+
+if (typeof window !== 'undefined') {
+    window.__traitsBrowserVfs = __traitsBrowserVfs;
+}
+
 // ── WebLLM engine state (lazy-loaded) ──
 let _webllmLib = null;
 let _webllmEngine = null;
@@ -2106,6 +2433,13 @@ class Traits {
             const request = args[1] || 'build a game';
             const raw = await _runCanvasAgent(this, request);
             try { return JSON.parse(raw); } catch(_) { return { ok: false, error: raw }; }
+        }
+
+        if (cleanPath === 'sys.vfs' && Array.isArray(args) && args.length) {
+            const browserVfsResult = await _maybeHandleBrowserVfsCall(args);
+            if (browserVfsResult) {
+                return browserVfsResult;
+            }
         }
 
         let remoteFailure = null;
