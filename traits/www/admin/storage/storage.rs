@@ -488,7 +488,7 @@ function render() {
         + '<td style="font-family:Courier New,monospace;font-size:13px">' + fmtSize(g.size) + '</td>'
         + '<td style="font-size:13px">' + esc(g.scope) + '</td>'
         + '<td><span class="hash-tag">' + esc(g.hash) + '</span></td>'
-        + '<td style="text-align:right"><button class="sm danger" onclick="deleteGame(\'' + esc(g.id).replace(/'/g, "\\'") + '\')">Del</button></td>'
+        + '<td style="text-align:right;white-space:nowrap"><button class="sm" onclick="renameGame(\'' + esc(g.id).replace(/'/g, "\\'") + '\')">' + '\u270F</button> <button class="sm danger" onclick="deleteGame(\'' + esc(g.id).replace(/'/g, "\\'") + '\')">' + 'Del</button></td>'
         + '</tr>';
   }
   byId('gamesTable').innerHTML = gt;
@@ -771,6 +771,40 @@ function deleteVfs(path) {
 }
 
 // ══════════════════════════════════════════════════════════════
+// Rename game in collection
+// ══════════════════════════════════════════════════════════════
+function renameGame(id) {
+  var pvfs = JSON.parse(localStorage.getItem('traits.pvfs') || '{}');
+  var raw = pvfs['canvas/games.json'];
+  if (!raw && pvfs.files && pvfs.files['canvas/games.json'])
+    raw = String((pvfs.files['canvas/games.json'] || {}).content || '');
+  var col = raw ? JSON.parse(raw) : { active: null, games: {} };
+  if (!col.games || !col.games[id]) return;
+  var oldName = col.games[id].name || id;
+  var newName = prompt('Rename game:', oldName);
+  if (!newName || newName === oldName) return;
+  try {
+    col.games[id].name = newName;
+    col.games[id].updated = new Date().toISOString();
+    var json = JSON.stringify(col);
+    pvfs['canvas/games.json'] = json;
+    if (pvfs.files && typeof pvfs.files === 'object') {
+      var ts = Date.now();
+      var prev = pvfs.files['canvas/games.json'] || {};
+      pvfs.files['canvas/games.json'] = {
+        content: json,
+        created: typeof prev.created === 'number' ? prev.created : ts,
+        modified: ts,
+      };
+    }
+    localStorage.setItem('traits.pvfs', JSON.stringify(pvfs));
+  } catch(e) {
+    alert('Failed to rename: ' + (e.message || e));
+  }
+  render();
+}
+
+// ══════════════════════════════════════════════════════════════
 // Delete game from collection
 // ══════════════════════════════════════════════════════════════
 function deleteGame(id) {
@@ -817,6 +851,7 @@ window.previewVfs = previewVfs;
 window.closeModal = closeModal;
 window.unhideGame = unhideGame;
 window.unhideVfs = unhideVfs;
+window.renameGame = renameGame;
 window.deleteGame = deleteGame;
 window.deleteVfs = deleteVfs;
 
