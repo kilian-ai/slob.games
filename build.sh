@@ -9,24 +9,31 @@ if [[ "${1:-}" == "--clean" ]]; then
     cargo clean
 fi
 
-# ── Optional auto-sync: upstream terminal stack + implementations ────────────
-# Enabled by default. Set AUTO_SYNC_UPSTREAM_TERMINAL=0 to skip.
+# ── Optional auto-sync: upstream terminal shared surface vs implementation ───
+# Shared surface sync stays enabled by default.
+# Downstream implementation sync is disabled by default so local terminal/Lua
+# behavior is not overwritten on every build.
 AUTO_SYNC_UPSTREAM_TERMINAL="${AUTO_SYNC_UPSTREAM_TERMINAL:-1}"
+AUTO_SYNC_UPSTREAM_TERMINAL_SHARED="${AUTO_SYNC_UPSTREAM_TERMINAL_SHARED:-$AUTO_SYNC_UPSTREAM_TERMINAL}"
+AUTO_SYNC_UPSTREAM_TERMINAL_IMPL="${AUTO_SYNC_UPSTREAM_TERMINAL_IMPL:-0}"
 
-# Keep this list focused on terminal behavior + its implementation boundary.
-# This allows upstream behavior changes to flow downstream without manual patches.
-UPSTREAM_TERMINAL_SYNC_PATHS=(
-    traits/kernel/cli
-    traits/sys/cli
-    traits/www/terminal
-    traits/www/static/terminal-runtime.js
+UPSTREAM_TERMINAL_SHARED_SYNC_PATHS=(
+    traits/www/terminal/shared
+    traits/www/terminal/terminal.css
     traits/kernel/logic/src/vfs.rs
     traits/kernel/logic/src/platform
 )
 
+UPSTREAM_TERMINAL_IMPL_SYNC_PATHS=(
+    traits/kernel/cli
+    traits/sys/cli
+    traits/www/terminal/terminal.js
+    traits/www/terminal/agent-terminal.js
+)
+
 sync_upstream_terminal() {
-    if [[ "$AUTO_SYNC_UPSTREAM_TERMINAL" != "1" ]]; then
-        echo "Skipping upstream terminal sync (AUTO_SYNC_UPSTREAM_TERMINAL=$AUTO_SYNC_UPSTREAM_TERMINAL)"
+    if [[ "$AUTO_SYNC_UPSTREAM_TERMINAL_SHARED" != "1" && "$AUTO_SYNC_UPSTREAM_TERMINAL_IMPL" != "1" ]]; then
+        echo "Skipping upstream terminal sync (shared=$AUTO_SYNC_UPSTREAM_TERMINAL_SHARED impl=$AUTO_SYNC_UPSTREAM_TERMINAL_IMPL)"
         return 0
     fi
 
@@ -40,14 +47,22 @@ sync_upstream_terminal() {
         git remote add upstream https://github.com/kilian-ai/traits.build.git
     fi
 
-    echo "Syncing terminal stack (and implementations) from upstream/main..."
+    local sync_paths=()
+    if [[ "$AUTO_SYNC_UPSTREAM_TERMINAL_SHARED" == "1" ]]; then
+        sync_paths+=("${UPSTREAM_TERMINAL_SHARED_SYNC_PATHS[@]}")
+    fi
+    if [[ "$AUTO_SYNC_UPSTREAM_TERMINAL_IMPL" == "1" ]]; then
+        sync_paths+=("${UPSTREAM_TERMINAL_IMPL_SYNC_PATHS[@]}")
+    fi
+
+    echo "Syncing terminal boundary from upstream/main (shared=$AUTO_SYNC_UPSTREAM_TERMINAL_SHARED impl=$AUTO_SYNC_UPSTREAM_TERMINAL_IMPL)..."
     if ! git fetch --depth=1 upstream main >/dev/null 2>&1; then
         echo "Warning: upstream fetch failed; continuing build without terminal auto-sync"
         return 0
     fi
 
     local changed_count
-    changed_count=$(git diff --name-status HEAD..upstream/main -- "${UPSTREAM_TERMINAL_SYNC_PATHS[@]}" | wc -l | tr -d ' ')
+    changed_count=$(git diff --name-status HEAD..upstream/main -- "${sync_paths[@]}" | wc -l | tr -d ' ')
 
     if [[ "$changed_count" == "0" ]]; then
         echo "Terminal stack already up to date with upstream/main"
@@ -81,7 +96,7 @@ sync_upstream_terminal() {
                 synced=$((synced + 1))
                 ;;
         esac
-        done < <(git diff --name-status HEAD..upstream/main -- "${UPSTREAM_TERMINAL_SYNC_PATHS[@]}")
+        done < <(git diff --name-status HEAD..upstream/main -- "${sync_paths[@]}")
 
     echo "Applied upstream terminal sync: synced=$synced removed=$removed"
 }

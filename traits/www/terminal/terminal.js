@@ -270,7 +270,7 @@ export async function createTerminal(mountEl, opts = {}) {
 
     const readVfsText = async (path) => {
         if (!activeSdk) throw new Error('SDK unavailable');
-        const res = await activeSdk.call('sys.vfs', ['read', path]);
+        const res = await activeSdk.call('sys.vfs', ['read', path], { force: 'wasm' });
         const data = unwrapResult(res);
         if (!res?.ok || !data?.ok) {
             throw new Error(data?.error || res?.error || `failed to read ${path}`);
@@ -280,7 +280,7 @@ export async function createTerminal(mountEl, opts = {}) {
 
     const runLuaCode = async (code, input) => {
         if (!activeSdk) return { ok: false, error: 'SDK unavailable' };
-        const res = await activeSdk.call('sys.lua', [String(code || ''), input || {}]);
+        const res = await activeSdk.call('sys.lua', [String(code || ''), input || {}], { force: 'wasm' });
         if (!res?.ok) return { ok: false, error: res?.error || 'sys.lua call failed' };
         return unwrapResult(res) || { ok: false, error: 'empty lua result' };
     };

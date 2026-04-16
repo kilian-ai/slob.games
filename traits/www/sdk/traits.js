@@ -132,14 +132,23 @@ const WEBLLM_DEFAULT_MODEL = 'Llama-3.2-3B-Instruct-q4f16_1-MLC';
 const LUA_RUNTIME_URL = 'https://cdn.jsdelivr.net/npm/fengari-web@0.1.4/dist/fengari-web.js';
 let _luaRuntimeLoading = null;
 
+function _luaGlobal() {
+    if (typeof globalThis !== 'undefined') return globalThis;
+    if (typeof self !== 'undefined') return self;
+    if (typeof window !== 'undefined') return window;
+    return null;
+}
+
 function _isLuaRuntimeReady() {
-    if (typeof window === 'undefined') return false;
-    const fg = window.fengari;
+    const root = _luaGlobal();
+    if (!root) return false;
+    const fg = root.fengari;
     return !!(fg && fg.lua && fg.lauxlib && fg.lualib && fg.to_luastring);
 }
 
 function _loadLuaRuntimeSync() {
-    if (typeof window === 'undefined' || _isLuaRuntimeReady()) return _isLuaRuntimeReady();
+    if (_isLuaRuntimeReady()) return true;
+    if (typeof XMLHttpRequest === 'undefined') return false;
     try {
         const xhr = new XMLHttpRequest();
         xhr.open('GET', LUA_RUNTIME_URL, false);
@@ -147,7 +156,7 @@ function _loadLuaRuntimeSync() {
         if (!(xhr.status >= 200 && xhr.status < 300) || !xhr.responseText) {
             return false;
         }
-        // Execute fetched script in global scope so `window.fengari` is available.
+        // Execute fetched script in global scope so `globalThis.fengari` is available.
         (0, eval)(`${xhr.responseText}\n//# sourceURL=${LUA_RUNTIME_URL}`);
         return _isLuaRuntimeReady();
     } catch (_) {
@@ -156,7 +165,7 @@ function _loadLuaRuntimeSync() {
 }
 
 function _preloadLuaRuntime() {
-    if (typeof window === 'undefined') return Promise.resolve(false);
+    if (typeof document === 'undefined') return Promise.resolve(_isLuaRuntimeReady() || _loadLuaRuntimeSync());
     if (_isLuaRuntimeReady()) return Promise.resolve(true);
     if (_luaRuntimeLoading) return _luaRuntimeLoading;
 
@@ -172,8 +181,9 @@ function _preloadLuaRuntime() {
 }
 
 function _installLuaBridge() {
-    if (typeof window === 'undefined') return;
-    if (typeof window.__traitsLuaRun === 'function') return;
+    const root = _luaGlobal();
+    if (!root) return;
+    if (typeof root.__traitsLuaRun === 'function') return;
 
     function pushJsValueToLua(L, lua, to_luastring, value, depth) {
         const nextDepth = (depth || 0) + 1;
@@ -218,13 +228,13 @@ function _installLuaBridge() {
         lua.lua_pushstring(L, to_luastring(String(value)));
     }
 
-    window.__traitsLuaRun = function __traitsLuaRun(code, inputJson) {
+    root.__traitsLuaRun = function __traitsLuaRun(code, inputJson) {
         try {
             if (!_isLuaRuntimeReady() && !_loadLuaRuntimeSync()) {
                 return JSON.stringify({ ok: false, error: 'Lua runtime not loaded' });
             }
 
-            const fg = window.fengari;
+            const fg = root.fengari;
             const lua = fg.lua;
             const lauxlib = fg.lauxlib;
             const lualib = fg.lualib;

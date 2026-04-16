@@ -745,12 +745,17 @@ git fetch upstream main
 
 # 2) Inspect terminal-related delta
 git diff --name-status origin/main..upstream/main -- \
-  traits/kernel/cli \
-  traits/sys/cli \
-  traits/www/terminal \
-  traits/www/static/terminal-runtime.js \
+  traits/www/terminal/shared \
+  traits/www/terminal/terminal.css \
   traits/kernel/logic/src/vfs.rs \
   traits/kernel/logic/src/platform
+
+# Optional: inspect implementation delta too (disabled by default downstream)
+git diff --name-status origin/main..upstream/main -- \
+  traits/kernel/cli \
+  traits/sys/cli \
+  traits/www/terminal/terminal.js \
+  traits/www/terminal/agent-terminal.js
 
 # 3) Bring changed files from upstream/main
 git checkout upstream/main -- <changed files>
@@ -770,4 +775,4 @@ git push origin main
 Notes:
 - Always include generated artifacts from `build.sh` (`index.html`, static runtimes, version bumps).
 - If upstream removed a terminal file (for example `traits/www/terminal/agent-terminal.js`), delete it here too.
-- `build.sh` now auto-syncs this boundary by default before compiling; set `AUTO_SYNC_UPSTREAM_TERMINAL=0` to skip.
+- `build.sh` now auto-syncs the shared terminal boundary by default, but leaves implementation sync disabled downstream. Set `AUTO_SYNC_UPSTREAM_TERMINAL_IMPL=1` to opt into syncing CLI/terminal implementation files from upstream.
