@@ -1145,7 +1145,7 @@ const JS: &str = r##"
       g.gameId=gameId;
       g.isPublished=isPublished;
       g.offline=!__relayHealth.ok;
-      g.unsynced=!isExternalLocal&&hasToken&&!relay&&__relayHealth.ok;
+      g.unsynced=!isExternalLocal&&hasToken&&!hasSyncIdentity&&!relay&&__relayHealth.ok;
 
       if(g.offline){
         g.publishBadge={cls:'offline',label:'offline',actionable:false};
@@ -1155,6 +1155,8 @@ const JS: &str = r##"
         g.publishBadge=hasSyncIdentity
           ?{cls:'draft',label:'draft',actionable:false}
           :{cls:'local',label:'local',actionable:false};
+      }else if(hasSyncIdentity&&!relay){
+        g.publishBadge={cls:'draft',label:'draft',actionable:true};
       }else if(!relay){
         g.publishBadge={cls:'publish-dim',label:'unsynced',actionable:true};
       }else if(isPublished){
