@@ -432,6 +432,9 @@ const JS: &str = r##"
     try{
       var pvfs=JSON.parse(localStorage.getItem('traits.pvfs')||'{}');
       var raw=pvfs['canvas/games.json'];
+      if(!raw&&pvfs.files&&pvfs.files['canvas/games.json']){
+        raw=String((pvfs.files['canvas/games.json']||{}).content||'');
+      }
       if(raw)return JSON.parse(raw);
     }catch(e){}
     return {active:'',games:{}};
@@ -439,24 +442,57 @@ const JS: &str = r##"
 
   function writeGamesCollection(col){
     var pvfs=JSON.parse(localStorage.getItem('traits.pvfs')||'{}');
-    pvfs['canvas/games.json']=JSON.stringify(col);
+    var json=JSON.stringify(col);
+    pvfs['canvas/games.json']=json;
+    if(pvfs.files&&typeof pvfs.files==='object'){
+      var ts=Date.now();
+      var prev=(pvfs.files['canvas/games.json']||{});
+      pvfs.files['canvas/games.json']={
+        content:json,
+        created:(typeof prev.created==='number'?prev.created:ts),
+        modified:ts
+      };
+    }
     localStorage.setItem('traits.pvfs',JSON.stringify(pvfs));
   }
 
   function setActiveGame(id){
     var pvfs=JSON.parse(localStorage.getItem('traits.pvfs')||'{}');
-    var col=pvfs['canvas/games.json']?JSON.parse(pvfs['canvas/games.json']):{active:'',games:{}};
+    var raw=pvfs['canvas/games.json'];
+    if(!raw&&pvfs.files&&pvfs.files['canvas/games.json'])raw=String((pvfs.files['canvas/games.json']||{}).content||'');
+    var col=raw?JSON.parse(raw):{active:'',games:{}};
     col.active=id;
     if(col.games[id]&&col.games[id].content){
       pvfs['canvas/app.html']=col.games[id].content;
+      if(pvfs.files&&typeof pvfs.files==='object'){
+        var tsApp=Date.now();
+        var prevApp=(pvfs.files['canvas/app.html']||{});
+        pvfs.files['canvas/app.html']={
+          content:String(col.games[id].content||''),
+          created:(typeof prevApp.created==='number'?prevApp.created:tsApp),
+          modified:tsApp
+        };
+      }
     }
-    pvfs['canvas/games.json']=JSON.stringify(col);
+    var json=JSON.stringify(col);
+    pvfs['canvas/games.json']=json;
+    if(pvfs.files&&typeof pvfs.files==='object'){
+      var ts=Date.now();
+      var prev=(pvfs.files['canvas/games.json']||{});
+      pvfs.files['canvas/games.json']={
+        content:json,
+        created:(typeof prev.created==='number'?prev.created:ts),
+        modified:ts
+      };
+    }
     localStorage.setItem('traits.pvfs',JSON.stringify(pvfs));
   }
 
   function setActiveGameFromPayload(id, g){
     var pvfs=JSON.parse(localStorage.getItem('traits.pvfs')||'{}');
-    var col=pvfs['canvas/games.json']?JSON.parse(pvfs['canvas/games.json']):{active:'',games:{}};
+    var raw=pvfs['canvas/games.json'];
+    if(!raw&&pvfs.files&&pvfs.files['canvas/games.json'])raw=String((pvfs.files['canvas/games.json']||{}).content||'');
+    var col=raw?JSON.parse(raw):{active:'',games:{}};
     if(!col.games)col.games={};
     if(g&&typeof g==='object'){
       col.games[id]={
@@ -478,8 +514,27 @@ const JS: &str = r##"
     col.active=id;
     if(col.games[id]&&col.games[id].content){
       pvfs['canvas/app.html']=col.games[id].content;
+      if(pvfs.files&&typeof pvfs.files==='object'){
+        var tsApp=Date.now();
+        var prevApp=(pvfs.files['canvas/app.html']||{});
+        pvfs.files['canvas/app.html']={
+          content:String(col.games[id].content||''),
+          created:(typeof prevApp.created==='number'?prevApp.created:tsApp),
+          modified:tsApp
+        };
+      }
     }
-    pvfs['canvas/games.json']=JSON.stringify(col);
+    var json=JSON.stringify(col);
+    pvfs['canvas/games.json']=json;
+    if(pvfs.files&&typeof pvfs.files==='object'){
+      var ts=Date.now();
+      var prev=(pvfs.files['canvas/games.json']||{});
+      pvfs.files['canvas/games.json']={
+        content:json,
+        created:(typeof prev.created==='number'?prev.created:ts),
+        modified:ts
+      };
+    }
     localStorage.setItem('traits.pvfs',JSON.stringify(pvfs));
   }
 
