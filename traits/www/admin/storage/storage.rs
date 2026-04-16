@@ -102,6 +102,7 @@ pub fn storage(_args: &[Value]) -> Value {
                             span.modal-title id="modalTitle" { "" }
                             div.modal-actions {
                                 button.primary id="modalUnhide" onclick="unhideGame()" { "Unhide → Games" }
+                            button.danger id="modalDelete" style="display:none" onclick="deletePreviewItem()" { "Delete" }
                                 button.danger onclick="closeModal()" { "Close" }
                             }
                         }
@@ -409,7 +410,7 @@ function inspect() {
     var isSprite = /^canvas\/sprites\/|\.png$|\.svg$|\.gif$|\.jpg$|\.webp$/i.test(path);
     if (isSprite) {
       spritesTotal += sz;
-      sprites.push({ path: path, size: sz });
+      sprites.push({ path: path, size: sz, content: typeof val === 'string' ? val : JSON.stringify(val) });
     } else {
       otherTotal += sz;
       otherVfs.push({ path: path, size: sz, content: typeof val === 'string' ? val : JSON.stringify(val) });
@@ -495,11 +496,15 @@ function render() {
 
   // Sprites table
   byId('spritesCount').textContent = d.sprites.length + ' files, ' + fmtSize(d.spritesTotal) + ' total';
-  var st = '';
+  var st = '<tr style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.06em">'
+         + '<td>Path</td><td>Size</td><td></td></tr>';
   for (var i = 0; i < d.sprites.length; i++) {
     var sp = d.sprites[i];
-    st += '<tr><td><code>' + esc(sp.path) + '</code></td>'
-        + '<td style="text-align:right;font-family:Courier New,monospace;font-size:13px">' + fmtSize(sp.size) + '</td></tr>';
+    st += '<tr>'
+        + '<td><a class="game-link" onclick="previewSprite(' + i + ')"><code>' + esc(sp.path) + '</code></a></td>'
+        + '<td style="text-align:right;font-family:Courier New,monospace;font-size:13px">' + fmtSize(sp.size) + '</td>'
+        + '<td style="text-align:right"><button class="sm danger" onclick="deleteVfs(\'' + esc(sp.path).replace(/'/g, "\\'") + '\')">Del</button></td>'
+        + '</tr>';
   }
   byId('spritesTable').innerHTML = st || '<tr><td>(none)</td></tr>';
 
@@ -523,6 +528,39 @@ function render() {
 var _previewIdx = -1;
 var _previewMode = 'game'; // 'game' or 'vfs'
 
+function guessMime(path) {
+  var p = String(path || '').toLowerCase();
+  if (/\.png$/i.test(p)) return 'image/png';
+  if (/\.jpg$/i.test(p) || /\.jpeg$/i.test(p)) return 'image/jpeg';
+  if (/\.gif$/i.test(p)) return 'image/gif';
+  if (/\.webp$/i.test(p)) return 'image/webp';
+  if (/\.svg$/i.test(p)) return 'image/svg+xml';
+  return 'application/octet-stream';
+}
+
+function spritePreviewDoc(path, content) {
+  var text = String(content || '');
+  var src = '';
+  if (/^data:image\//i.test(text)) {
+    src = text;
+  } else if (/^\s*<svg[\s>]/i.test(text)) {
+    var svgBase64 = btoa(unescape(encodeURIComponent(text)));
+    src = 'data:image/svg+xml;base64,' + svgBase64;
+  } else if (/^[A-Za-z0-9+/=\r\n]+$/.test(text.trim()) && text.trim().length > 24) {
+    src = 'data:' + guessMime(path) + ';base64,' + text.replace(/\s+/g, '');
+  }
+  if (src) {
+    return '<!DOCTYPE html><html><head><style>'
+      + 'html,body{margin:0;height:100%;background:#0a0a0f;display:flex;align-items:center;justify-content:center}'
+      + 'img{max-width:100%;max-height:100%;object-fit:contain;background:transparent}'
+      + '</style></head><body><img src="' + src + '" alt="sprite" /></body></html>';
+  }
+  return '<!DOCTYPE html><html><head><style>'
+    + 'body{margin:0;padding:16px;background:#0a0a0f;color:#e8e6e3;'
+    + 'font-family:Courier New,monospace;font-size:13px;white-space:pre-wrap;word-break:break-all}'
+    + '</style></head><body>' + esc(text) + '</body></html>';
+}
+
 function previewGame(idx) {
   if (!_data || !_data.games[idx]) return;
   _previewIdx = idx;
@@ -532,6 +570,19 @@ function previewGame(idx) {
   byId('modalFrame').srcdoc = g.content;
   byId('modalUnhide').textContent = 'Unhide \u2192 Games';
   byId('modalUnhide').style.display = '';
+  byId('modalDelete').style.display = 'none';
+  byId('gameModal').style.display = 'flex';
+}
+
+function previewSprite(idx) {
+  if (!_data || !_data.sprites[idx]) return;
+  _previewIdx = idx;
+  _previewMode = 'sprite';
+  var sp = _data.sprites[idx];
+  byId('modalTitle').textContent = sp.path;
+  byId('modalFrame').srcdoc = spritePreviewDoc(sp.path, sp.content);
+  byId('modalUnhide').style.display = 'none';
+  byId('modalDelete').style.display = '';
   byId('gameModal').style.display = 'flex';
 }
 
@@ -563,12 +614,32 @@ function previewVfs(idx) {
   }
   byId('modalUnhide').textContent = 'Unhide \u2192 Games';
   byId('modalUnhide').style.display = '';
+  byId('modalDelete').style.display = '';
   byId('gameModal').style.display = 'flex';
+}
+
+function deletePreviewItem() {
+  if (_previewIdx < 0 || !_data) return;
+  if (_previewMode === 'sprite') {
+    if (!_data.sprites[_previewIdx]) return;
+    var sp = _data.sprites[_previewIdx];
+    deleteVfs(sp.path);
+    closeModal();
+    return;
+  }
+  if (_previewMode === 'vfs') {
+    if (!_data.otherVfs[_previewIdx]) return;
+    var f = _data.otherVfs[_previewIdx];
+    deleteVfs(f.path);
+    closeModal();
+  }
 }
 
 function closeModal() {
   byId('gameModal').style.display = 'none';
   byId('modalFrame').srcdoc = '';
+  byId('modalUnhide').style.display = '';
+  byId('modalDelete').style.display = 'none';
   _previewIdx = -1;
 }
 
@@ -847,10 +918,12 @@ render();
 
 // Expose to onclick handlers
 window.previewGame = previewGame;
+window.previewSprite = previewSprite;
 window.previewVfs = previewVfs;
 window.closeModal = closeModal;
 window.unhideGame = unhideGame;
 window.unhideVfs = unhideVfs;
+window.deletePreviewItem = deletePreviewItem;
 window.renameGame = renameGame;
 window.deleteGame = deleteGame;
 window.deleteVfs = deleteVfs;
