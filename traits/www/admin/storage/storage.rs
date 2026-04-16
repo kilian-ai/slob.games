@@ -542,6 +542,14 @@ function previewVfs(idx) {
   var f = _data.otherVfs[idx];
   byId('modalTitle').textContent = f.path;
   var content = f.content;
+  // Try to extract HTML from JSON wrapper (e.g. {"content":"<html>..."} or game entries)
+  if (/^\s*\{/.test(content)) {
+    try {
+      var parsed = JSON.parse(content);
+      if (typeof parsed.content === 'string') content = parsed.content;
+      else if (typeof parsed.html === 'string') content = parsed.html;
+    } catch(_) {}
+  }
   // If content looks like HTML, render directly; otherwise wrap in pre
   var isHtml = /^\s*<(!doctype|html|head|body|div|script)/i.test(content);
   if (isHtml) {
@@ -668,6 +676,14 @@ function unhideVfs() {
   if (_previewIdx < 0 || !_data || !_data.otherVfs[_previewIdx]) return;
   var f = _data.otherVfs[_previewIdx];
   var content = f.content;
+  // Extract HTML from JSON wrapper if present
+  if (/^\s*\{/.test(content)) {
+    try {
+      var parsed = JSON.parse(content);
+      if (typeof parsed.content === 'string') content = parsed.content;
+      else if (typeof parsed.html === 'string') content = parsed.html;
+    } catch(_) {}
+  }
   // Derive a name from the path (last segment, strip extension)
   var name = f.path.replace(/^.*\//, '').replace(/\.[^.]+$/, '') || f.path;
 
