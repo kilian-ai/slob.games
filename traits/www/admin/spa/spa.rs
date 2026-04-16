@@ -23,6 +23,7 @@ pub fn spa(_args: &[Value]) -> Value {
                             span.badge id="platformBadge" { "detecting..." }
                             span.badge id="runtimeBadge" { "wasm" }
                             span.badge id="versionBadge" { "—" }
+                            a.badge style="cursor:pointer;text-decoration:none" onclick="location.hash='#/storage'" { "Storage Inspector →" }
                         }
                     }
 

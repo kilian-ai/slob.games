@@ -129,6 +129,27 @@ else
 fi
 echo "Build version: $TRAITS_BUILD_VERSION"
 
+# ── Sync version into Cargo.toml workspace members ──
+# Convert vYYMMDD.HHMMSS → 0.YYMMDD.HHMMSS (semver-compatible)
+SEMVER_VERSION=$(echo "$TRAITS_BUILD_VERSION" | sed 's/^v/0./' | sed 's/\./&/' )
+for cargo_toml in traits/kernel/wasm/Cargo.toml traits/kernel/logic/Cargo.toml; do
+    if [[ -f "$cargo_toml" ]]; then
+        if [[ "$(uname)" == "Darwin" ]]; then
+            sed -i '' "s/^version = \".*\"/version = \"$SEMVER_VERSION\"/" "$cargo_toml"
+        else
+            sed -i "s/^version = \".*\"/version = \"$SEMVER_VERSION\"/" "$cargo_toml"
+        fi
+    fi
+done
+# Also update the kernel-logic dependency version in wasm/Cargo.toml
+if [[ -f traits/kernel/wasm/Cargo.toml ]]; then
+    if [[ "$(uname)" == "Darwin" ]]; then
+        sed -i '' "s/kernel-logic = { path = \"..\/logic\", version = \"[^\"]*\"/kernel-logic = { path = \"..\/logic\", version = \"$SEMVER_VERSION\"/" traits/kernel/wasm/Cargo.toml
+    else
+        sed -i "s/kernel-logic = { path = \"..\/logic\", version = \"[^\"]*\"/kernel-logic = { path = \"..\/logic\", version = \"$SEMVER_VERSION\"/" traits/kernel/wasm/Cargo.toml
+    fi
+fi
+
 # Build WASM first so the native binary embeds the latest WASM pkg via include_bytes!
 if command -v wasm-pack >/dev/null 2>&1; then
     echo "Building WASM kernel..."

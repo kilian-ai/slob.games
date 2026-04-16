@@ -21,6 +21,7 @@ pub fn storage(_args: &[Value]) -> Value {
                             span.badge id="quotaBadge" { "—" }
                             span.badge id="usedBadge" { "—" }
                             span.badge id="freeBadge" { "—" }
+                            a.badge style="cursor:pointer;text-decoration:none" onclick="location.hash='#/settings'" { "← Settings" }
                         }
                     }
 
