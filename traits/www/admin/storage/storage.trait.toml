@@ -1,0 +1,18 @@
+[trait]
+description = "Storage inspector — localStorage usage, games, sprites, quota"
+version = "v260416"
+author = "system"
+tags = ["www", "admin", "storage", "inspector"]
+provides = ["www/webpage"]
+
+[signature]
+
+[signature.returns]
+type = "string"
+description = "HTML storage inspector page"
+
+[implementation]
+language = "rust"
+source = "builtin"
+entry = "storage"
+wasm = true
