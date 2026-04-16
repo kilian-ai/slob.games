@@ -676,7 +676,7 @@ const JS: &str = r##"
     window.dispatchEvent(new CustomEvent('traits-spa-action',{detail:{spa_action:'navigate',route:'/'}}));
   }
 
-  function renameLocalGame(id,oldName){
+  async function renameLocalGame(id,oldName){
     var newName=prompt('Rename game:',oldName);
     if(!newName||newName===oldName)return;
     var col=readGamesCollection();
@@ -684,8 +684,15 @@ const JS: &str = r##"
       col.games[id].name=newName;
       col.games[id].updated=new Date().toISOString();
       writeGamesCollection(col);
+      // Re-sync to relay if this game has a relay identity
+      var g=col.games[id];
+      var t=getToken();
+      if(t&&g.content&&(g._sync_game_id||g.game_id)){
+        try{await syncLocalToRelay(id)}catch(_){}
+      }
     }
-    renderLocal();
+    await renderLocal();
+    await renderRelay();
   }
 
   async function renameRelayGame(gameId,oldName,contentHash){
@@ -693,9 +700,22 @@ const JS: &str = r##"
     if(!newName||newName===oldName)return;
     var t=getToken();
     if(!t){alert('Login required to rename.');return}
+    // Use internal API which handles name+content together
     try{
-      var r=await fetch(RELAY+'/sync/game/'+encodeURIComponent(contentHash),{method:'PUT',headers:Object.assign({'Content-Type':'application/json'},authHeaders()),body:JSON.stringify({name:newName})});
-      if(!r.ok){var d=null;try{d=await r.json()}catch(_){} alert((d&&d.error)||'Rename failed');return}
+      // First fetch the current content from relay
+      var owner='';try{var me=await fetch(RELAY+'/auth/me',{headers:authHeaders()});if(me.ok){var d=await me.json();owner=d.username||''}}catch(_){}
+      var getUrl=RELAY+'/internal/game/'+encodeURIComponent(gameId)+(owner?('?owner='+encodeURIComponent(owner)):'');
+      var gr=await fetch(getUrl,{headers:authHeaders()});
+      if(!gr.ok){alert('Could not fetch game for rename.');return}
+      var gData=await gr.json().catch(function(){return null});
+      if(!gData||!gData.content){alert('Could not read game content.');return}
+      // PUT back with updated name
+      var payload={name:newName,content:gData.content,version:gData.version||'',scope:gData.scope||'internal'};
+      var r=await fetch(RELAY+'/internal/game/'+encodeURIComponent(gameId),{
+        method:'PUT',headers:Object.assign({'Content-Type':'application/json'},authHeaders()),
+        body:JSON.stringify(payload)
+      });
+      if(!r.ok){var d2=null;try{d2=await r.json()}catch(_){} alert((d2&&d2.error)||'Rename failed');return}
     }catch(e){alert('Rename request failed');return}
     // Also rename in local collection if present
     var col=readGamesCollection();
