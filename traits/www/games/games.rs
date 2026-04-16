@@ -57,6 +57,8 @@ const CSS: &str = r##"
 .submeta{font-size:0.62rem;color:#6f7f96;opacity:.9}
 .btn-del{background:none;border:1px solid rgba(255,60,60,0.2);color:#ff4444;font-size:0.6rem;padding:1px 6px;border-radius:3px;cursor:pointer;text-transform:uppercase;letter-spacing:0.04em;font-weight:600;transition:all 0.2s}
 .btn-del:hover{background:rgba(255,60,60,0.12);border-color:rgba(255,60,60,0.4)}
+.btn-ren{background:none;border:1px solid rgba(0,224,255,0.2);color:#00e0ff;font-size:0.6rem;padding:1px 6px;border-radius:3px;cursor:pointer;text-transform:uppercase;letter-spacing:0.04em;font-weight:600;transition:all 0.2s}
+.btn-ren:hover{background:rgba(0,224,255,0.12);border-color:rgba(0,224,255,0.4)}
 .play-icon{position:absolute;top:50%;right:0.75rem;transform:translateY(-50%);width:28px;height:28px;border-radius:50%;background:rgba(0,224,255,0.08);border:1px solid rgba(0,224,255,0.15);color:#00e0ff;display:flex;align-items:center;justify-content:center;font-size:0.75rem;opacity:0;transition:opacity 0.2s}
 .game-card:hover .play-icon{opacity:1}
 .game-card.active-game{border-color:rgba(0,255,136,0.25)}
@@ -674,6 +676,41 @@ const JS: &str = r##"
     window.dispatchEvent(new CustomEvent('traits-spa-action',{detail:{spa_action:'navigate',route:'/'}}));
   }
 
+  function renameLocalGame(id,oldName){
+    var newName=prompt('Rename game:',oldName);
+    if(!newName||newName===oldName)return;
+    var col=readGamesCollection();
+    if(col.games&&col.games[id]){
+      col.games[id].name=newName;
+      col.games[id].updated=new Date().toISOString();
+      writeGamesCollection(col);
+    }
+    renderLocal();
+  }
+
+  async function renameRelayGame(gameId,oldName,contentHash){
+    var newName=prompt('Rename game:',oldName);
+    if(!newName||newName===oldName)return;
+    var t=getToken();
+    if(!t){alert('Login required to rename.');return}
+    try{
+      var r=await fetch(RELAY+'/sync/game/'+encodeURIComponent(contentHash),{method:'PUT',headers:Object.assign({'Content-Type':'application/json'},authHeaders()),body:JSON.stringify({name:newName})});
+      if(!r.ok){var d=null;try{d=await r.json()}catch(_){} alert((d&&d.error)||'Rename failed');return}
+    }catch(e){alert('Rename request failed');return}
+    // Also rename in local collection if present
+    var col=readGamesCollection();
+    for(var id in (col.games||{})){
+      var lg=col.games[id]||{};
+      if(relayGameIdForLocal(id,lg)===String(gameId||'').toLowerCase()){
+        col.games[id].name=newName;
+        col.games[id].updated=new Date().toISOString();
+      }
+    }
+    writeGamesCollection(col);
+    await renderLocal();
+    await renderRelay();
+  }
+
   async function deleteLocalGame(id,name){
     if(!confirm('Delete "'+name+'"? This cannot be undone.'))return;
     var col=readGamesCollection();
@@ -940,8 +977,9 @@ const JS: &str = r##"
     div.innerHTML='<div class="gname">'+esc(g.name||'Untitled')+'</div>'
       +'<div class="gmeta">'+meta+'</div>'
       +subMeta
-      +'<div class="gactions"><button class="btn-del" data-del="1">delete</button></div>'
+      +'<div class="gactions"><button class="btn-ren" data-ren="1">rename</button> <button class="btn-del" data-del="1">delete</button></div>'
       +'<div class="play-icon">\u25b6</div>';
+    div.querySelector('[data-ren]').addEventListener('click',function(e){e.stopPropagation();renameLocalGame(g.id,g.name)});
     div.querySelector('[data-del]').addEventListener('click',function(e){e.stopPropagation();deleteLocalGame(g.id,g.name)});
     var pubBtn=div.querySelector('[data-publish-local]');
     if(pubBtn){
@@ -975,9 +1013,10 @@ const JS: &str = r##"
     if(g.size) meta+=' <span style="opacity:0.25">\u00b7</span> '+fmtSize(g.size);
     div.innerHTML='<div class="gname">'+esc(g.name||'Untitled')+'</div>'
       +'<div class="gmeta">'+meta+'</div>'
-      +'<div class="gactions"><button class="btn-del" data-del="1">delete</button></div>'
+      +'<div class="gactions"><button class="btn-ren" data-ren="1">rename</button> <button class="btn-del" data-del="1">delete</button></div>'
       +'<div class="play-icon">\u25b6</div>';
     div.querySelector('[data-pub]').addEventListener('click',function(e){e.stopPropagation();setPublished(g.game_id,!isPub)});
+    div.querySelector('[data-ren]').addEventListener('click',function(e){e.stopPropagation();renameRelayGame(g.game_id,g.name,g.content_hash)});
     div.querySelector('[data-del]').addEventListener('click',function(e){e.stopPropagation();deleteRelayGame(g.game_id,g.name)});
     div.addEventListener('click',function(){fetchAndPlay(g.content_hash,g.name)});
     return div;
