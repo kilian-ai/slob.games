@@ -3618,7 +3618,21 @@ pub fn canvas(_args: &[Value]) -> Value {
                                             col.active = Object.keys(col.games)[0];
                                         }
                                         files['canvas/games.json'] = JSON.stringify(col);
-                                        localStorage.setItem('traits.pvfs', JSON.stringify(files));
+                                        try {
+                                            localStorage.setItem('traits.pvfs', JSON.stringify(files));
+                                        } catch (qe) {
+                                            if (qe && qe.name === 'QuotaExceededError') {
+                                                dedupeLocalGames();
+                                                try {
+                                                    var fresh = JSON.parse(localStorage.getItem('traits.pvfs') || '{}');
+                                                    fresh['canvas/games.json'] = files['canvas/games.json'];
+                                                    localStorage.setItem('traits.pvfs', JSON.stringify(fresh));
+                                                } catch (_) {
+                                                    console.warn('[sync] localStorage full, skipping sync write');
+                                                    return 0;
+                                                }
+                                            } else { throw qe; }
+                                        }
                                         dedupeLocalGames();
                                         renderProjectBar();
                                     }
