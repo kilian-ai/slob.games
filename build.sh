@@ -130,8 +130,17 @@ fi
 echo "Build version: $TRAITS_BUILD_VERSION"
 
 # ── Sync version into Cargo.toml workspace members ──
-# Convert vYYMMDD.HHMMSS → 0.YYMMDD.HHMMSS (semver-compatible)
-SEMVER_VERSION=$(echo "$TRAITS_BUILD_VERSION" | sed 's/^v/0./' | sed 's/\./&/' )
+# Convert vYYMMDD.HHMMSS → 0.YYMMDD.HHMMSS (semver-compatible, strip leading zeros from time)
+temp=$(echo "$TRAITS_BUILD_VERSION" | sed 's/^v//')
+date_part=$(echo "$temp" | cut -d. -f1)
+time_part=$(echo "$temp" | cut -d. -f2)
+if [ -z "$time_part" ]; then
+    SEMVER_VERSION="0.$date_part"
+else
+    # Convert time to integer to remove leading zeros
+    time_int=$((10#$time_part))
+    SEMVER_VERSION="0.$date_part.$time_int"
+fi
 for cargo_toml in traits/kernel/wasm/Cargo.toml traits/kernel/logic/Cargo.toml; do
     if [[ -f "$cargo_toml" ]]; then
         if [[ "$(uname)" == "Darwin" ]]; then

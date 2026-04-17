@@ -1278,6 +1278,8 @@ const JS: &str = r##"
             var owner=String((g.owner||__relayUser||'')).trim().toLowerCase();
             __relayMineByGameId[gid]=g;
             if(owner&&gid)__relayMineByOwnerGameId[owner+'/'+gid]=g;
+            // Render user's own games with draft/publish toggle
+            rows.push({kind:'relay',name:String(g.name||'Untitled'),game:g});
           });
           // Show the full published community catalog regardless of auth state.
           if(publicGames.length){
@@ -1286,7 +1288,8 @@ const JS: &str = r##"
           grid.innerHTML='';
           rows.sort(function(a,b){return a.name.toLowerCase().localeCompare(b.name.toLowerCase())});
           rows.forEach(function(r){
-            grid.appendChild(makeCommunityCard(r.game));
+            var card = r.kind==='relay' ? makeRelayCard(r.game) : makeCommunityCard(r.game);
+            grid.appendChild(card);
           });
           if(!grid.children.length)grid.innerHTML='<div class="empty">No community games available.</div>';
           await renderLocal();
