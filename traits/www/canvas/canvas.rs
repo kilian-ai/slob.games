@@ -2980,6 +2980,16 @@ pub fn canvas(_args: &[Value]) -> Value {
                             fabMenu.classList.remove('show');
                             document.querySelectorAll('style[data-canvas]').forEach(s => s.remove());
                             try { delete window.traits; } catch(_) {}
+                            // Close sync WebSocket to prevent leaked connections on re-navigation
+                            try {
+                                if (window.__syncWs) {
+                                    window.__syncWs.onclose = null; // prevent reconnect
+                                    window.__syncWs.close();
+                                    window.__syncWs = null;
+                                }
+                            } catch(_) {}
+                            // Clear resource resync timer
+                            try { if (window.__resourceResyncTimer) clearInterval(window.__resourceResyncTimer); } catch(_) {}
                         };
 
                         // ── Voice Chat Modal ──
@@ -3630,7 +3640,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     const externalCount = Object.values(col.games || {}).filter(function(g) {
                                         return (g.scope || g._scope || 'internal') === 'external';
                                     }).length;
-                                    if (!force && externalCount > 0) return 0;
+                                    if (!force && externalCount > 0) { console.log('[sync] REST hydrate skipped — already have', externalCount, 'external games'); return 0; }
 
                                     const listResp = await fetch('https://relay.slob.games/sync/games');
                                     if (!listResp.ok) return 0;
@@ -3812,6 +3822,12 @@ pub fn canvas(_args: &[Value]) -> Value {
                             let serverHashSet = new Set(); // track what relay already has
                             var _p2pNonce = ''; // tracks our active need-resources request
                             var _resourceResyncTimer = null;
+
+                            // Close any pre-existing sync WS from previous page render
+                            if (window.__syncWs) {
+                                try { window.__syncWs.onclose = null; window.__syncWs.close(); } catch(_) {}
+                                window.__syncWs = null;
+                            }
 
                             // ── P2P Resource Sync ──
 
@@ -4006,13 +4022,14 @@ pub fn canvas(_args: &[Value]) -> Value {
                             }
 
                             function connect() {
-                                if (ws) return;
+                                if (ws) { console.log('[sync] connect() skipped — already connected'); return; }
                                 try {
                                     let wsUrl = RELAY_WS + '?user=' + encodeURIComponent(localUsername());
                                     try {
                                         const token = localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '';
                                         if (token) wsUrl += '&token=' + encodeURIComponent(token);
                                     } catch (_) {}
+                                    console.log('[sync] opening WebSocket');
                                     ws = new WebSocket(wsUrl);
                                 } catch (e) { scheduleReconnect(); return; }
                                 window.__syncWs = ws; // expose for score forwarding
@@ -4030,6 +4047,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     _resourceResyncTimer = setInterval(function(){
                                         _checkAllGamesForMissingResources();
                                     }, 15000);
+                                    window.__resourceResyncTimer = _resourceResyncTimer;
                                 };
 
                                 ws.onmessage = async (e) => {
@@ -4039,6 +4057,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     if (data.type === 'catalog') {
                                         // Server sent its hash catalog — compare with local
                                         serverHashSet = new Set(data.hashes || []);
+                                        console.log('[sync] catalog received:', serverHashSet.size, 'hashes from server');
                                         const local = await localGamesWithHashes();
                                         const localHashSet = new Set(local.map(g => g.hash));
 
@@ -4090,11 +4109,13 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                                     if (data.type === 'games') {
                                         // Full game content from server (response to 'need')
+                                        console.log('[sync] games response:', data.games.length, 'game(s) —', data.games.map(function(g){return (g.name||'?')+'('+String(g.content_hash||'').slice(0,8)+')'}).join(', '));
                                         const hadGames = getGamesList().length > 0;
                                         const localHashes = (await localGamesWithHashes()).map(g => g.hash);
                                         _syncing = true;
                                         const added = addSyncedGames(data.games, localHashes);
                                         _syncing = false;
+                                        console.log('[sync] games added:', added, 'of', data.games.length);
                                         // Auto-activate first game when syncing into empty collection
                                         if (added > 0 && !hadGames && !__launchHasHint) {
                                             const col = readGamesCollection();
@@ -4108,13 +4129,14 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                                     if (data.type === 'sync') {
                                         // Real-time broadcast from another client
+                                        console.log('[sync] broadcast:', data.games.length, 'game(s) —', data.games.map(function(g){return (g.name||'?')+'('+String(g.content_hash||'').slice(0,8)+')'}).join(', '));
                                         const hadGames = getGamesList().length > 0;
                                         const localHashes = (await localGamesWithHashes()).map(g => g.hash);
                                         _syncing = true;
                                         const added = addSyncedGames(data.games, localHashes);
                                         _syncing = false;
                                         if (added > 0) {
-                                            console.log('[sync] received', added, 'new game(s)');
+                                            console.log('[sync] stored', added, 'new game(s) from broadcast');
                                             if (!hadGames && !__launchHasHint) {
                                                 const col = readGamesCollection();
                                                 const firstId = col.active || Object.keys(col.games || {})[0];
@@ -4208,7 +4230,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     }
                                 };
 
-                                ws.onclose = () => {
+                                ws.onclose = (ev) => {
+                                    console.log('[sync] WebSocket closed, code:', ev.code, 'reason:', ev.reason || '(none)');
                                     ws = null;
                                     window.__syncWs = null;
                                     if (_resourceResyncTimer) {
@@ -4229,7 +4252,7 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                             // Push new games when local collection changes
                             window.addEventListener('traits-canvas-projects-changed', async () => {
-                                if (_syncing) return; // don't echo sync-adds
+                                if (_syncing) { console.log('[sync] push skipped — _syncing flag active'); return; }
                                 if (!ws || ws.readyState !== WebSocket.OPEN) return;
                                 const local = await localGamesWithHashes();
                                 const toPush = local.filter(g =>
@@ -4239,6 +4262,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     (g.content.length + (g.resource_bytes || 0)) <= MAX_PUSH_PACKAGE_SIZE
                                 );
                                 if (toPush.length > 0) {
+                                    console.log('[sync] pushing', toPush.length, 'game(s):', toPush.map(function(g){return g.name}).join(', '));
                                     ws.send(JSON.stringify({
                                         type: 'push',
                                         games: toPush.map(g => ({
