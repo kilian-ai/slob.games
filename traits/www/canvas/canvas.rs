@@ -2359,6 +2359,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                         let __lastContent = '';
                         const __launchPayload = _consumeCanvasLaunchPayload();
                         let __launchHasHint = !!(__launchPayload && (__launchPayload.id || __launchPayload.content));
+                        const __hadExplicitLaunch = __launchHasHint; // permanent — never reset
                         console.log('[canvas:init] launchPayload=', __launchPayload ? {id:__launchPayload.id, name:__launchPayload.name, hasContent:!!((__launchPayload.content||'').length>0), contentLen:(__launchPayload.content||'').length} : null, 'hasHint=', __launchHasHint);
                         if (__launchHasHint && __launchPayload.content) {
                             __lastContent = String(__launchPayload.content || '');
@@ -2430,7 +2431,6 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     if (applied) renderProjectBar();
                                 } finally {
                                     __launchHasHint = false;
-                                    _restoreLastCommunityCursor().catch(() => {});
                                 }
                             })();
                         } else if (!_initHasGames && _existingHtml) {
@@ -3181,7 +3181,7 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                         let __restoringCommunityCursor = false;
                         async function _restoreLastCommunityCursor() {
-                            if (__launchHasHint || __restoringCommunityCursor) return;
+                            if (__launchHasHint || __hadExplicitLaunch || __restoringCommunityCursor) return;
                             const { list, activeId } = _publicGamesList();
                             if (!list.length) return;
                             const ref = _lastCommunityRef();
