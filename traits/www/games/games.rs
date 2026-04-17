@@ -796,14 +796,18 @@ const JS: &str = r##"
 
   async function setPublished(gameId,published){
     var t=getToken();
+    console.log('[games:setPublished] gameId=',gameId,'published=',published,'hasToken=',!!t,'relay=',RELAY);
     if(!t){alert('Login required to publish/unpublish.');return}
     try{
-      var r=await fetch(RELAY+'/internal/game/'+encodeURIComponent(gameId)+'/publish',{
+      var url=RELAY+'/internal/game/'+encodeURIComponent(gameId)+'/publish';
+      console.log('[games:setPublished] PATCH',url,'body=',{published:!!published});
+      var r=await fetch(url,{
         method:'PATCH',headers:authHeaders(),body:JSON.stringify({published:!!published})
       });
-      if(r.ok){await renderRelay();await renderLocal();}
-      else{var d=null;try{d=await r.json()}catch(_){} alert((d&&d.error)||'Publish update failed')}
-    }catch(e){alert('Publish request failed')}
+      console.log('[games:setPublished] response status=',r.status,'ok=',r.ok);
+      if(r.ok){var rd=null;try{rd=await r.clone().json()}catch(_){}console.log('[games:setPublished] success:',rd);await renderRelay();await renderLocal();}
+      else{var d=null;try{d=await r.json()}catch(_){} console.error('[games:setPublished] FAILED:',r.status,d);alert((d&&d.error)||'Publish update failed')}
+    }catch(e){console.error('[games:setPublished] exception:',e);alert('Publish request failed')}
   }
 
   async function syncLocalToRelay(localId){
@@ -1069,24 +1073,29 @@ const JS: &str = r##"
     div.querySelector('[data-ren]').addEventListener('click',function(e){e.stopPropagation();renameLocalGame(g.id,g.name)});
     div.querySelector('[data-del]').addEventListener('click',function(e){e.stopPropagation();deleteLocalGame(g.id,g.name)});
     var pubBtn=div.querySelector('[data-publish-local]');
+    console.log('[games:makeLocalCard]',g.name,'pubBtn=',!!pubBtn,'badge=',JSON.stringify(g.publishBadge),'gameId=',g.gameId,'isPublished=',g.isPublished,'offline=',g.offline,'unsynced=',g.unsynced);
     if(pubBtn){
       pubBtn.addEventListener('click',function(e){
         e.stopPropagation();
+        console.log('[games:pubClick]',g.name,'offline=',g.offline,'unsynced=',g.unsynced,'gameId=',g.gameId,'isPublished=',g.isPublished);
         if(g.offline){
           alert('Relay unavailable ('+(__relayHealth.status||0)+'). Try again once relay.slob.games is reachable.');
           return;
         }
         if(g.unsynced){
+          console.log('[games:pubClick] syncing to relay...',g.id);
           syncLocalToRelay(g.id).then(async function(){
             await renderLocal();
             await renderRelay();
-          }).catch(function(err){alert((err&&err.message)||'Sync failed')});
+          }).catch(function(err){console.error('[games:pubClick] sync failed:',err);alert((err&&err.message)||'Sync failed')});
           return;
         }
         if(g.gameId){
+          console.log('[games:pubClick] toggling published:',g.gameId,'->',!g.isPublished);
           setPublished(g.gameId,!g.isPublished);
           return;
         }
+        console.log('[games:pubClick] publishLocalGame:',g.id);
         publishLocalGame(g.id);
       });
     }
@@ -1127,6 +1136,7 @@ const JS: &str = r##"
   async function renderLocal(){
     var grid=document.getElementById('localGrid');
     var hasToken=!!getToken();
+    console.log('[games:renderLocal] hasToken=',hasToken,'relayUser=',__relayUser,'relayHealth=',JSON.stringify(__relayHealth),'relayMineByGameId keys=',Object.keys(__relayMineByGameId),'relayMineByOwnerGameId keys=',Object.keys(__relayMineByOwnerGameId));
     var col=readGamesCollection();
     var byIdentity={};
     for(var id in (col.games||{})){
@@ -1208,6 +1218,7 @@ const JS: &str = r##"
         g.publishBadge={cls:'draft',label:'draft',actionable:true};
       }
 
+      console.log('[games:renderLocal] game=',g.name,'id=',g.id,'scope=',localScope,'isExternalLocal=',isExternalLocal,'hasSyncIdentity=',hasSyncIdentity,'gameId=',gameId,'syncOwner=',syncOwner,'ownerForLookup=',ownerForLookup,'relayKey=',relayKey,'relay=',relay?{name:relay.name,published:relay.published,checksum:relay.checksum}:null,'badge=',JSON.stringify(g.publishBadge));
       g.syncNote='';
       enriched.push(g);
     }
@@ -1225,6 +1236,7 @@ const JS: &str = r##"
   async function renderRelay(){
     var grid=document.getElementById('relayGrid');
     var t=getToken();
+    console.log('[games:renderRelay] hasToken=',!!t,'RELAY=',RELAY);
     __relayMineByGameId={};
     __relayMineByOwnerGameId={};
     __relayUser='';
@@ -1268,6 +1280,8 @@ const JS: &str = r##"
         }
 
         if(myGames){
+          console.log('[games:renderRelay] myGames count=',myGames.length,'relayUser=',__relayUser);
+          myGames.forEach(function(mg){console.log('[games:renderRelay] myGame:',mg.name,'game_id=',mg.game_id,'owner=',mg.owner,'published=',mg.published,'checksum=',mg.checksum)});
           // Do not auto-merge by name during normal render flow.
           // It is destructive (can rewrite IDs/delete variants) and can hide
           // a just-renamed game before relay state settles.
@@ -1278,6 +1292,7 @@ const JS: &str = r##"
             var owner=String((g.owner||__relayUser||'')).trim().toLowerCase();
             __relayMineByGameId[gid]=g;
             if(owner&&gid)__relayMineByOwnerGameId[owner+'/'+gid]=g;
+            console.log('[games:renderRelay] indexed:', owner+'/'+gid, 'published=',g.published);
             // Render user's own games with draft/publish toggle
             rows.push({kind:'relay',name:String(g.name||'Untitled'),game:g});
           });
