@@ -1144,7 +1144,7 @@ const JS: &str = r##"
     div.querySelector('[data-pub]').addEventListener('click',function(e){e.stopPropagation();setPublished(g.game_id,!isPub)});
     div.querySelector('[data-ren]').addEventListener('click',function(e){e.stopPropagation();renameRelayGame(g.game_id,g.name,g.content_hash)});
     div.querySelector('[data-del]').addEventListener('click',function(e){e.stopPropagation();deleteRelayGame(g.game_id,g.name)});
-    div.addEventListener('click',function(){fetchAndPlay(g.content_hash,g.name)});
+    div.addEventListener('click',function(){playOrFetch(g.content_hash,g.name)});
     return div;
   }
 
@@ -1158,8 +1158,28 @@ const JS: &str = r##"
     div.innerHTML='<div class="gname">'+esc(g.name||'Untitled')+'</div>'
       +'<div class="gmeta">'+meta+'</div>'
       +'<div class="play-icon">\u25b6</div>';
-    div.addEventListener('click',function(){fetchAndPlay(g.content_hash,g.name)});
+    div.addEventListener('click',function(){playOrFetch(g.content_hash,g.name)});
     return div;
+  }
+
+  function playFromVfs(contentHash,name){
+    var hash=normHash(contentHash);
+    if(!hash)return false;
+    var col=readGamesCollection();
+    for(var id in (col.games||{})){
+      var g=col.games[id]||{};
+      var h=normHash(g._sync_hash||g.checksum||'');
+      if(h&&h===hash&&g.content){
+        activateAndGoCanvas(id,g);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function playOrFetch(contentHash,name){
+    if(playFromVfs(contentHash,name))return;
+    fetchAndPlay(contentHash,name);
   }
 
   async function renderLocal(){
