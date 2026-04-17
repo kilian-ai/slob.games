@@ -280,7 +280,9 @@ a.game-link:hover { text-decoration: underline; }
   display: flex; align-items: center; justify-content: center;
 }
 .modal {
-  width: 90vw; max-width: 420px; height: 85vh; max-height: 800px;
+  width: 90vw; max-width: 420px;
+  height: 85vh; height: 85dvh;
+  max-height: 800px;
   background: var(--panel); border: 1px solid rgba(0,224,255,0.12);
   border-radius: 16px; display: flex; flex-direction: column;
   overflow: hidden; box-shadow: 0 40px 80px rgba(0,0,0,0.5);
@@ -298,7 +300,7 @@ a.game-link:hover { text-decoration: underline; }
 }
 .modal-actions { display: flex; gap: 8px; flex-shrink: 0; }
 #modalFrame {
-  flex: 1; border: none; width: 100%; background: #fff;
+  flex: 1; border: none; width: 100%; background: #000;
   border-radius: 0 0 16px 16px;
 }
 .status-msg {
@@ -310,7 +312,16 @@ a.game-link:hover { text-decoration: underline; }
   .page { padding: 18px 14px 32px; }
   .card { padding: 16px; border-radius: 12px; }
   .kernel-grid { grid-template-columns: repeat(2, 1fr); }
-  .modal { width: 96vw; height: 90vh; }
+  .modal-overlay { background: #000; }
+  .modal {
+    width: 100vw; max-width: none;
+    height: 100vh; height: 100dvh;
+    max-height: none;
+    border-radius: 0; border: none;
+  }
+  .modal-header { padding: 10px 14px; }
+  .modal-actions { flex-wrap: wrap; }
+  #modalFrame { border-radius: 0; }
 }
 "##;
 

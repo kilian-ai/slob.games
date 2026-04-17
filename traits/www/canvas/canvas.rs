@@ -387,26 +387,31 @@ pub fn canvas(_args: &[Value]) -> Value {
                         @media (max-width: 768px) and (pointer: coarse) {
                             .canvas-header { display: none !important; }
                             #canvas-container {
-                                height: 100vh !important; padding: 0 !important;
+                                height: 100vh !important; height: 100dvh !important;
+                                padding: 0 !important;
                                 align-items: stretch !important;
+                                overflow: hidden !important;
                             }
                             #phone-frame {
-                                width: 100% !important; border-radius: 0 !important;
+                                width: 100% !important; height: 100vh !important; height: 100dvh !important;
+                                border-radius: 0 !important;
                                 border: none !important; box-shadow: none !important;
                                 padding: 0 !important; background: #000 !important;
                                 transform: none !important;
+                                margin: 0 !important;
                             }
                             .phone-notch, .phone-home-bar { display: none !important; }
                             .phone-nav-bracket { display: none !important; }
                             #phone-viewport {
-                                width: 100vw !important; height: 100vh !important;
+                                width: 100vw !important;
+                                height: 100vh !important; height: 100dvh !important;
                                 border-radius: 0 !important;
                             }
                             #canvas-fab {
                                 transition: opacity 0.3s;
                             }
                             #canvas-fab.mob-hidden { opacity: 0; pointer-events: none; }
-                            .canvas-empty { height: 100vh; }
+                            .canvas-empty { height: 100vh; height: 100dvh; }
 
 
 
