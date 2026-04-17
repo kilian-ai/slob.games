@@ -65,6 +65,10 @@ const CSS: &str = r##"
 .game-card.active-game .gname{color:#00ff88}
 .empty{color:#5a6570;font-size:0.82rem;font-style:italic;padding:0.5rem 0}
 .loading{color:#5a6570;font-size:0.82rem;padding:0.5rem 0}
+.status-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0}
+.status-dot.green{background:#00ff88;box-shadow:0 0 4px rgba(0,255,136,0.4)}
+.status-dot.orange{background:#ffaa00;box-shadow:0 0 4px rgba(255,170,0,0.4)}
+.status-dot.red{background:#ff4444;box-shadow:0 0 4px rgba(255,68,68,0.4)}
 @media(max-width:640px){.games-grid{grid-template-columns:1fr}.games-page{padding:1.5rem 1rem}}
 "##;
 
@@ -79,6 +83,7 @@ const JS: &str = r##"
   var __relayUser='';
   var __reconcileInFlight=false;
   var __relayHealth={ok:true,status:200,msg:''};
+  var __fetchingHashes={};
 
   function _setRelayHealth(ok,status,msg){
     __relayHealth={ok:!!ok,status:Number(status||0),msg:String(msg||'')};
@@ -173,6 +178,28 @@ const JS: &str = r##"
     var n=2;
     while(col.games[id+'-'+n])n++;
     return id+'-'+n;
+  }
+
+  function getGameVfsStatus(contentHash){
+    var hash=normHash(contentHash);
+    if(!hash)return 'red';
+    if(__fetchingHashes[hash])return 'orange';
+    var col=readGamesCollection();
+    for(var id in (col.games||{})){
+      var g=col.games[id]||{};
+      var h=normHash(g._sync_hash||g.checksum||'');
+      if(h&&h===hash)return 'green';
+    }
+    return 'red';
+  }
+
+  function updateStatusDots(){
+    var dots=document.querySelectorAll('.status-dot[data-hash]');
+    for(var i=0;i<dots.length;i++){
+      var h=dots[i].getAttribute('data-hash');
+      var s=getGameVfsStatus(h);
+      dots[i].className='status-dot '+s;
+    }
   }
 
   function readPvfsFiles(){
@@ -1124,7 +1151,9 @@ const JS: &str = r##"
   function makeCommunityCard(g){
     var div=document.createElement('div');
     div.className='game-card';
-    var meta='<span class="badge relay">community</span>';
+    var chash=normHash(g.content_hash||'');
+    var status=getGameVfsStatus(chash);
+    var meta='<span class="status-dot '+status+'" data-hash="'+esc(chash)+'"></span> <span class="badge relay">community</span>';
     if(g.size) meta+=' <span style="opacity:0.25">\u00b7</span> '+fmtSize(g.size);
     div.innerHTML='<div class="gname">'+esc(g.name||'Untitled')+'</div>'
       +'<div class="gmeta">'+meta+'</div>'
@@ -1321,6 +1350,8 @@ const JS: &str = r##"
   }
 
   async function fetchAndPlay(hash,name){
+    var hashKey=normHash(hash);
+    if(hashKey){__fetchingHashes[hashKey]=true;updateStatusDots()}
     try{
       var content=null;
       var gameName=name||'Game';
@@ -1369,6 +1400,7 @@ const JS: &str = r##"
       };
       await activateAndGoCanvas(id,gameObj);
     }catch(e){console.error('Failed to load game:',e)}
+    finally{if(hashKey)delete __fetchingHashes[hashKey];updateStatusDots()}
   }
 
   ensureRelayBase().finally(function(){
