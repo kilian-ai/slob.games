@@ -152,33 +152,34 @@ pub fn canvas(_args: &[Value]) -> Value {
                         .phone-nav-bracket {
                             position: absolute;
                             top: 50%;
-                            width: 28px;
-                            height: 92px;
-                            border: 1px solid rgba(0, 224, 255, 0.32);
-                            background: linear-gradient(180deg, rgba(0, 224, 255, 0.12), rgba(0, 224, 255, 0.04));
-                            color: rgba(0, 224, 255, 0.78);
+                            width: 38px;
+                            height: 120px;
+                            border: 1.5px solid rgba(0, 224, 255, 0.55);
+                            background: linear-gradient(180deg, rgba(0, 224, 255, 0.22), rgba(0, 224, 255, 0.08));
+                            color: rgba(0, 224, 255, 0.95);
                             cursor: pointer;
                             transform: translateY(-50%);
                             transition: opacity 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
-                            opacity: 0.42;
+                            opacity: 0.78;
                             z-index: 4;
                             display: none;
                             user-select: none;
                             -webkit-user-select: none;
+                            box-shadow: 0 0 8px rgba(0, 224, 255, 0.15);
                         }
                         .phone-nav-bracket::after {
                             content: '';
                             position: absolute;
                             inset: 2px;
-                            background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(0,0,0,0));
+                            background: linear-gradient(180deg, rgba(255,255,255,0.12), rgba(0,0,0,0));
                             pointer-events: none;
                         }
                         .phone-nav-bracket:hover {
-                            opacity: 0.85;
-                            border-color: rgba(0, 224, 255, 0.72);
-                            box-shadow: 0 0 12px rgba(0, 224, 255, 0.22);
+                            opacity: 1;
+                            border-color: rgba(0, 224, 255, 0.9);
+                            box-shadow: 0 0 18px rgba(0, 224, 255, 0.35);
                         }
-                        .phone-nav-bracket:active { opacity: 1; }
+                        .phone-nav-bracket:active { opacity: 1; box-shadow: 0 0 24px rgba(0, 224, 255, 0.5); }
                         .phone-nav-bracket.left {
                             left: -16px;
                             border-right: none;
@@ -196,7 +197,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             top: 50%;
                             left: 50%;
                             transform: translate(-50%, -50%);
-                            font-size: 14px;
+                            font-size: 18px;
                             font-weight: 700;
                             text-shadow: 0 0 6px rgba(0, 224, 255, 0.35);
                             pointer-events: none;
@@ -3150,12 +3151,11 @@ pub fn canvas(_args: &[Value]) -> Value {
                         vcmInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') vcmSendText(); });
 
                         // ── Mobile fullscreen: auto-hide chrome, two-finger carousel ──
-                        // Build sorted list of public/external games for carousel rotation
+                        // Build sorted list of all games for carousel rotation
                         function _publicGamesList() {
                             const col = readGamesCollection();
                             const list = [];
                             for (const [id, g] of Object.entries(col.games || {})) {
-                                if ((g.scope || g._scope || 'internal') !== 'external') continue;
                                 list.push({
                                     id,
                                     name: g.name || 'untitled',
@@ -3283,8 +3283,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 hideTimer = null;
                                 // Prepare carousel labels
                                 createCarouselLabels();
-                                _carouselPrevLabel.textContent = '\u25C0 ' + (getGameLabel('next') || 'next');
-                                _carouselNextLabel.textContent = (getGameLabel('prev') || 'prev') + ' \u25B6';
+                                _carouselPrevLabel.textContent = '\u25C0 ' + (getGameLabel('prev') || 'prev');
+                                _carouselNextLabel.textContent = (getGameLabel('next') || 'next') + ' \u25B6';
                                 const vp = document.getElementById('phone-viewport');
                                 if (vp) vp.style.transition = 'none';
                             }
@@ -3339,7 +3339,7 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                                 if (Math.abs(pct) >= SWIPE_THRESHOLD) {
                                     // Animate off-screen then switch
-                                    const direction = pct > 0 ? 'next' : 'prev';
+                                    const direction = pct > 0 ? 'prev' : 'next';
                                     if (vp) {
                                         vp.style.transition = 'transform 0.2s ease-out';
                                         vp.style.transform = 'translateX(' + (pct > 0 ? sw : -sw) + 'px)';
@@ -3520,7 +3520,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 }
 
                                 if (Math.abs(pct) >= SWIPE_THRESHOLD) {
-                                    const direction = pct > 0 ? 'next' : 'prev';
+                                    const direction = pct > 0 ? 'prev' : 'next';
                                     animateSwitch(direction);
                                 } else {
                                     // Small swipe: snap back and stay paused, like mobile.
