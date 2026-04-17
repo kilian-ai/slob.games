@@ -85,6 +85,30 @@ const JS: &str = r##"
   var __relayHealth={ok:true,status:200,msg:''};
   var __fetchingHashes={};
 
+  // ── Deletion blacklist: prevent re-sync of intentionally deleted games ──
+  var DELETED_KEY='traits.deleted_games';
+  function _readDeletedGames(){
+    try{return JSON.parse(localStorage.getItem(DELETED_KEY)||'[]')}catch(_){return[]}
+  }
+  function _addDeletedGame(hash,gameId,name){
+    var list=_readDeletedGames();
+    if(hash)list.push({hash:String(hash).trim().toLowerCase(),game_id:String(gameId||'').trim().toLowerCase(),name:String(name||''),ts:Date.now()});
+    // Keep max 200 entries, expire after 30 days
+    var cutoff=Date.now()-30*86400000;
+    list=list.filter(function(e){return e.ts>cutoff}).slice(-200);
+    localStorage.setItem(DELETED_KEY,JSON.stringify(list));
+  }
+  function _isDeletedGame(hash,gameId){
+    var list=_readDeletedGames();
+    var h=String(hash||'').trim().toLowerCase();
+    var g=String(gameId||'').trim().toLowerCase();
+    for(var i=0;i<list.length;i++){
+      if(h&&list[i].hash&&list[i].hash===h)return true;
+      if(g&&list[i].game_id&&list[i].game_id===g)return true;
+    }
+    return false;
+  }
+
   function _setRelayHealth(ok,status,msg){
     __relayHealth={ok:!!ok,status:Number(status||0),msg:String(msg||'')};
   }
@@ -806,6 +830,10 @@ const JS: &str = r##"
     if(!confirm('Delete "'+name+'"? This cannot be undone.'))return;
     var col=readGamesCollection();
     var game=col.games[id]||{};
+    // Record in deletion blacklist so sync doesn't re-add
+    var delHash=String(game._sync_hash||game.checksum||'').trim().toLowerCase();
+    var delGameId=String(game._sync_game_id||game.game_id||'').trim().toLowerCase();
+    _addDeletedGame(delHash,delGameId,name);
     delete col.games[id];
     if(col.active===id)col.active='';
     writeGamesCollection(col);
@@ -984,6 +1012,9 @@ const JS: &str = r##"
         }
         if(foundBySync)continue;
 
+        // Skip games the user intentionally deleted
+        if(_isDeletedGame(rHash,rGameId))continue;
+
         var full=await fetchInternalGameContent(rGameId,rOwner||__relayUser);
         if(!full||typeof full.content!=='string')continue;
         var newId=uniqueLocalId(rGameId,col);
@@ -1057,6 +1088,8 @@ const JS: &str = r##"
     if(!confirm('Delete "'+name+'" from server? This cannot be undone.'))return;
     var t=getToken();
     if(!t){alert('Login required.');return}
+    // Record in deletion blacklist
+    _addDeletedGame('',gameId,name);
     try{
       var user='';try{var me=await fetch(RELAY+'/auth/me',{headers:authHeaders()});if(me.ok){var d=await me.json();user=d.username||''}}catch(_){}
       var delUrl=RELAY+'/internal/game/'+encodeURIComponent(gameId)+(user?('?owner='+encodeURIComponent(user)):'' );

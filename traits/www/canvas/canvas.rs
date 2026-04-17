@@ -623,6 +623,21 @@ pub fn canvas(_args: &[Value]) -> Value {
                             } catch (_) {}
                         }
 
+                        // ── Deletion blacklist ──
+                        var _DELETED_KEY = 'traits.deleted_games';
+                        function _isDeletedGame(hash, gameId) {
+                            try {
+                                var list = JSON.parse(localStorage.getItem(_DELETED_KEY) || '[]');
+                                var h = String(hash || '').trim().toLowerCase();
+                                var g = String(gameId || '').trim().toLowerCase();
+                                for (var i = 0; i < list.length; i++) {
+                                    if (h && list[i].hash && list[i].hash === h) return true;
+                                    if (g && list[i].game_id && list[i].game_id === g) return true;
+                                }
+                            } catch(_) {}
+                            return false;
+                        }
+
                         function readGamesCollection() {
                             try {
                                 const raw = localStorage.getItem('traits.pvfs');
@@ -3703,7 +3718,7 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                                     const missing = catalog.filter(function(g) {
                                         const h = String(g && g.content_hash || '').trim().toLowerCase();
-                                        return !!h && !existing.has(h);
+                                        return !!h && !existing.has(h) && !_isDeletedGame(h, g && g.game_id);
                                     });
                                     if (!missing.length) return 0;
 
@@ -3770,6 +3785,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     let added = 0;
                                     for (const g of games) {
                                         if (!g.content || !g.content_hash) continue;
+                                        // Skip games the user intentionally deleted
+                                        if (_isDeletedGame(g.content_hash, g.game_id)) continue;
                                         // If relay sent full resources (legacy), write to VFS
                                         if (g.resources && typeof g.resources === 'object' && !Array.isArray(g.resources)) {
                                             const normalizedResources = _canonicalResourceMap(g.resources);
