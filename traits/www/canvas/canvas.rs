@@ -152,7 +152,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                         .phone-nav-bracket {
                             position: absolute;
                             top: 50%;
-                            width: 38px;
+                            width: 48px;
                             height: 120px;
                             border: 1.5px solid rgba(0, 224, 255, 0.55);
                             background: linear-gradient(180deg, rgba(0, 224, 255, 0.22), rgba(0, 224, 255, 0.08));
@@ -181,16 +181,16 @@ pub fn canvas(_args: &[Value]) -> Value {
                         }
                         .phone-nav-bracket:active { opacity: 1; box-shadow: 0 0 24px rgba(0, 224, 255, 0.5); }
                         .phone-nav-bracket.left {
-                            left: -16px;
+                            left: -30px;
                             border-right: none;
                             border-radius: 11px 0 0 11px;
-                            clip-path: polygon(100% 0, 36% 0, 0 17%, 58% 50%, 0 83%, 36% 100%, 100% 100%, 78% 82%, 22% 50%, 78% 18%);
+                            clip-path: polygon(100% 0, 30% 0, 0 17%, 50% 50%, 0 83%, 30% 100%, 100% 100%, 70% 82%, 18% 50%, 70% 18%);
                         }
                         .phone-nav-bracket.right {
-                            right: -16px;
+                            right: -30px;
                             border-left: none;
                             border-radius: 0 11px 11px 0;
-                            clip-path: polygon(0 0, 64% 0, 100% 17%, 42% 50%, 100% 83%, 64% 100%, 0 100%, 22% 82%, 78% 50%, 22% 18%);
+                            clip-path: polygon(0 0, 70% 0, 100% 17%, 50% 50%, 100% 83%, 70% 100%, 0 100%, 30% 82%, 82% 50%, 30% 18%);
                         }
                         .phone-nav-bracket .glyph {
                             position: absolute;
@@ -3167,6 +3167,18 @@ pub fn canvas(_args: &[Value]) -> Value {
                             return { list, activeId: col.active };
                         }
 
+                        // Log carousel game list once games are loaded
+                        setTimeout(function() {
+                            const { list, activeId } = _publicGamesList();
+                            if (list.length) {
+                                const idx = list.findIndex(g => g.id === activeId);
+                                console.log('[carousel] ' + list.length + ' games in rotation:');
+                                console.log(list.map((g,i) => (i===idx ? '\u25b6 ' : '  ') + (i+1) + '. ' + g.name + (g.active ? ' (active)' : '')).join('\n'));
+                            } else {
+                                console.log('[carousel] no games in rotation yet');
+                            }
+                        }, 2000);
+
                         let __restoringCommunityCursor = false;
                         async function _restoreLastCommunityCursor() {
                             if (__launchHasHint || __restoringCommunityCursor) return;
@@ -3240,6 +3252,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 const next = direction === 'next'
                                     ? (idx + 1) % list.length
                                     : (idx - 1 + list.length) % list.length;
+                                console.log('[carousel] ' + direction + ': ' + (list[idx]?.name || '?') + ' [' + (idx+1) + '/' + list.length + '] → ' + list[next].name + ' [' + (next+1) + '/' + list.length + ']');
+                                console.log('[carousel] games:', list.map((g,i) => (i===next ? '▶ ' : '  ') + (i+1) + '. ' + g.name).join('\n'));
                                 activateGame(list[next].id);
                             }
 
@@ -3471,6 +3485,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 const next = direction === 'next'
                                     ? (idx + 1) % list.length
                                     : (idx - 1 + list.length) % list.length;
+                                console.log('[carousel] ' + direction + ': ' + (list[idx]?.name || '?') + ' [' + (idx+1) + '/' + list.length + '] → ' + list[next].name + ' [' + (next+1) + '/' + list.length + ']');
+                                console.log('[carousel] games:', list.map((g,i) => (i===next ? '▶ ' : '  ') + (i+1) + '. ' + g.name).join('\n'));
                                 activateGame(list[next].id);
                             }
 
