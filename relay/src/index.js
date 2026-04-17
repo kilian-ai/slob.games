@@ -704,6 +704,14 @@ export class GameRoomV3 {
         return json({ ok: true, ...row });
       }
 
+      // POST /auth/refresh — issue a fresh token (extends session)
+      if (url.pathname === "/auth/refresh" && request.method === "POST") {
+        const user = await this.authUser(request);
+        if (!user) return json({ error: "auth required" }, 401);
+        const token = await signUserToken(user, new URL(request.url).origin, this.env.RELAY_SECRET);
+        return json({ ok: true, token, username: user });
+      }
+
       // GET /auth/secrets — get all secrets for authenticated user (decrypted)
       if (url.pathname === "/auth/secrets" && request.method === "GET") {
         const user = await this.authUser(request);

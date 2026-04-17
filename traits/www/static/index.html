@@ -1045,15 +1045,32 @@ async function boot() {
   await navigate(route, false);
 }
 
+// ── Token helpers ──
+function _isTokenExpired(token) {
+  try {
+    const payload = JSON.parse(atob(token.slice(0, token.lastIndexOf('.'))));
+    return !payload.exp || Date.now() / 1000 > payload.exp;
+  } catch(_) { return true; }
+}
+function _clearAuth() {
+  localStorage.removeItem('traits.secret.SLOB_USER_TOKEN');
+  localStorage.removeItem('traits.env.SLOB_USERNAME');
+  localStorage.removeItem('traits.env.SLOB_USER_ROLE');
+  if (window._refreshAvatar) window._refreshAvatar();
+}
+
 // ── Permission gate: fetch role from relay, show/hide admin nav ──
 let _userRole = null;
 async function _checkUserRole() {
   try {
     const token = (localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '').trim();
     if (!token) return;
+    // Client-side expiry check first
+    if (_isTokenExpired(token)) { _clearAuth(); return; }
     const r = await relayFetch('/sync/auth/me', {
       headers: { 'Authorization': 'Bearer ' + token }
     });
+    if (r.status === 401) { _clearAuth(); return; }
     const data = await r.json();
     if (data.ok && data.role) {
       _userRole = data.role;
@@ -1063,6 +1080,21 @@ async function _checkUserRole() {
         const adminLink = document.getElementById('navAdmin');
         if (adminLink) adminLink.style.display = '';
       }
+      // Auto-refresh token to extend session on every visit
+      _refreshToken(token);
+    }
+  } catch(_) {}
+}
+async function _refreshToken(currentToken) {
+  try {
+    const r = await relayFetch('/sync/auth/refresh', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + currentToken }
+    });
+    const data = await r.json();
+    if (data.ok && data.token) {
+      localStorage.setItem('traits.secret.SLOB_USER_TOKEN', data.token);
+      if (window._traitsSDK && window._traitsSDK.setSecret) window._traitsSDK.setSecret('SLOB_USER_TOKEN', data.token);
     }
   } catch(_) {}
 }
@@ -1076,26 +1108,36 @@ function _initAuth() {
   function refreshAvatar() {
     const user = (localStorage.getItem('traits.env.SLOB_USERNAME') || '').trim();
     const token = (localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '').trim();
-    if (user && token) {
+    // Also check client-side expiry
+    if (user && token && !_isTokenExpired(token)) {
       letterEl.textContent = user.charAt(0).toUpperCase();
       avatarEl.classList.add('logged-in');
       avatarEl.title = user;
     } else {
+      // Clean up stale auth if token expired but username lingered
+      if (user && (!token || _isTokenExpired(token))) {
+        localStorage.removeItem('traits.secret.SLOB_USER_TOKEN');
+        localStorage.removeItem('traits.env.SLOB_USERNAME');
+        localStorage.removeItem('traits.env.SLOB_USER_ROLE');
+      }
       letterEl.textContent = '?';
       avatarEl.classList.remove('logged-in');
       avatarEl.title = 'Sign in';
     }
   }
+  window._refreshAvatar = refreshAvatar;
 
   avatarEl.addEventListener('click', () => {
     const user = (localStorage.getItem('traits.env.SLOB_USERNAME') || '').trim();
     const token = (localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '').trim();
-    if (user && token) {
+    const valid = user && token && !_isTokenExpired(token);
+    if (valid) {
       document.getElementById('authLoggedIn').style.display = '';
       document.getElementById('authLoggedOut').style.display = 'none';
       document.getElementById('authUsername').textContent = user;
       document.getElementById('authAvatarLg').textContent = user.charAt(0).toUpperCase();
     } else {
+      if (user && (!token || _isTokenExpired(token))) _clearAuth();
       document.getElementById('authLoggedIn').style.display = 'none';
       document.getElementById('authLoggedOut').style.display = '';
     }
