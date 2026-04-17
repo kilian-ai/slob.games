@@ -1638,7 +1638,21 @@ export default {
       const doPath = url.pathname.slice(5); // strip '/sync'
       const doUrl = new URL(request.url);
       doUrl.pathname = doPath;
-      return room.fetch(new Request(doUrl.toString(), request));
+      try {
+        const doRes = await room.fetch(new Request(doUrl.toString(), request));
+        // Ensure CORS headers are present on all DO responses
+        if (!doRes.headers.get('Access-Control-Allow-Origin')) {
+          const patched = new Response(doRes.body, {
+            status: doRes.status,
+            statusText: doRes.statusText,
+            headers: { ...Object.fromEntries(doRes.headers.entries()), ...cors() },
+          });
+          return patched;
+        }
+        return doRes;
+      } catch (e) {
+        return json({ error: "service temporarily unavailable" }, 503);
+      }
     }
 
     return json({ error: "not found" }, 404);

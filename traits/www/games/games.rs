@@ -1335,12 +1335,22 @@ const JS: &str = r##"
           }
         }catch(_){}
       }
-      // Fall back to REST endpoint
+      // Fall back to REST endpoint (with relay failover)
       if(!content){
-        var res=await fetch(RELAY+'/game/'+hash);
-        var data=await res.json();
-        content=data.content;
-        gameName=data.name||gameName;
+        var r=await fetchJson('/game/'+hash);
+        if(r.ok&&r.data&&r.data.content){
+          content=r.data.content;
+          gameName=r.data.name||gameName;
+        }
+      }
+      // Retry once if first attempt failed (transient network/CORS errors)
+      if(!content){
+        await new Promise(function(ok){setTimeout(ok,500)});
+        var r2=await fetchJson('/game/'+hash);
+        if(r2.ok&&r2.data&&r2.data.content){
+          content=r2.data.content;
+          gameName=r2.data.name||gameName;
+        }
       }
       if(!content)return;
       var safeHash=String(hash||'').trim().toLowerCase();
