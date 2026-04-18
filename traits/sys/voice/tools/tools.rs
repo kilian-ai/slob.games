@@ -111,7 +111,7 @@ pub fn voice_tools(args: &[Value]) -> Value {
     tools.push(json!({
         "type": "function",
         "name": "canvas",
-        "description": "Create, build, or modify anything on the live visual canvas. Invokes a coding agent that writes a complete self-contained HTML+CSS+JS app to canvas/app.html — the canvas page updates automatically. Examples: \"create a breakout clone\", \"draw animated particles\", \"make a Spotify controller\", \"add a reset button\".",
+        "description": "Create, build, or modify anything on the live visual canvas. Invokes a coding agent that writes a complete self-contained HTML+CSS+JS app to canvas/app.html — the canvas page updates automatically. Examples: \"create a space shooter game\", \"draw animated particles\", \"make a Spotify controller\", \"add a reset button\".",
         "parameters": {
             "type": "object",
             "properties": {
