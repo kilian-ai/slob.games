@@ -185,12 +185,14 @@ pub fn canvas(_args: &[Value]) -> Value {
                             border-right: none;
                             border-radius: 11px 0 0 11px;
                             clip-path: polygon(100% 0, 30% 0, 0 17%, 50% 50%, 0 83%, 30% 100%, 100% 100%, 70% 82%, 18% 50%, 70% 18%);
+                            transform-origin: right center;
                         }
                         .phone-nav-bracket.right {
                             right: -30px;
                             border-left: none;
                             border-radius: 0 11px 11px 0;
                             clip-path: polygon(0 0, 70% 0, 100% 17%, 50% 50%, 100% 83%, 70% 100%, 0 100%, 30% 82%, 82% 50%, 30% 18%);
+                            transform-origin: left center;
                         }
                         .phone-nav-bracket .glyph {
                             position: absolute;
@@ -658,14 +660,93 @@ pub fn canvas(_args: &[Value]) -> Value {
                         }
 
                         function _readPvfsFiles() {
-                            try { return JSON.parse(localStorage.getItem('traits.pvfs') || '{}') || {}; }
-                            catch(_) { return {}; }
+                            try {
+                                var raw = JSON.parse(localStorage.getItem('traits.pvfs') || '{}') || {};
+                                var out = {};
+                                // Flat entries (legacy format or dual-written flat keys)
+                                for (var k in raw) {
+                                    if (k === 'files' || k === 'dirs') continue;
+                                    if (typeof raw[k] === 'string') out[k] = raw[k];
+                                }
+                                // Nested entries under files (LayeredVfs::dump format)
+                                if (raw.files && typeof raw.files === 'object') {
+                                    for (var p in raw.files) {
+                                        if (out[p] !== undefined) continue;
+                                        var entry = raw.files[p];
+                                        if (typeof entry === 'string') out[p] = entry;
+                                        else if (entry && typeof entry.content === 'string') out[p] = entry.content;
+                                    }
+                                }
+                                return out;
+                            } catch(_) { return {}; }
                         }
 
                         function _writePvfsFiles(files) {
                             try { localStorage.setItem('traits.pvfs', JSON.stringify(files || {})); }
                             catch(_) {}
                         }
+
+                        // ── IndexedDB sprite cache ──
+                        // Sync mirror of IndexedDB sprite/media entries so that sync
+                        // callers (_collectGameResourcesForContent, P2P handlers) can
+                        // find resources without awaiting async IDB reads.
+                        var __idbSpriteCache = {};
+                        var __idbSpriteCacheReady = false;
+
+                        function _isSpriteOrMediaPath(path) {
+                            var p = String(path || '').toLowerCase();
+                            return /^sprites\//.test(p)
+                                || /^canvas\/sprites\//.test(p)
+                                || /^assets\//.test(p)
+                                || /^images\//.test(p)
+                                || /^textures\//.test(p)
+                                || /^audio\//.test(p)
+                                || /\.(png|jpe?g|gif|webp|svg|mp3|wav|ogg|atlas)$/i.test(p);
+                        }
+
+                        function _loadIdbSpriteCache() {
+                            var bvfs = window.__traitsBrowserVfs;
+                            if (!bvfs || !bvfs.listIndexedDbEntries) return;
+                            bvfs.listIndexedDbEntries('').then(function(entries) {
+                                var loaded = 0;
+                                for (var i = 0; i < entries.length; i++) {
+                                    var e = entries[i];
+                                    if (e && e.path && e.content) {
+                                        __idbSpriteCache[e.path] = e.content;
+                                        loaded++;
+                                    }
+                                }
+                                __idbSpriteCacheReady = true;
+                                if (loaded) console.log('[sprite-cache] loaded', loaded, 'entries from IndexedDB');
+                            }).catch(function() { __idbSpriteCacheReady = true; });
+                        }
+
+                        // Write a sprite/media file to IndexedDB + update cache
+                        function _writeIdbSprite(path, content) {
+                            var bvfs = window.__traitsBrowserVfs;
+                            if (!bvfs || !bvfs.writeIndexedDb) return Promise.resolve(false);
+                            __idbSpriteCache[path] = content;
+                            return bvfs.writeIndexedDb(path, content).then(function() {
+                                return true;
+                            }).catch(function(e) {
+                                console.warn('[sprite-cache] IDB write failed:', path, e);
+                                return false;
+                            });
+                        }
+
+                        // Read from flat pvfs files + IDB sprite cache combined
+                        function _readPvfsFilesWithSprites() {
+                            var files = _readPvfsFiles();
+                            for (var k in __idbSpriteCache) {
+                                if (files[k] === undefined && __idbSpriteCache[k]) {
+                                    files[k] = __idbSpriteCache[k];
+                                }
+                            }
+                            return files;
+                        }
+
+                        // Kick off cache load immediately
+                        _loadIdbSpriteCache();
 
                         function _canonicalResourceMap(resources) {
                             const src = (resources && typeof resources === 'object') ? resources : {};
@@ -691,7 +772,7 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                         function _collectGameResourcesForContent(content, maxBytes) {
                             const text = String(content || '');
-                            const files = _readPvfsFiles();
+                            const files = _readPvfsFilesWithSprites();
                             const out = {};
                             const limit = Math.max(64 * 1024, Number(maxBytes) || (2 * 1024 * 1024));
                             let bytes = 0;
@@ -749,7 +830,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 return { activeId: activeId || '', refs: [], missing: [], found: [], resources: {} };
                             }
                             const refs = _resourceRefsForContent(active.content);
-                            const files = _readPvfsFiles();
+                            const files = _readPvfsFilesWithSprites();
                             const found = [];
                             const missing = [];
                             for (let i = 0; i < refs.length; i++) {
@@ -821,18 +902,30 @@ pub fn canvas(_args: &[Value]) -> Value {
                             const limit = Math.max(64 * 1024, Number(maxBytes) || (2 * 1024 * 1024));
                             let used = 0;
                             let wrote = 0;
+                            var lsFiles = {}; // non-sprite files → localStorage
 
                             for (const path of keys) {
                                 const val = normalized[path];
                                 if (used + val.length > limit) continue;
                                 used += val.length;
-                                if (files[path] !== val) {
-                                    files[path] = val;
+                                const existing = files[path] || __idbSpriteCache[path] || '';
+                                if (existing === val) continue;
+                                if (_isSpriteOrMediaPath(path)) {
+                                    // Route sprites/media directly to IndexedDB + cache
+                                    __idbSpriteCache[path] = val;
+                                    _writeIdbSprite(path, val);
+                                    wrote++;
+                                } else {
+                                    lsFiles[path] = val;
                                     wrote++;
                                 }
                             }
 
-                            if (wrote > 0) _writePvfsFiles(files);
+                            // Write non-sprite resources to localStorage
+                            if (Object.keys(lsFiles).length > 0) {
+                                for (var p in lsFiles) files[p] = lsFiles[p];
+                                _writePvfsFiles(files);
+                            }
                             return wrote;
                         }
 
@@ -3911,7 +4004,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 if (!ws || ws.readyState !== WebSocket.OPEN) return;
                                 if (!Array.isArray(games) || !games.length) return;
                                 var allMissing = [];
-                                var files = _readPvfsFiles();
+                                var files = _readPvfsFilesWithSprites();
                                 for (var i = 0; i < games.length; i++) {
                                     var g = games[i];
                                     var gameHash = String(g.content_hash || g._sync_hash || g.checksum || '').trim();
@@ -3968,7 +4061,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 var items = Array.isArray(data.items) ? data.items : [];
                                 var legacyPaths = Array.isArray(data.paths) ? data.paths : [];
                                 if ((!items.length && !legacyPaths.length) || !data.nonce) return;
-                                var files = _readPvfsFiles();
+                                var files = _readPvfsFilesWithSprites();
                                 var found = [];
                                 var bytes = 0;
                                 var CHUNK_LIMIT = 800000; // stay under 900KB relay limit
@@ -4458,6 +4551,22 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 phoneFrame.style.alignSelf = 'flex-start';
                                 const visualH = natural * scale;
                                 phoneFrame.style.marginTop = Math.max(0, (available - visualH) / 2) + 'px';
+                                scaleBrackets(scale);
+                            }
+                            function scaleBrackets(scale) {
+                                var minW = 36;
+                                var visualW = 48 * scale;
+                                var brackets = phoneFrame.querySelectorAll('.phone-nav-bracket');
+                                if (visualW < minW && scale > 0) {
+                                    var boost = minW / visualW;
+                                    for (var i = 0; i < brackets.length; i++) {
+                                        brackets[i].style.transform = 'translateY(-50%) scale(' + boost + ')';
+                                    }
+                                } else {
+                                    for (var i = 0; i < brackets.length; i++) {
+                                        brackets[i].style.transform = 'translateY(-50%)';
+                                    }
+                                }
                             }
                             window.addEventListener('resize', scaleFrame);
                             // Run after a short delay to ensure layout is settled

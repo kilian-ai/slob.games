@@ -1124,8 +1124,22 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                 let toolResult = '{"error":"unknown tool"}';
                 if (tc.function.name === 'sys_vfs') {
                     if (args.action === 'read') {
-                        let pvfs = {}; try { pvfs = JSON.parse(localStorage.getItem('traits.pvfs') || '{}'); } catch(_) {}
-                        const fileContent = pvfs[args.path] || '';
+                        let fileContent = '';
+                        // Try flat key first, then nested format, then IndexedDB
+                        try {
+                            const pvfs = JSON.parse(localStorage.getItem('traits.pvfs') || '{}');
+                            fileContent = pvfs[args.path] || '';
+                            if (!fileContent && pvfs.files && pvfs.files[args.path]) {
+                                const entry = pvfs.files[args.path];
+                                fileContent = (typeof entry === 'string') ? entry : (entry && entry.content) || '';
+                            }
+                        } catch(_) {}
+                        if (!fileContent) {
+                            try {
+                                const idbEntry = await _idbGetVfsEntry(args.path);
+                                if (idbEntry) fileContent = idbEntry.content || '';
+                            } catch(_) {}
+                        }
                         toolResult = fileContent || '(empty)';
                         console.log('[Canvas/Agent/Browser] VFS read:', args.path, fileContent.length, 'chars');
                     } else if (args.action === 'write') {
@@ -1177,13 +1191,34 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                             const r = imgResult?.result || imgResult;
                             if (r?.ok) {
                                 if (r.path) _generatedSpritePaths.add(String(r.path));
-                                // Also sync the generated image to localStorage pvfs
-                                if (r.path && r.format === 'data_url') {
+                                // Offload sprite to IndexedDB — WASM pvfs_write may have
+                                // silently failed on localStorage quota, but the sprite is
+                                // still in the WASM in-memory VFS.  Read it out and persist
+                                // to IndexedDB where there's no 5 MB limit.
+                                if (r.path && _isOffloadableVfsPath(r.path)) {
                                     try {
-                                        let pvfs = {}; try { pvfs = JSON.parse(localStorage.getItem('traits.pvfs') || '{}'); } catch(_) {}
-                                        const imgContent = pvfs[r.path] || '';
-                                        if (!imgContent && wasmReady && wasm?.pvfs_refresh) { wasm.pvfs_refresh(); }
-                                    } catch(_) {}
+                                        let spriteContent = '';
+                                        // Try reading from WASM in-memory VFS first
+                                        if (wasmReady && wasm?.vfs_read) {
+                                            spriteContent = wasm.vfs_read(r.path) || '';
+                                        }
+                                        // Fallback: check localStorage nested format
+                                        if (!spriteContent) {
+                                            const localEntry = _readLocalPvfsEntry(r.path);
+                                            if (localEntry) spriteContent = localEntry.content || '';
+                                        }
+                                        if (spriteContent) {
+                                            await _idbPutVfsEntry(r.path, spriteContent);
+                                            // Remove from localStorage VFS blob to free quota
+                                            _deleteLocalPvfsEntry(r.path);
+                                            if (wasmReady && wasm?.pvfs_refresh) wasm.pvfs_refresh();
+                                            console.log('[Canvas/Agent/Browser] sprite offloaded to IndexedDB:', r.path, '(' + Math.round(spriteContent.length / 1024) + 'KB)');
+                                        } else {
+                                            console.warn('[Canvas/Agent/Browser] sprite content not found for offload:', r.path);
+                                        }
+                                    } catch(offloadErr) {
+                                        console.warn('[Canvas/Agent/Browser] sprite IDB offload failed:', r.path, offloadErr);
+                                    }
                                 }
                                 toolResult = JSON.stringify({ ok: true, path: r.path, size: r.size, mode: r.mode,
                                     IMPORTANT: 'Image saved to VFS. You MUST now call sys_vfs write with the COMPLETE updated canvas/app.html that loads this image. The image is NOT visible until you rewrite the HTML.',
