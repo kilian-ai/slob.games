@@ -737,6 +737,13 @@ pub fn persistent_vfs_read(path: &str) -> String {
     pvfs_read(path).unwrap_or_default()
 }
 
+/// Delete a file from the persistent VFS (frees in-memory + localStorage quota).
+/// Used after offloading large assets (sprites) to IndexedDB.
+#[wasm_bindgen]
+pub fn persistent_vfs_delete(path: &str) -> bool {
+    pvfs_delete(path)
+}
+
 /// Write a single file to the VFS.
 #[wasm_bindgen]
 pub fn vfs_write(path: &str, content: &str) {

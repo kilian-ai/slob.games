@@ -1212,9 +1212,13 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                                         }
                                         if (spriteContent) {
                                             await _idbPutVfsEntry(r.path, spriteContent);
-                                            // Remove from localStorage VFS blob to free quota
+                                            // Remove from localStorage VFS to free quota for subsequent sprites.
                                             _deleteLocalPvfsEntry(r.path);
-                                            if (wasmReady && wasm?.pvfs_refresh) wasm.pvfs_refresh();
+                                            // Remove from in-memory persistent VFS too — sprite is now in IDB,
+                                            // keeping it in VFS causes quota overflow on next pvfs_write dump.
+                                            if (wasmReady && wasm?.persistent_vfs_delete) {
+                                                try { wasm.persistent_vfs_delete(r.path); } catch(_) {}
+                                            }
                                             console.log('[Canvas/Agent/Browser] sprite offloaded to IndexedDB:', r.path, '(' + Math.round(spriteContent.length / 1024) + 'KB)');
                                         } else {
                                             console.warn('[Canvas/Agent/Browser] sprite content not found for offload:', r.path);
