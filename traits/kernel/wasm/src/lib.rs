@@ -112,6 +112,26 @@ fn ensure_pvfs() {
     });
 }
 
+/// Remove sprite/image entries from a VFS JSON dump before writing to localStorage.
+/// These are large base64 blobs that should only live in IndexedDB.
+fn filter_large_vfs_paths(json: &str) -> String {
+    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(json) {
+        // Structured format: { "files": { ... }, "dirs": [...] }
+        if let Some(files) = v.get_mut("files").and_then(|f| f.as_object_mut()) {
+            files.retain(|k, _| !k.starts_with("sprites/") && !k.starts_with("images/"));
+        }
+        // Flat format: { "path": "content", ... }
+        if v.get("files").is_none() {
+            if let Some(obj) = v.as_object_mut() {
+                obj.retain(|k, _| !k.starts_with("sprites/") && !k.starts_with("images/"));
+            }
+        }
+        serde_json::to_string(&v).unwrap_or_else(|_| json.to_string())
+    } else {
+        json.to_string()
+    }
+}
+
 fn pvfs_read(path: &str) -> Option<String> {
     ensure_pvfs();
     PERSISTENT_VFS.with(|cell| {
@@ -124,8 +144,11 @@ fn pvfs_write(path: &str, content: &str) {
     PERSISTENT_VFS.with(|cell| {
         if let Some(vfs) = cell.borrow_mut().as_mut() {
             vfs.write(path, content);
-            // Auto-persist user layer to localStorage
-            ls_set("traits.pvfs", &vfs.dump());
+            // Skip localStorage persistence entirely for sprite/image paths —
+            // they are large binaries that belong in IndexedDB only.
+            if !path.starts_with("sprites/") && !path.starts_with("images/") {
+                ls_set("traits.pvfs", &filter_large_vfs_paths(&vfs.dump()));
+            }
         }
     });
 }
@@ -143,7 +166,7 @@ fn pvfs_delete(path: &str) -> bool {
         if let Some(vfs) = cell.borrow_mut().as_mut() {
             let deleted = vfs.delete(path);
             if deleted {
-                ls_set("traits.pvfs", &vfs.dump());
+                ls_set("traits.pvfs", &filter_large_vfs_paths(&vfs.dump()));
             }
             deleted
         } else {
@@ -325,7 +348,10 @@ impl PersistingVfs {
                 vfs.load(&json);
             }
         });
-        ls_set("traits.pvfs", &json);
+        // Strip sprite/image entries before persisting to localStorage — they
+        // are large binaries that belong in IndexedDB, not the ~5 MB localStorage.
+        let filtered = filter_large_vfs_paths(&json);
+        ls_set("traits.pvfs", &filtered);
     }
 }
 
