@@ -889,8 +889,9 @@ const CANVAS_AGENT_SYSTEM =
     'You are a canvas code executor. NEVER explain, suggest, or answer in text. ALWAYS call tools immediately.\n\n' +
     'WORKFLOW — execute these steps in order, no skipping, no chatting:\n' +
     '1. sys_vfs(action=read, path=canvas/app.html) — read the current file\n' +
-    '2. Apply the requested change to the full HTML (honoring ALL rules above)\n' +
-    '3. sys_vfs(action=write, path=canvas/app.html, content=<COMPLETE updated HTML>) — write the whole file, never a diff\n\n' +
+    '2. If the file already has content: KEEP the existing game. Only make the specific change the user asked for. Do NOT rewrite, redesign, or rebuild the game from scratch. Preserve all existing features, sprites, levels, sounds, and gameplay. Make the MINIMUM incremental edit.\n' +
+    '3. If the file is empty or does not exist: build a complete new game following ALL rules above.\n' +
+    '4. sys_vfs(action=write, path=canvas/app.html, content=<COMPLETE updated HTML>) — write the whole file, never a diff\n\n' +
     'RESPONSIVE MOBILE REQUIREMENT (MANDATORY):\n' +
     '- Games must adapt to different screen sizes and orientation changes without clipping HUD/gameplay.\n' +
     '- Do NOT hardcode CSS to 390x844 only. Use responsive sizing with dynamic viewport units and safe-area insets.\n' +
@@ -981,7 +982,7 @@ async function _runCanvasAgent(sdk, request) {
 
     // ── Fallback: dispatch through SDK cascade (needs helper or server) ──
     const prompt = _existing
-        ? `User request: ${request}${_gameLogs}\n\nRead canvas/app.html, apply the change, write the COMPLETE updated file back immediately.`
+        ? `User request: ${request}${_gameLogs}\n\nIMPORTANT: A game already exists. Keep the existing game and only make the specific incremental change requested. Do NOT rebuild or rewrite the game from scratch. Preserve all existing features, sprites, levels, sounds, and gameplay. Read canvas/app.html, apply ONLY the requested change, write the COMPLETE updated file back immediately.`
 : `Build the following for the canvas:\n\n${request}\n\nWrite a complete, self-contained HTML+CSS+JS file to canvas/app.html. Requirements:\n- 390px wide × 844px tall, fills the phone viewport\n- Dark theme: background #0a0a0a, bright accent colors\n- Inline all CSS and JS — no external dependencies\n- querySelector('canvas') for canvas access (scripts run inside an iframe)\n- let (not const) for any reassigned variables\n- Cancel any existing animation first: if(window.__canvasAnimId) cancelAnimationFrame(window.__canvasAnimId)\n- Store new animation ID: window.__canvasAnimId = requestAnimationFrame(loop)\n- No DOMContentLoaded listeners`;
 
     const agentArgs = [prompt, CANVAS_AGENT_SYSTEM, 'sys.vfs,sys.canvas', _canvasModel, 20];
@@ -1087,7 +1088,7 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
     const messages = [
         { role: 'system', content: CANVAS_AGENT_SYSTEM },
         { role: 'user', content: existing
-            ? `User request: ${request}${gameLogs}\n\nRead canvas/app.html, apply the change, write the COMPLETE updated file back immediately.`
+            ? `User request: ${request}${gameLogs}\n\nIMPORTANT: A game already exists. Keep the existing game and only make the specific incremental change requested. Do NOT rebuild or rewrite the game from scratch. Preserve all existing features, sprites, levels, sounds, and gameplay. Read canvas/app.html, apply ONLY the requested change, write the COMPLETE updated file back immediately.`
 : `Build the following for the canvas:\n\n${request}${gameLogs}\n\nWrite a complete, self-contained HTML+CSS+JS file to canvas/app.html. Requirements:\n- 390px wide × 844px tall, fills the phone viewport\n- Dark theme: background #0a0a0a, bright accent colors\n- Inline all CSS and JS — no external dependencies\n- querySelector('canvas') for canvas access (scripts run inside an iframe)\n- let (not const) for any reassigned variables\n- Cancel any existing animation first: if(window.__canvasAnimId) cancelAnimationFrame(window.__canvasAnimId)\n- Store new animation ID: window.__canvasAnimId = requestAnimationFrame(loop)\n- No DOMContentLoaded listeners`
         }
     ];
