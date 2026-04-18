@@ -458,11 +458,11 @@ pub fn canvas(_args: &[Value]) -> Value {
                             div .camera {}
                         }
                         button #btnPrevBracket .phone-nav-bracket .left title="Previous game" aria-label="Previous game" {
-                            (PreEscaped(r##"<svg viewBox="0 0 80 120" xmlns="http://www.w3.org/2000/svg"><polyline points="58,14 16,60 58,106" fill="none" stroke="rgba(160,170,180,0.55)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg>"##))
+                            (PreEscaped(r##"<svg viewBox="0 0 80 120" xmlns="http://www.w3.org/2000/svg"><polyline points="58,14 16,60 58,106" fill="none" stroke="rgba(180,190,200,0.35)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/></svg>"##))
                         }
                         iframe #phone-viewport sandbox="allow-scripts allow-same-origin allow-forms" {}
                         button #btnNextBracket .phone-nav-bracket .right title="Next game" aria-label="Next game" {
-                            (PreEscaped(r##"<svg viewBox="0 0 80 120" xmlns="http://www.w3.org/2000/svg"><polyline points="22,14 64,60 22,106" fill="none" stroke="rgba(160,170,180,0.55)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg>"##))
+                            (PreEscaped(r##"<svg viewBox="0 0 80 120" xmlns="http://www.w3.org/2000/svg"><polyline points="22,14 64,60 22,106" fill="none" stroke="rgba(180,190,200,0.35)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/></svg>"##))
                         }
                         div .phone-home-bar {}
                     }
