@@ -152,7 +152,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                         .phone-nav-bracket {
                             position: absolute;
                             top: 50%;
-                            width: 60px;
+                            width: 80px;
                             height: 120px;
                             border: none;
                             background: none;
@@ -167,9 +167,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                             padding: 0;
                         }
                         .phone-nav-bracket:hover { opacity: 1; }
-                        .phone-nav-bracket:hover svg polyline { stroke: rgba(0, 224, 255, 0.95); filter: drop-shadow(0 0 8px rgba(0, 224, 255, 0.4)); }
+                        .phone-nav-bracket:hover svg polyline { stroke: rgba(180, 190, 200, 0.8); filter: drop-shadow(0 0 6px rgba(180, 190, 200, 0.3)); }
                         .phone-nav-bracket:active { opacity: 1; }
-                        .phone-nav-bracket:active svg polyline { filter: drop-shadow(0 0 12px rgba(0, 224, 255, 0.5)); }
+                        .phone-nav-bracket:active svg polyline { filter: drop-shadow(0 0 10px rgba(180, 190, 200, 0.4)); }
                         .phone-nav-bracket.left {
                             left: -30px;
                             transform-origin: right center;
@@ -458,11 +458,11 @@ pub fn canvas(_args: &[Value]) -> Value {
                             div .camera {}
                         }
                         button #btnPrevBracket .phone-nav-bracket .left title="Previous game" aria-label="Previous game" {
-                            (PreEscaped(r##"<svg viewBox="0 0 60 120" xmlns="http://www.w3.org/2000/svg"><polyline points="44,14 14,60 44,106" fill="none" stroke="rgba(0,224,255,0.4)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>"##))
+                            (PreEscaped(r##"<svg viewBox="0 0 80 120" xmlns="http://www.w3.org/2000/svg"><polyline points="58,14 16,60 58,106" fill="none" stroke="rgba(160,170,180,0.55)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>"##))
                         }
                         iframe #phone-viewport sandbox="allow-scripts allow-same-origin allow-forms" {}
                         button #btnNextBracket .phone-nav-bracket .right title="Next game" aria-label="Next game" {
-                            (PreEscaped(r##"<svg viewBox="0 0 60 120" xmlns="http://www.w3.org/2000/svg"><polyline points="16,14 46,60 16,106" fill="none" stroke="rgba(0,224,255,0.4)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>"##))
+                            (PreEscaped(r##"<svg viewBox="0 0 80 120" xmlns="http://www.w3.org/2000/svg"><polyline points="22,14 64,60 22,106" fill="none" stroke="rgba(160,170,180,0.55)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>"##))
                         }
                         div .phone-home-bar {}
                     }
@@ -4543,7 +4543,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             }
                             function scaleBrackets(scale) {
                                 var minW = 36;
-                                var visualW = 60 * scale;
+                                var visualW = 80 * scale;
                                 var brackets = phoneFrame.querySelectorAll('.phone-nav-bracket');
                                 if (visualW < minW && scale > 0) {
                                     var boost = minW / visualW;
