@@ -1031,6 +1031,50 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     }
                                 }
 
+                                // Pass 3: hash-based dedup — merge games with identical content hash
+                                var byHash = {};
+                                for (var hid in col.games) {
+                                    if (!Object.prototype.hasOwnProperty.call(col.games, hid)) continue;
+                                    var hg = col.games[hid] || {};
+                                    var hh = String(hg._sync_hash || hg.checksum || '').trim().toLowerCase();
+                                    if (!hh) continue;
+                                    if (!byHash[hh]) byHash[hh] = [];
+                                    byHash[hh].push(hid);
+                                }
+                                for (var hk in byHash) {
+                                    var hids = byHash[hk];
+                                    if (hids.length <= 1) continue;
+                                    // Prefer: internal scope, proper name (no __ or long timestamps), newest, longest content
+                                    hids.sort(function(a, b) {
+                                        var ga = col.games[a] || {};
+                                        var gb = col.games[b] || {};
+                                        // Prefer internal scope
+                                        var sa = (ga.scope || ga._scope || 'internal') === 'internal' ? 1 : 0;
+                                        var sb = (gb.scope || gb._scope || 'internal') === 'internal' ? 1 : 0;
+                                        if (sb !== sa) return sb - sa;
+                                        // Prefer proper names (penalize junk auto-generated names)
+                                        var ja = /__|^\d{12}|^s-/.test(ga.name || '') ? 0 : 1;
+                                        var jb = /__|^\d{12}|^s-/.test(gb.name || '') ? 0 : 1;
+                                        if (jb !== ja) return jb - ja;
+                                        // Prefer shorter cleaner names
+                                        var na = (ga.name || '').length || 999;
+                                        var nb = (gb.name || '').length || 999;
+                                        if (na !== nb) return na - nb;
+                                        // Newest updated
+                                        var ua = String(ga.updated || '');
+                                        var ub = String(gb.updated || '');
+                                        if (ub !== ua) return ub.localeCompare(ua);
+                                        return 0;
+                                    });
+                                    var hkeep = hids[0];
+                                    for (var hi = 1; hi < hids.length; hi++) {
+                                        var hdel = hids[hi];
+                                        if (col.active === hdel) col.active = hkeep;
+                                        delete col.games[hdel];
+                                        removed++;
+                                    }
+                                }
+
                                 if (removed > 0) {
                                     console.log('[dedupeLocalGames] removed=', removed, 'activeBefore=', _dedupActiveBefore, 'activeAfter=', col.active, 'changed=', (_dedupActiveBefore !== col.active));
                                     if (_dedupActiveBefore !== col.active) {
@@ -1046,7 +1090,7 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                         function runOneTimeHistoricalDedupe() {
                             try {
-                                const FLAG = 'traits.env.GAMES_DEDUPE_V2';
+                                const FLAG = 'traits.env.GAMES_DEDUPE_V3';
                                 if (localStorage.getItem(FLAG)) return 0;
 
                                 const raw = localStorage.getItem('traits.pvfs') || '{}';
@@ -3910,7 +3954,24 @@ pub fn canvas(_args: &[Value]) -> Value {
                                         }
 
                                         // Skip if we already have this exact content version
-                                        if (existing.has(g.content_hash) && !matchedId && !col.games[gameId]) continue;
+                                        // But if the existing copy has a junk auto-generated name, update it
+                                        if (existing.has(g.content_hash) && !matchedId && !col.games[gameId]) {
+                                            if (g.name) {
+                                                for (const [eid, eg] of Object.entries(col.games)) {
+                                                    if (String(eg._sync_hash || eg.checksum || '') === g.content_hash) {
+                                                        var oldName = eg.name || '';
+                                                        if (/__|^\d{12}|^s-/.test(oldName) && !/__|^\d{12}|^s-/.test(g.name)) {
+                                                            eg.name = g.name;
+                                                            eg._sync_owner = eg._sync_owner || owner;
+                                                            eg._sync_game_id = eg._sync_game_id || gid;
+                                                            added++; // trigger write
+                                                        }
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            continue;
+                                        }
 
                                         // Update in place if we already have this identity.
                                         const prev = col.games[targetId] || {};
