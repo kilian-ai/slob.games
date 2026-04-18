@@ -154,55 +154,39 @@ pub fn canvas(_args: &[Value]) -> Value {
                             top: 50%;
                             width: 48px;
                             height: 120px;
-                            border: 1.5px solid rgba(0, 224, 255, 0.55);
-                            background: linear-gradient(180deg, rgba(0, 224, 255, 0.22), rgba(0, 224, 255, 0.08));
-                            color: rgba(0, 224, 255, 0.95);
+                            border: none;
+                            background: none;
                             cursor: pointer;
                             transform: translateY(-50%);
-                            transition: opacity 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+                            transition: opacity 0.18s ease;
                             opacity: 0.78;
                             z-index: 4;
                             display: none;
                             user-select: none;
                             -webkit-user-select: none;
-                            box-shadow: 0 0 8px rgba(0, 224, 255, 0.15);
+                            padding: 0;
                         }
-                        .phone-nav-bracket::after {
-                            content: '';
-                            position: absolute;
-                            inset: 2px;
-                            background: linear-gradient(180deg, rgba(255,255,255,0.12), rgba(0,0,0,0));
-                            pointer-events: none;
-                        }
-                        .phone-nav-bracket:hover {
-                            opacity: 1;
-                            border-color: rgba(0, 224, 255, 0.9);
-                            box-shadow: 0 0 18px rgba(0, 224, 255, 0.35);
-                        }
-                        .phone-nav-bracket:active { opacity: 1; box-shadow: 0 0 24px rgba(0, 224, 255, 0.5); }
+                        .phone-nav-bracket:hover { opacity: 1; }
+                        .phone-nav-bracket:hover svg path { stroke: rgba(0, 224, 255, 0.9); filter: drop-shadow(0 0 8px rgba(0, 224, 255, 0.35)); }
+                        .phone-nav-bracket:active { opacity: 1; }
+                        .phone-nav-bracket:active svg path { filter: drop-shadow(0 0 12px rgba(0, 224, 255, 0.5)); }
                         .phone-nav-bracket.left {
                             left: -30px;
-                            border-right: none;
-                            border-radius: 11px 0 0 11px;
-                            clip-path: polygon(100% 0, 30% 0, 0 17%, 50% 50%, 0 83%, 30% 100%, 100% 100%, 70% 82%, 18% 50%, 70% 18%);
                             transform-origin: right center;
                         }
                         .phone-nav-bracket.right {
                             right: -30px;
-                            border-left: none;
-                            border-radius: 0 11px 11px 0;
-                            clip-path: polygon(0 0, 70% 0, 100% 17%, 50% 50%, 100% 83%, 70% 100%, 0 100%, 30% 82%, 82% 50%, 30% 18%);
                             transform-origin: left center;
                         }
-                        .phone-nav-bracket .glyph {
+                        .phone-nav-bracket svg {
                             position: absolute;
-                            top: 50%;
-                            left: 50%;
-                            transform: translate(-50%, -50%);
-                            font-size: 18px;
-                            font-weight: 700;
-                            text-shadow: 0 0 6px rgba(0, 224, 255, 0.35);
+                            top: 0; left: 0;
+                            width: 100%; height: 100%;
+                            overflow: visible;
                             pointer-events: none;
+                        }
+                        .phone-nav-bracket svg path {
+                            transition: stroke 0.18s ease, filter 0.18s ease;
                         }
 
                         /* FAB menu */
@@ -473,9 +457,13 @@ pub fn canvas(_args: &[Value]) -> Value {
                             div .speaker {}
                             div .camera {}
                         }
-                        button #btnPrevBracket .phone-nav-bracket .left title="Previous game" aria-label="Previous game" { span .glyph { "<" } }
+                        button #btnPrevBracket .phone-nav-bracket .left title="Previous game" aria-label="Previous game" {
+                            (PreEscaped(r##"<svg viewBox="0 0 48 120" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="bracketGradL" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="rgba(0,224,255,0.22)"/><stop offset="100%" stop-color="rgba(0,224,255,0.08)"/></linearGradient></defs><path d="M48,0 L14.4,0 L0,20.4 L24,60 L0,99.6 L14.4,120 L48,120 L33.6,98.4 L8.64,60 L33.6,21.6 Z" fill="url(#bracketGradL)" stroke="rgba(0,224,255,0.55)" stroke-width="1.5" stroke-linejoin="round"/></svg>"##))
+                        }
                         iframe #phone-viewport sandbox="allow-scripts allow-same-origin allow-forms" {}
-                        button #btnNextBracket .phone-nav-bracket .right title="Next game" aria-label="Next game" { span .glyph { ">" } }
+                        button #btnNextBracket .phone-nav-bracket .right title="Next game" aria-label="Next game" {
+                            (PreEscaped(r##"<svg viewBox="0 0 48 120" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="bracketGradR" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="rgba(0,224,255,0.22)"/><stop offset="100%" stop-color="rgba(0,224,255,0.08)"/></linearGradient></defs><path d="M0,0 L33.6,0 L48,20.4 L24,60 L48,99.6 L33.6,120 L0,120 L14.4,98.4 L39.36,60 L14.4,21.6 Z" fill="url(#bracketGradR)" stroke="rgba(0,224,255,0.55)" stroke-width="1.5" stroke-linejoin="round"/></svg>"##))
+                        }
                         div .phone-home-bar {}
                     }
                     div #canvasLoading style="display:none;position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(10,10,10,0.85);z-index:9999;align-items:center;justify-content:center;flex-direction:column;border-radius:24px" {
