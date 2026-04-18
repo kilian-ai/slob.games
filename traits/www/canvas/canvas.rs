@@ -167,9 +167,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                             padding: 0;
                         }
                         .phone-nav-bracket:hover { opacity: 1; }
-                        .phone-nav-bracket:hover svg path { stroke: rgba(0, 224, 255, 0.9); filter: drop-shadow(0 0 8px rgba(0, 224, 255, 0.35)); }
+                        .phone-nav-bracket:hover svg polyline { stroke: rgba(0, 224, 255, 0.95); filter: drop-shadow(0 0 8px rgba(0, 224, 255, 0.4)); }
                         .phone-nav-bracket:active { opacity: 1; }
-                        .phone-nav-bracket:active svg path { filter: drop-shadow(0 0 12px rgba(0, 224, 255, 0.5)); }
+                        .phone-nav-bracket:active svg polyline { filter: drop-shadow(0 0 12px rgba(0, 224, 255, 0.5)); }
                         .phone-nav-bracket.left {
                             left: -30px;
                             transform-origin: right center;
@@ -185,7 +185,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             overflow: visible;
                             pointer-events: none;
                         }
-                        .phone-nav-bracket svg path {
+                        .phone-nav-bracket svg polyline {
                             transition: stroke 0.18s ease, filter 0.18s ease;
                         }
 
@@ -458,11 +458,11 @@ pub fn canvas(_args: &[Value]) -> Value {
                             div .camera {}
                         }
                         button #btnPrevBracket .phone-nav-bracket .left title="Previous game" aria-label="Previous game" {
-                            (PreEscaped(r##"<svg viewBox="0 0 48 120" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="bracketGradL" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="rgba(0,224,255,0.22)"/><stop offset="100%" stop-color="rgba(0,224,255,0.08)"/></linearGradient></defs><path d="M48,0 L14.4,0 L0,20.4 L24,60 L0,99.6 L14.4,120 L48,120 L33.6,98.4 L8.64,60 L33.6,21.6 Z" fill="url(#bracketGradL)" stroke="rgba(0,224,255,0.55)" stroke-width="1.5" stroke-linejoin="round"/></svg>"##))
+                            (PreEscaped(r##"<svg viewBox="0 0 48 120" xmlns="http://www.w3.org/2000/svg"><polyline points="36,14 10,60 36,106" fill="none" stroke="rgba(0,224,255,0.7)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>"##))
                         }
                         iframe #phone-viewport sandbox="allow-scripts allow-same-origin allow-forms" {}
                         button #btnNextBracket .phone-nav-bracket .right title="Next game" aria-label="Next game" {
-                            (PreEscaped(r##"<svg viewBox="0 0 48 120" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="bracketGradR" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="rgba(0,224,255,0.22)"/><stop offset="100%" stop-color="rgba(0,224,255,0.08)"/></linearGradient></defs><path d="M0,0 L33.6,0 L48,20.4 L24,60 L48,99.6 L33.6,120 L0,120 L14.4,98.4 L39.36,60 L14.4,21.6 Z" fill="url(#bracketGradR)" stroke="rgba(0,224,255,0.55)" stroke-width="1.5" stroke-linejoin="round"/></svg>"##))
+                            (PreEscaped(r##"<svg viewBox="0 0 48 120" xmlns="http://www.w3.org/2000/svg"><polyline points="12,14 38,60 12,106" fill="none" stroke="rgba(0,224,255,0.7)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>"##))
                         }
                         div .phone-home-bar {}
                     }
