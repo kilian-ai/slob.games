@@ -3125,6 +3125,18 @@ export class Traits {
                             try { request = JSON.parse(argsStr).request || argsStr; } catch(e) { request = argsStr; }
                             console.log('[Voice/Canvas] ▶ Canvas tool triggered, launching agent for request:', request);
 
+                            // ── Before screenshot ──
+                            let beforeScreenshot = null;
+                            try {
+                                const iframe = document.getElementById('phone-viewport');
+                                const iDoc = iframe?.contentDocument;
+                                const cvs = iDoc?.querySelector('canvas');
+                                if (cvs) {
+                                    beforeScreenshot = cvs.toDataURL('image/jpeg', 0.6);
+                                    console.log('[Voice/Canvas] Before screenshot captured');
+                                }
+                            } catch(_) {}
+
                             // Send function_call_output to acknowledge the tool call, but do NOT
                             // send response.create — the model must stay silent while the canvas
                             // agent builds.  The Realtime API streams audio in real-time, so any
@@ -3145,11 +3157,30 @@ export class Traits {
                             try { parsed = JSON.parse(truncated); } catch(_) { parsed = null; }
                             const ok = !!(parsed && parsed.ok && !parsed.error);
                             console.log('[Voice/Canvas] ✓ Agent finished:', ok ? 'ok' : 'error');
+
+                            // ── After screenshot ──
+                            let afterScreenshot = null;
+                            try {
+                                const iframe = document.getElementById('phone-viewport');
+                                const iDoc = iframe?.contentDocument;
+                                const cvs = iDoc?.querySelector('canvas');
+                                if (cvs) {
+                                    afterScreenshot = cvs.toDataURL('image/jpeg', 0.6);
+                                    console.log('[Voice/Canvas] After screenshot captured');
+                                }
+                            } catch(_) {}
+
                             if (_voiceDc && _voiceDc.readyState === 'open') {
+                                // Inject before/after screenshots so the model can see the visual diff
+                                const contentParts = [];
+                                if (beforeScreenshot) contentParts.push({ type: 'input_image', image_url: beforeScreenshot });
+                                if (afterScreenshot) contentParts.push({ type: 'input_image', image_url: afterScreenshot });
                                 const completionText = ok
-                                    ? 'Canvas agent finished. The implementation tasks are now done and auto-saved. Briefly summarize the concrete changes you made.'
+                                    ? 'Canvas agent finished. The implementation tasks are now done and auto-saved.' +
+                                      (beforeScreenshot && afterScreenshot ? ' I\'ve attached BEFORE and AFTER screenshots. Describe the visual changes you can see.' : ' Briefly summarize the concrete changes you made.')
                                     : 'Canvas update failed. Explain the error and ask whether to retry with a simpler request.';
-                                _voiceDc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: completionText }] } }));
+                                contentParts.push({ type: 'input_text', text: completionText });
+                                _voiceDc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: contentParts } }));
                                 _voiceDc.send(JSON.stringify({ type: 'response.create' }));
                             }
                             if (opts.onToolResult) opts.onToolResult(funcName, truncated);
