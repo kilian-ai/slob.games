@@ -160,7 +160,12 @@ fn ls_get(key: &str) -> Option<String> {
 /// Write to localStorage.
 fn ls_set(key: &str, value: &str) {
     if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok()).flatten() {
-        let _ = storage.set_item(key, value);
+        if let Err(_e) = storage.set_item(key, value) {
+            web_sys::console::warn_1(&format!(
+                "[WASM] localStorage.setItem({}) failed ({}B payload, likely QuotaExceeded)",
+                key, value.len()
+            ).into());
+        }
     }
 }
 
@@ -722,6 +727,14 @@ pub fn vfs_load(json: &str) {
 #[wasm_bindgen]
 pub fn vfs_read(path: &str) -> String {
     with_session(|session| session.vfs_read(path).unwrap_or_default())
+}
+
+/// Read a single file from the persistent VFS.  Returns empty string if not found.
+/// Unlike vfs_read (which reads the CLI session VFS), this reads the global
+/// persistent VFS where platform::vfs_write stores data.
+#[wasm_bindgen]
+pub fn persistent_vfs_read(path: &str) -> String {
+    pvfs_read(path).unwrap_or_default()
 }
 
 /// Write a single file to the VFS.

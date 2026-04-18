@@ -1197,8 +1197,12 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                                 if (r.path && _isOffloadableVfsPath(r.path)) {
                                     try {
                                         let spriteContent = '';
-                                        // Try reading from WASM in-memory VFS first
-                                        if (wasmReady && wasm?.vfs_read) {
+                                        // Read from WASM persistent VFS (where platform::vfs_write stores data)
+                                        if (wasmReady && wasm?.persistent_vfs_read) {
+                                            spriteContent = wasm.persistent_vfs_read(r.path) || '';
+                                        }
+                                        // Fallback: session VFS
+                                        if (!spriteContent && wasmReady && wasm?.vfs_read) {
                                             spriteContent = wasm.vfs_read(r.path) || '';
                                         }
                                         // Fallback: check localStorage nested format
