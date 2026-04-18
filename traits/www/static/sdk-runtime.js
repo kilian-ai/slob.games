@@ -921,13 +921,28 @@ const CANVAS_AGENT_SYSTEM =
     'STYLE: Dark bg #0a0a0a, bright accents (#00ff88, #ff6b35, #4fc3f7), smooth 60fps.\n' +
     'Canvas scripts can call: traits.call(path,args), traits.echo(text), traits.audio(action,...).'
 
+// ── Agent progress log — writes to both console AND __canvasGameLogs so the voice agent sees it ──
+function _agentLog(msg, level) {
+    const text = String(msg || '');
+    if (level === 'warn') console.warn(text);
+    else if (level === 'error') console.error(text);
+    else console.log(text);
+    // Push to game logs ring buffer so voice agent can see agent progress via game_console tool
+    try {
+        const logs = (typeof window !== 'undefined' && window.__canvasGameLogs) || [];
+        const prefix = level === 'error' ? '[ERROR] ' : level === 'warn' ? '[WARN] ' : '[AGENT] ';
+        logs.push(prefix + text.replace(/^\[Canvas\/Agent[^\]]*\]\s*/, '').slice(0, 300));
+        while (logs.length > 100) logs.shift();
+    } catch(_) {}
+}
+
 // ── Shared canvas agent runner — used by BOTH WebRTC and local voice paths ──
 // Prefers browser-native direct OpenAI fetch (no helper/server needed).
 let _canvasAgentRunning = false;
 async function _runCanvasAgent(sdk, request) {
     // Guard against concurrent agent runs — abort if one is already active
     if (_canvasAgentRunning) {
-        console.warn('[Canvas/Agent] ⏳ Already running, queueing request');
+        _agentLog('[Canvas/Agent] ⏳ Already running, queueing request', 'warn');
         // Wait for the current run to finish (max 60s)
         const waitStart = Date.now();
         while (_canvasAgentRunning && Date.now() - waitStart < 60000) {
@@ -954,7 +969,7 @@ async function _runCanvasAgent(sdk, request) {
         }
     } catch(_) {}
 
-    console.log('[Canvas/Agent] ▶ Starting — existing:', _existing.length, 'chars | request:', request, '| logs:', _gameLogs.length, 'chars');
+    _agentLog('[Canvas/Agent] ▶ Starting — existing: ' + _existing.length + ' chars | request: ' + request + ' | logs: ' + _gameLogs.length + ' chars');
 
     // Resolve canvas LLM model preference from localStorage
     const _canvasModel = ((typeof localStorage !== 'undefined' && localStorage.getItem('traits.env.SLOB_CANVAS_MODEL')) || 'gpt-4.1').trim() || 'gpt-4.1';
@@ -981,12 +996,12 @@ async function _runCanvasAgent(sdk, request) {
                 if (tc.name === 'sys_vfs' && tc.args?.action === 'write' &&
                     (tc.args?.path === 'canvas/app.html' || String(tc.args?.path || '').endsWith('/app.html'))) {
                     content = String(tc.args?.content || '');
-                    console.log('[Canvas/Agent] Content from sys_vfs write, len:', content.length);
+                    _agentLog('[Canvas/Agent] Content from sys_vfs write, len: ' + content.length);
                     break;
                 }
                 if (tc.name === 'sys_canvas' && tc.args?.action === 'set') {
                     content = String(tc.args?.content || '');
-                    console.log('[Canvas/Agent] Content from sys_canvas set, len:', content.length);
+                    _agentLog('[Canvas/Agent] Content from sys_canvas set, len: ' + content.length);
                     break;
                 }
             }
@@ -1007,7 +1022,7 @@ async function _runCanvasAgent(sdk, request) {
         }
         return JSON.stringify(r?.ok ? { ok: true, response: r.response || 'Done' } : { error: r?.error || 'agent failed' });
     } catch(e) {
-        console.error('[Canvas/Agent] ✗ Error:', e.message || e);
+        _agentLog('[Canvas/Agent] ✗ Error: ' + (e.message || e), 'error');
         return JSON.stringify({ error: e.message || String(e) });
     }
     } finally {
@@ -1081,7 +1096,7 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
     let lastContent = '';
     try {
         for (let step = 0; step < 10; step++) {
-            console.log('[Canvas/Agent/Browser] Step', step + 1);
+            _agentLog('[Canvas/Agent/Browser] Step ' + (step + 1));
             let resp;
             for (let _retry = 0; _retry < 3; _retry++) {
                 try {
@@ -1093,7 +1108,7 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                     break;
                 } catch (_fetchErr) {
                     if (_retry < 2) {
-                        console.warn('[Canvas/Agent/Browser] Fetch failed (attempt', _retry + 1 + '/3), retrying in', (_retry + 1) * 2 + 's:', _fetchErr.message);
+                        _agentLog('[Canvas/Agent/Browser] Fetch failed (attempt ' + (_retry + 1) + '/3), retrying in ' + ((_retry + 1) * 2) + 's: ' + _fetchErr.message, 'warn');
                         await new Promise(r => setTimeout(r, (_retry + 1) * 2000));
                     } else { throw _fetchErr; }
                 }
@@ -1103,12 +1118,12 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                 const lowerErr = String(err || '').toLowerCase();
                 const modelErr = lowerErr.includes('model') || lowerErr.includes('unsupported') || lowerErr.includes('not found') || lowerErr.includes('does not exist');
                 if (!fallbackModelUsed && modelErr && canvasModel !== 'gpt-4.1') {
-                    console.warn('[Canvas/Agent/Browser] Model failed (' + canvasModel + '), retrying with gpt-4.1');
+                    _agentLog('[Canvas/Agent/Browser] Model failed (' + canvasModel + '), retrying with gpt-4.1', 'warn');
                     canvasModel = 'gpt-4.1';
                     fallbackModelUsed = true;
                     continue;
                 }
-                console.error('[Canvas/Agent/Browser] OpenAI error:', err);
+                _agentLog('[Canvas/Agent/Browser] OpenAI error: ' + err, 'error');
                 return JSON.stringify({ error: 'OpenAI error: ' + err });
             }
             const data = await resp.json();
@@ -1117,7 +1132,7 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
             if (!msg) break;
             messages.push(msg);
             const toolCalls = msg.tool_calls || [];
-            if (toolCalls.length === 0) { console.log('[Canvas/Agent/Browser] Done at step', step + 1); break; }
+            if (toolCalls.length === 0) { _agentLog('[Canvas/Agent/Browser] Done at step ' + (step + 1)); break; }
             for (const tc of toolCalls) {
                 let args = {};
                 try { args = JSON.parse(tc.function.arguments || '{}'); } catch(_) {}
@@ -1141,7 +1156,7 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                             } catch(_) {}
                         }
                         toolResult = fileContent || '(empty)';
-                        console.log('[Canvas/Agent/Browser] VFS read:', args.path, fileContent.length, 'chars');
+                        _agentLog('[Canvas/Agent/Browser] VFS read: ' + args.path + ' ' + fileContent.length + ' chars');
                     } else if (args.action === 'write') {
                         let pvfs = {}; try { pvfs = JSON.parse(localStorage.getItem('traits.pvfs') || '{}'); } catch(_) {}
                         const pendingContent = args.content || '';
@@ -1156,7 +1171,7 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                                     missing_loader: !chk.hasLoader,
                                     required_fix: 'Use traits.loadVFSImage(path) and draw every generated sprite path listed above before calling sys_vfs write again.'
                                 });
-                                console.warn('[Canvas/Agent/Browser] Rejecting write: sprite integration incomplete', chk);
+                                _agentLog('[Canvas/Agent/Browser] Rejecting write: sprite integration incomplete — missing: ' + (chk.missingSprites||[]).join(', '), 'warn');
                                 messages.push({ role: 'tool', tool_call_id: tc.id, content: toolResult });
                                 continue;
                             }
@@ -1169,7 +1184,7 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                             // The final persist + relay sync happens ONCE after the agent loop ends
                             // (see post-loop block below).  Firing intermediate previews keeps the
                             // phone viewport updated without the side-effects of full persistence.
-                            console.log('[Canvas/Agent/Browser] VFS write preview, len:', lastContent.length);
+                            _agentLog('[Canvas/Agent/Browser] VFS write preview, len: ' + lastContent.length);
                             window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content: lastContent } }));
                         }
                         toolResult = '{"ok":true}';
@@ -1184,7 +1199,7 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                             args.model || 'dall-e-2',
                             args.mode || 'sprite'
                         ];
-                        console.log('[Canvas/Agent/Browser] llm_image call:', args.prompt, 'mode:', args.mode || 'sprite');
+                        _agentLog('[Canvas/Agent/Browser] llm_image call: ' + args.prompt + ' mode: ' + (args.mode || 'sprite'));
                         const _sdk = window._traitsSDK;
                         if (_sdk) {
                             const imgResult = await _sdk.call('llm.image', imgArgs);
@@ -1220,21 +1235,21 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                                             if (wasmReady && wasm?.persistent_vfs_delete) {
                                                 try { wasm.persistent_vfs_delete(r.path); } catch(_) {}
                                             }
-                                            console.log('[Canvas/Agent/Browser] sprite offloaded to IndexedDB:', r.path, '(' + Math.round(spriteContent.length / 1024) + 'KB)');
+                                            _agentLog('[Canvas/Agent/Browser] sprite offloaded to IndexedDB: ' + r.path + ' (' + Math.round(spriteContent.length / 1024) + 'KB)');
                                         } else {
-                                            console.warn('[Canvas/Agent/Browser] sprite content not found for offload:', r.path);
+                                            _agentLog('[Canvas/Agent/Browser] sprite content not found for offload: ' + r.path, 'warn');
                                         }
                                     } catch(offloadErr) {
-                                        console.warn('[Canvas/Agent/Browser] sprite IDB offload failed:', r.path, offloadErr);
+                                        _agentLog('[Canvas/Agent/Browser] sprite IDB offload failed: ' + r.path + ' ' + offloadErr, 'warn');
                                     }
                                 }
                                 toolResult = JSON.stringify({ ok: true, path: r.path, size: r.size, mode: r.mode,
                                     IMPORTANT: 'Image saved to VFS. You MUST now call sys_vfs write with the COMPLETE updated canvas/app.html that loads this image. The image is NOT visible until you rewrite the HTML.',
                                     load_code: "const img = await traits.loadVFSImage('" + String(r.path || 'sprites/example.png') + "');" });
-                                console.log('[Canvas/Agent/Browser] llm_image OK:', r.path);
+                                _agentLog('[Canvas/Agent/Browser] llm_image OK: ' + r.path);
                             } else {
                                 toolResult = JSON.stringify({ ok: false, error: r?.error || 'llm.image failed' });
-                                console.warn('[Canvas/Agent/Browser] llm_image failed:', r?.error);
+                                _agentLog('[Canvas/Agent/Browser] llm_image failed: ' + (r?.error), 'warn');
                             }
                         } else {
                             // Fallback: direct REST call to server
@@ -1251,7 +1266,7 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                                 : { ok: false, error: imgData?.error || 'llm.image failed' });
                         }
                     } catch(e) {
-                        console.error('[Canvas/Agent/Browser] llm_image error:', e);
+                        _agentLog('[Canvas/Agent/Browser] llm_image error: ' + e, 'error');
                         toolResult = JSON.stringify({ ok: false, error: e.message || String(e) });
                     }
                 }
@@ -1272,15 +1287,15 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                     if (wasmReady && wasm?.pvfs_refresh) {
                         try { wasm.pvfs_refresh(); } catch(_) {}
                     }
-                    console.log('[Canvas/Agent/Browser] Final sys.canvas set done');
-                } catch(e) { console.warn('[Canvas/Agent/Browser] Final persist error:', e); }
+                    _agentLog('[Canvas/Agent/Browser] Final sys.canvas set done');
+                } catch(e) { _agentLog('[Canvas/Agent/Browser] Final persist error: ' + e, 'warn'); }
             }
             window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content: lastContent, immediateRelaySync: true } }));
         }
 
         return JSON.stringify(lastContent ? { ok: true, response: 'Canvas updated' } : { ok: false, error: 'No canvas content written' });
     } catch(e) {
-        console.error('[Canvas/Agent/Browser] ✗', e);
+        _agentLog('[Canvas/Agent/Browser] ✗ ' + (e.message || e), 'error');
         return JSON.stringify({ error: e.message || String(e) });
     } finally {
         _canvasAgentRunning = false;
@@ -1625,7 +1640,7 @@ async function _buildVoiceTools(sdk, page) {
         // Game DevTools tools (browser-native, handled in voice function_call handler)
         tools.push({ type: 'function', name: 'game_screenshot', description: 'Take a screenshot of the current game. Returns the game canvas as an image you can see.', parameters: { type: 'object', properties: {} } });
         tools.push({ type: 'function', name: 'game_eval', description: 'Execute JavaScript in the running game. Inspect state, check scores, debug.', parameters: { type: 'object', properties: { code: { type: 'string', description: 'JS expression to evaluate' } }, required: ['code'] } });
-        tools.push({ type: 'function', name: 'game_console', description: 'Read recent console output (logs, warnings, errors) from the game.', parameters: { type: 'object', properties: {} } });
+        tools.push({ type: 'function', name: 'game_console', description: 'Read recent console output from the game AND canvas agent build progress. Includes [AGENT] entries showing agent steps, sprite generation, VFS writes. Also returns agentRunning boolean.', parameters: { type: 'object', properties: {} } });
         tools.push({ type: 'function', name: 'game_click', description: 'Click at x,y coordinates in the game (390x844 viewport).', parameters: { type: 'object', properties: { x: { type: 'number', description: 'X (0-390)' }, y: { type: 'number', description: 'Y (0-844)' } }, required: ['x', 'y'] } });
         tools.push({ type: 'function', name: 'game_press_key', description: 'Press a key in the game (ArrowUp, ArrowDown, Space, etc).', parameters: { type: 'object', properties: { key: { type: 'string', description: 'Key name' } }, required: ['key'] } });
         tools.push({ type: 'function', name: 'game_source', description: 'Read the current game HTML source code.', parameters: { type: 'object', properties: {} } });
@@ -2864,12 +2879,13 @@ class Traits {
                     'You also have game inspection tools. Use them proactively:\n' +
                     '- game_screenshot: Take a screenshot to SEE the game. Use when debugging visual issues.\n' +
                     '- game_eval: Run JavaScript in the game to check state, scores, variables.\n' +
-                    '- game_console: Read console logs/errors from the game.\n' +
+                    '- game_console: Read console logs/errors from the game AND canvas agent build progress ([AGENT] entries). Also returns agentRunning flag.\n' +
                     '- game_click: Click at x,y coordinates to interact with the game.\n' +
                     '- game_press_key: Press keys (ArrowUp, Space, etc) to play-test the game.\n' +
                     '- game_source: Read the current game HTML source.\n' +
                     '- game_restart: Reload the game without changing code.\n' +
                     'When the user reports a bug, use game_console and game_screenshot FIRST to diagnose, then use canvas to fix.\n' +
+                    'When the canvas agent is building a game, use game_console to check progress. [AGENT] entries show each step, sprite generation, and write operations. The agentRunning field tells you if the agent is still working.\n' +
                     '=== END HARD RULES ===';
                 fullInstructions = canvasPrefix + '\n\n' + fullInstructions;
                 // Append recent game console logs so the voice model knows about errors
@@ -2877,10 +2893,13 @@ class Traits {
                     const logs = window.__canvasGameLogs || [];
                     if (logs.length > 0) {
                         const errorLogs = logs.filter(l => l.startsWith('[ERROR]') || l.startsWith('[WARN]'));
+                        const agentLogs = logs.filter(l => l.startsWith('[AGENT]')).slice(-15);
                         const relevantLogs = errorLogs.length > 0 ? errorLogs.slice(-20) : logs.slice(-10);
-                        fullInstructions += '\n\n=== RECENT GAME CONSOLE OUTPUT ===\n' + relevantLogs.join('\n') + '\n=== END CONSOLE OUTPUT ===\n' +
+                        const combined = [...new Set([...relevantLogs, ...agentLogs])];
+                        fullInstructions += '\n\n=== RECENT GAME CONSOLE OUTPUT ===\n' + combined.join('\n') + '\n=== END CONSOLE OUTPUT ===\n' +
                             'If the user mentions a bug, crash, or problem, use these logs as context when calling the canvas tool. ' +
-                            'Include relevant error messages in your canvas tool request so the code agent can fix them.';
+                            'Include relevant error messages in your canvas tool request so the code agent can fix them.' +
+                            (_canvasAgentRunning ? '\nNOTE: The canvas agent is CURRENTLY RUNNING. Call game_console to check latest progress.' : '');
                     }
                 } catch(_) {}
             }
@@ -3191,7 +3210,7 @@ class Traits {
                                     }
                                 } else if (funcName === 'game_console') {
                                     const logs = window.__canvasGameLogs || [];
-                                    _sendOutput(JSON.stringify({ ok: true, count: logs.length, logs: logs.slice(-30) }));
+                                    _sendOutput(JSON.stringify({ ok: true, count: logs.length, agentRunning: !!_canvasAgentRunning, logs: logs.slice(-50) }));
                                 } else if (funcName === 'game_click') {
                                     let x = 0, y = 0;
                                     try { const a = JSON.parse(argsStr); x = a.x || 0; y = a.y || 0; } catch(_) {}

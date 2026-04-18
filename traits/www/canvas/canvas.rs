@@ -2697,9 +2697,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                             } catch(_) {}
                         })();
 
-                        // ── Game console log ring buffer (last 50 entries) ──
+                        // ── Game console log ring buffer (last 100 entries) ──
                         const __gameLogs = [];
-                        const __GAME_LOG_MAX = 50;
+                        const __GAME_LOG_MAX = 100;
                         window.__highScores = {};    // game_hash → best score (synced via relay)
                         window.__activeGameHash = null;
                         // Compute content hash for active game (same algo as sync module)
