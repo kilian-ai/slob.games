@@ -937,6 +937,67 @@ function _agentLog(msg, level) {
     } catch(_) {}
 }
 
+let _canvasAgentTraceRunId = '';
+function _canvasAgentDebugStore() {
+    if (typeof window === 'undefined') return null;
+    if (!window.__canvasAgentDebug || typeof window.__canvasAgentDebug !== 'object') {
+        window.__canvasAgentDebug = { runs: [] };
+    }
+    if (!Array.isArray(window.__canvasAgentDebug.runs)) window.__canvasAgentDebug.runs = [];
+    return window.__canvasAgentDebug;
+}
+
+function _trimDebugValue(v, max) {
+    const m = Number(max || 260);
+    const s = (typeof v === 'string') ? v : JSON.stringify(v);
+    if (!s) return '';
+    return s.length > m ? (s.slice(0, m) + '…') : s;
+}
+
+function _canvasAgentTraceStart(meta) {
+    const store = _canvasAgentDebugStore();
+    if (!store) return '';
+    const id = 'car_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+    const run = {
+        id,
+        startedAt: new Date().toISOString(),
+        status: 'running',
+        request: _trimDebugValue((meta && meta.request) || '', 500),
+        model: _trimDebugValue((meta && meta.model) || '', 80),
+        existingChars: Number((meta && meta.existingChars) || 0),
+        events: [],
+    };
+    store.runs.push(run);
+    while (store.runs.length > 12) store.runs.shift();
+    _canvasAgentTraceRunId = id;
+    return id;
+}
+
+function _canvasAgentTraceEvent(type, data) {
+    const store = _canvasAgentDebugStore();
+    if (!store || !_canvasAgentTraceRunId) return;
+    const run = store.runs.find(r => r && r.id === _canvasAgentTraceRunId);
+    if (!run) return;
+    const evt = {
+        t: new Date().toISOString(),
+        type: String(type || 'event'),
+        data: data && typeof data === 'object' ? data : { value: _trimDebugValue(data, 400) },
+    };
+    run.events.push(evt);
+    while (run.events.length > 220) run.events.shift();
+}
+
+function _canvasAgentTraceFinish(status, data) {
+    const store = _canvasAgentDebugStore();
+    if (!store || !_canvasAgentTraceRunId) return;
+    const run = store.runs.find(r => r && r.id === _canvasAgentTraceRunId);
+    if (!run) return;
+    run.status = String(status || 'done');
+    run.finishedAt = new Date().toISOString();
+    if (data && typeof data === 'object') run.result = data;
+    _canvasAgentTraceRunId = '';
+}
+
 function _estimateDataUrlBytes(dataUrl) {
     const s = String(dataUrl || '');
     const i = s.indexOf(',');
@@ -1044,6 +1105,8 @@ function _renderCanvasSourceBlockForPrompt(source) {
 // Prefers browser-native direct OpenAI fetch (no helper/server needed).
 let _canvasAgentRunning = false;
 async function _runCanvasAgent(sdk, request) {
+    let _traceStatus = 'error';
+    let _traceResult = null;
     // Guard against concurrent agent runs — abort if one is already active
     if (_canvasAgentRunning) {
         _agentLog('[Canvas/Agent] ⏳ Already running, queueing request', 'warn');
@@ -1064,9 +1127,17 @@ async function _runCanvasAgent(sdk, request) {
         _existing = pvfs['canvas/app.html'] || '';
     } catch(_) {}
 
+    // Resolve canvas LLM model preference from localStorage
+    const _canvasModel = ((typeof localStorage !== 'undefined' && localStorage.getItem('traits.env.SLOB_CANVAS_MODEL')) || 'gpt-5.4').trim() || 'gpt-5.4';
+    _canvasAgentTraceStart({ request: request || '', model: _canvasModel, existingChars: _existing.length });
+
     // Resolve current source from all known stores so incremental updates are reliable.
     _existing = await _getCurrentCanvasSource(_existing);
     const _sourceBlock = _renderCanvasSourceBlockForPrompt(_existing);
+    _canvasAgentTraceEvent('source_resolved', {
+        existingChars: _existing.length,
+        sourceBlockChars: _sourceBlock.length,
+    });
 
     // Collect recent game console logs for diagnostic context
     let _gameLogs = '';
@@ -1078,14 +1149,18 @@ async function _runCanvasAgent(sdk, request) {
     } catch(_) {}
 
     _agentLog('[Canvas/Agent] ▶ Starting — existing: ' + _existing.length + ' chars | request: ' + request + ' | logs: ' + _gameLogs.length + ' chars');
-
-    // Resolve canvas LLM model preference from localStorage
-    const _canvasModel = ((typeof localStorage !== 'undefined' && localStorage.getItem('traits.env.SLOB_CANVAS_MODEL')) || 'gpt-5.4').trim() || 'gpt-5.4';
+    _canvasAgentTraceEvent('start', { logsChars: _gameLogs.length });
 
     // ── Browser-native path: direct OpenAI fetch — works without helper or server ──
     const apiKey = _voiceApiKey || await _ensureVoiceApiKey(sdk).catch(() => null);
     if (apiKey) {
-        return await _runCanvasAgentBrowser(request, _existing, apiKey, _gameLogs, _canvasModel);
+        _canvasAgentTraceEvent('dispatch', { path: 'browser', model: _canvasModel });
+        const out = await _runCanvasAgentBrowser(request, _existing, apiKey, _gameLogs, _canvasModel);
+        let parsed = null;
+        try { parsed = JSON.parse(out); } catch(_) {}
+        _traceStatus = parsed && parsed.ok ? 'ok' : 'error';
+        _traceResult = parsed || { raw: _trimDebugValue(out, 400) };
+        return out;
     }
 
     // ── Fallback: dispatch through SDK cascade (needs helper or server) ──
@@ -1095,8 +1170,15 @@ async function _runCanvasAgent(sdk, request) {
 
     const agentArgs = [prompt, CANVAS_AGENT_SYSTEM, 'sys.vfs,sys.canvas', _canvasModel, 20];
     try {
+        _canvasAgentTraceEvent('dispatch', { path: 'llm.agent', model: _canvasModel });
         const result = await sdk.call('llm.agent', agentArgs);
         const r = result?.result || result;
+        _canvasAgentTraceEvent('llm_agent_result', {
+            ok: !!(r && r.ok),
+            hasToolCalls: Array.isArray(r?.tool_calls),
+            toolCalls: Array.isArray(r?.tool_calls) ? r.tool_calls.length : 0,
+            responsePreview: _trimDebugValue(r?.response || '', 260),
+        });
         let content = '';
         if (Array.isArray(r?.tool_calls)) {
             for (let i = r.tool_calls.length - 1; i >= 0; i--) {
@@ -1127,13 +1209,21 @@ async function _runCanvasAgent(sdk, request) {
                 }
             } catch(_) {}
             window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content, immediateRelaySync: true } }));
+            _canvasAgentTraceEvent('persist_final', { contentChars: content.length, immediateRelaySync: true });
         }
-        return JSON.stringify(r?.ok ? { ok: true, response: r.response || 'Done' } : { error: r?.error || 'agent failed' });
+        const out = JSON.stringify(r?.ok ? { ok: true, response: r.response || 'Done' } : { error: r?.error || 'agent failed' });
+        _traceStatus = r?.ok ? 'ok' : 'error';
+        _traceResult = r?.ok ? { ok: true, response: _trimDebugValue(r.response || 'Done', 260) } : { error: _trimDebugValue(r?.error || 'agent failed', 260) };
+        return out;
     } catch(e) {
         _agentLog('[Canvas/Agent] ✗ Error: ' + (e.message || e), 'error');
+        _canvasAgentTraceEvent('error', { message: _trimDebugValue(e && (e.message || String(e)), 260) });
+        _traceStatus = 'error';
+        _traceResult = { error: _trimDebugValue(e.message || String(e), 260) };
         return JSON.stringify({ error: e.message || String(e) });
     }
     } finally {
+        _canvasAgentTraceFinish(_traceStatus, _traceResult || {});
         _canvasAgentRunning = false;
         if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('traits-canvas-agent-status', { detail: { running: false } }));
     }
@@ -1144,6 +1234,7 @@ async function _runCanvasAgent(sdk, request) {
 async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canvasModel) {
     gameLogs = gameLogs || '';
     canvasModel = canvasModel || 'gpt-5.4';
+    _canvasAgentTraceEvent('browser_loop_start', { model: canvasModel, existingChars: String(existing || '').length });
     let fallbackModelUsed = false;
     const SYS_VFS_TOOL = {
         type: 'function',
@@ -1206,6 +1297,7 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
     try {
         for (let step = 0; step < 10; step++) {
             _agentLog('[Canvas/Agent/Browser] Step ' + (step + 1));
+            _canvasAgentTraceEvent('step', { step: step + 1 });
             let resp;
             for (let _retry = 0; _retry < 3; _retry++) {
                 try {
@@ -1228,11 +1320,13 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                 const modelErr = lowerErr.includes('model') || lowerErr.includes('unsupported') || lowerErr.includes('not found') || lowerErr.includes('does not exist');
                 if (!fallbackModelUsed && modelErr && canvasModel !== 'gpt-4.1') {
                     _agentLog('[Canvas/Agent/Browser] Model failed (' + canvasModel + '), retrying with gpt-4.1', 'warn');
+                    _canvasAgentTraceEvent('model_fallback', { from: canvasModel, to: 'gpt-4.1' });
                     canvasModel = 'gpt-4.1';
                     fallbackModelUsed = true;
                     continue;
                 }
                 _agentLog('[Canvas/Agent/Browser] OpenAI error: ' + err, 'error');
+                _canvasAgentTraceEvent('openai_error', { status: resp.status, body: _trimDebugValue(err, 320) });
                 return JSON.stringify({ error: 'OpenAI error: ' + err });
             }
             const data = await resp.json();
@@ -1241,10 +1335,20 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
             if (!msg) break;
             messages.push(msg);
             const toolCalls = msg.tool_calls || [];
+            _canvasAgentTraceEvent('model_turn', {
+                finish: choice?.finish_reason || '',
+                toolCalls: toolCalls.length,
+            });
             if (toolCalls.length === 0) { _agentLog('[Canvas/Agent/Browser] Done at step ' + (step + 1)); break; }
             for (const tc of toolCalls) {
                 let args = {};
                 try { args = JSON.parse(tc.function.arguments || '{}'); } catch(_) {}
+                _canvasAgentTraceEvent('tool_call', {
+                    name: tc?.function?.name || '',
+                    action: _trimDebugValue(args?.action || '', 80),
+                    path: _trimDebugValue(args?.path || '', 120),
+                    prompt: _trimDebugValue(args?.prompt || '', 120),
+                });
                 let toolResult = '{"error":"unknown tool"}';
                 if (tc.function.name === 'sys_vfs') {
                     if (args.action === 'read') {
@@ -1265,6 +1369,7 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                             } catch(_) {}
                         }
                         toolResult = fileContent || '(empty)';
+                        _canvasAgentTraceEvent('sys_vfs_read', { path: _trimDebugValue(args.path || '', 120), chars: fileContent.length });
                         _agentLog('[Canvas/Agent/Browser] VFS read: ' + args.path + ' ' + fileContent.length + ' chars');
                     } else if (args.action === 'write') {
                         let pvfs = {}; try { pvfs = JSON.parse(localStorage.getItem('traits.pvfs') || '{}'); } catch(_) {}
@@ -1288,6 +1393,11 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                         pvfs[args.path] = pendingContent;
                         try { localStorage.setItem('traits.pvfs', JSON.stringify(pvfs)); } catch(_) {}
                         lastContent = pendingContent;
+                        _canvasAgentTraceEvent('sys_vfs_write', {
+                            path: _trimDebugValue(args.path || '', 120),
+                            chars: pendingContent.length,
+                            isCanvas: !!isCanvas,
+                        });
                         if (isCanvas && lastContent) {
                             // Live preview only — no sys.canvas set, no rename, no relay sync.
                             // The final persist + relay sync happens ONCE after the agent loop ends
@@ -1344,11 +1454,13 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                                             if (wasmReady && wasm?.persistent_vfs_delete) {
                                                 try { wasm.persistent_vfs_delete(r.path); } catch(_) {}
                                             }
+                                            _canvasAgentTraceEvent('sprite_offload', { path: _trimDebugValue(r.path || '', 120), kb: Math.round(spriteContent.length / 1024) });
                                             _agentLog('[Canvas/Agent/Browser] sprite offloaded to IndexedDB: ' + r.path + ' (' + Math.round(spriteContent.length / 1024) + 'KB)');
                                         } else {
                                             _agentLog('[Canvas/Agent/Browser] sprite content not found for offload: ' + r.path, 'warn');
                                         }
                                     } catch(offloadErr) {
+                                        _canvasAgentTraceEvent('sprite_offload_error', { path: _trimDebugValue(r.path || '', 120), err: _trimDebugValue(String(offloadErr || ''), 200) });
                                         _agentLog('[Canvas/Agent/Browser] sprite IDB offload failed: ' + r.path + ' ' + offloadErr, 'warn');
                                     }
                                 }
@@ -1397,6 +1509,7 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
                         try { wasm.pvfs_refresh(); } catch(_) {}
                     }
                     _agentLog('[Canvas/Agent/Browser] Final sys.canvas set done');
+                    _canvasAgentTraceEvent('final_persist_ok', { chars: lastContent.length });
                 } catch(e) { _agentLog('[Canvas/Agent/Browser] Final persist error: ' + e, 'warn'); }
             }
             window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content: lastContent, immediateRelaySync: true } }));
@@ -3366,7 +3479,25 @@ class Traits {
                                     }
                                 } else if (funcName === 'game_console') {
                                     const logs = window.__canvasGameLogs || [];
-                                    _sendOutput(JSON.stringify({ ok: true, count: logs.length, agentRunning: !!_canvasAgentRunning, logs: logs.slice(-50) }));
+                                    const dbg = (typeof window !== 'undefined' && window.__canvasAgentDebug) || null;
+                                    const runs = dbg && Array.isArray(dbg.runs) ? dbg.runs : [];
+                                    const last = runs.length ? runs[runs.length - 1] : null;
+                                    _sendOutput(JSON.stringify({
+                                        ok: true,
+                                        count: logs.length,
+                                        agentRunning: !!_canvasAgentRunning,
+                                        logs: logs.slice(-50),
+                                        debug: last ? {
+                                            id: last.id,
+                                            status: last.status,
+                                            startedAt: last.startedAt,
+                                            finishedAt: last.finishedAt || '',
+                                            request: last.request || '',
+                                            model: last.model || '',
+                                            existingChars: Number(last.existingChars || 0),
+                                            events: Array.isArray(last.events) ? last.events.slice(-25) : [],
+                                        } : null,
+                                    }));
                                 } else if (funcName === 'game_click') {
                                     let x = 0, y = 0;
                                     try { const a = JSON.parse(argsStr); x = a.x || 0; y = a.y || 0; } catch(_) {}
