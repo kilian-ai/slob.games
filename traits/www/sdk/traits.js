@@ -1775,7 +1775,7 @@ function _traitTypeToSchema(typeStr) {
  *  since non-WASM traits cannot be dispatched in the browser. */
 // Tools allowed on the canvas page — everything else is stripped
 const CANVAS_PAGE_TOOLS = new Set(['canvas', 'sys_echo', 'sys_audio', 'sys_voice_quit',
-    'game_screenshot', 'game_eval', 'game_console', 'game_click', 'game_press_key', 'game_source', 'game_restart']);
+    'game_screenshot', 'game_eval', 'game_console', 'game_click', 'game_press_key', 'game_source', 'game_set_source', 'game_replace', 'game_restart']);
 
 function _normalizeVoicePageFromHash(hash) {
     const page = (hash || '').replace(/^#\/?/, '').split('/')[0] || '';
@@ -1865,6 +1865,8 @@ async function _buildVoiceTools(sdk, page) {
         tools.push({ type: 'function', name: 'game_click', description: 'Click at x,y coordinates in the game (390x844 viewport).', parameters: { type: 'object', properties: { x: { type: 'number', description: 'X (0-390)' }, y: { type: 'number', description: 'Y (0-844)' } }, required: ['x', 'y'] } });
         tools.push({ type: 'function', name: 'game_press_key', description: 'Press a key in the game (ArrowUp, ArrowDown, Space, etc).', parameters: { type: 'object', properties: { key: { type: 'string', description: 'Key name' } }, required: ['key'] } });
         tools.push({ type: 'function', name: 'game_source', description: 'Read the current game HTML source code.', parameters: { type: 'object', properties: {} } });
+        tools.push({ type: 'function', name: 'game_set_source', description: 'Directly replace the current game source (canvas/app.html) with complete HTML.', parameters: { type: 'object', properties: { source: { type: 'string', description: 'Full HTML source to write.' } }, required: ['source'] } });
+        tools.push({ type: 'function', name: 'game_replace', description: 'Apply a direct text replacement in the current game source and save it.', parameters: { type: 'object', properties: { find: { type: 'string', description: 'Text to find' }, replace: { type: 'string', description: 'Replacement text' }, all: { type: 'boolean', description: 'Replace all occurrences (default false)' } }, required: ['find', 'replace'] } });
         tools.push({ type: 'function', name: 'game_restart', description: 'Restart the game without modifying code.', parameters: { type: 'object', properties: {} } });
     }
 
@@ -3104,6 +3106,8 @@ export class Traits {
                     '- game_click: Click at x,y coordinates to interact with the game.\n' +
                     '- game_press_key: Press keys (ArrowUp, Space, etc) to play-test the game.\n' +
                     '- game_source: Read the current game HTML source.\n' +
+                    '- game_set_source: Replace the game source directly with complete HTML when a deterministic fix is needed.\n' +
+                    '- game_replace: Apply targeted string replacements directly in game source for surgical fixes.\n' +
                     '- game_restart: Reload the game without changing code.\n' +
                     'When the user reports a bug, use game_console and game_screenshot FIRST to diagnose, then use canvas to fix.\n' +
                     'When the canvas agent is building a game, use game_console to check progress. [AGENT] entries show each step, sprite generation, and write operations. The agentRunning field tells you if the agent is still working.\n' +
@@ -3527,9 +3531,69 @@ export class Traits {
                                         _sendOutput(JSON.stringify({ error: 'No game loaded' }));
                                     }
                                 } else if (funcName === 'game_source') {
-                                    const html = iDoc?.documentElement?.outerHTML || iframe?.srcdoc || '';
+                                    let html = '';
+                                    try {
+                                        const g = await _self.call('sys.canvas', ['get']);
+                                        html = g?.result?.content ?? g?.content ?? '';
+                                    } catch(_) {}
+                                    if (!html) html = iDoc?.documentElement?.outerHTML || iframe?.srcdoc || '';
                                     const src = html.length > 6000 ? html.slice(0, 6000) + '\n…(truncated, ' + html.length + ' chars total)' : html;
                                     _sendOutput(JSON.stringify({ ok: true, length: html.length, source: src }));
+                                } else if (funcName === 'game_set_source') {
+                                    let source = '';
+                                    try { source = JSON.parse(argsStr).source || ''; } catch(_) { source = argsStr; }
+                                    source = String(source || '');
+                                    if (!source.trim()) {
+                                        _sendOutput(JSON.stringify({ error: 'source is empty' }));
+                                    } else {
+                                        const setRes = await _self.call('sys.canvas', ['set', source]);
+                                        if (setRes && setRes.ok) {
+                                            window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content: source, immediateRelaySync: true } }));
+                                            _sendOutput(JSON.stringify({ ok: true, action: 'set_source', length: source.length }));
+                                        } else {
+                                            _sendOutput(JSON.stringify({ error: setRes?.error || 'sys.canvas set failed' }));
+                                        }
+                                    }
+                                } else if (funcName === 'game_replace') {
+                                    let find = '';
+                                    let replace = '';
+                                    let all = false;
+                                    try {
+                                        const a = JSON.parse(argsStr);
+                                        find = String(a.find || '');
+                                        replace = String(a.replace || '');
+                                        all = !!a.all;
+                                    } catch(_) {}
+                                    if (!find) {
+                                        _sendOutput(JSON.stringify({ error: 'find is required' }));
+                                    } else {
+                                        let html = '';
+                                        try {
+                                            const g = await _self.call('sys.canvas', ['get']);
+                                            html = g?.result?.content ?? g?.content ?? '';
+                                        } catch(_) {}
+                                        if (!html) html = iframe?.srcdoc || '';
+                                        if (!html) {
+                                            _sendOutput(JSON.stringify({ error: 'No game source available' }));
+                                        } else {
+                                            const before = html;
+                                            let updated = before;
+                                            if (all) updated = before.split(find).join(replace);
+                                            else updated = before.replace(find, replace);
+                                            if (updated === before) {
+                                                _sendOutput(JSON.stringify({ ok: false, error: 'No matching text found', find }));
+                                            } else {
+                                                const changes = all ? (before.split(find).length - 1) : 1;
+                                                const setRes = await _self.call('sys.canvas', ['set', updated]);
+                                                if (setRes && setRes.ok) {
+                                                    window.dispatchEvent(new CustomEvent('traits-canvas-update', { detail: { content: updated, immediateRelaySync: true } }));
+                                                    _sendOutput(JSON.stringify({ ok: true, action: 'replace', changes, length: updated.length }));
+                                                } else {
+                                                    _sendOutput(JSON.stringify({ error: setRes?.error || 'sys.canvas set failed' }));
+                                                }
+                                            }
+                                        }
+                                    }
                                 } else if (funcName === 'game_restart') {
                                     if (iframe && iframe.srcdoc) {
                                         const src = iframe.srcdoc;
