@@ -1080,7 +1080,7 @@ async function _runCanvasAgent(sdk, request) {
     _agentLog('[Canvas/Agent] ▶ Starting — existing: ' + _existing.length + ' chars | request: ' + request + ' | logs: ' + _gameLogs.length + ' chars');
 
     // Resolve canvas LLM model preference from localStorage
-    const _canvasModel = ((typeof localStorage !== 'undefined' && localStorage.getItem('traits.env.SLOB_CANVAS_MODEL')) || 'gpt-4.1').trim() || 'gpt-4.1';
+    const _canvasModel = ((typeof localStorage !== 'undefined' && localStorage.getItem('traits.env.SLOB_CANVAS_MODEL')) || 'gpt-5.4').trim() || 'gpt-5.4';
 
     // ── Browser-native path: direct OpenAI fetch — works without helper or server ──
     const apiKey = _voiceApiKey || await _ensureVoiceApiKey(sdk).catch(() => null);
@@ -1143,7 +1143,7 @@ async function _runCanvasAgent(sdk, request) {
 // Handles sys_vfs read/write locally via localStorage['traits.pvfs'].
 async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canvasModel) {
     gameLogs = gameLogs || '';
-    canvasModel = canvasModel || 'gpt-4.1';
+    canvasModel = canvasModel || 'gpt-5.4';
     let fallbackModelUsed = false;
     const SYS_VFS_TOOL = {
         type: 'function',

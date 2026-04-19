@@ -10,7 +10,7 @@ params = [
   { name = "prompt", type = "string", description = "User message to send to the agent", required = true },
   { name = "system", type = "string", description = "System prompt (default: general coding assistant)", required = false },
   { name = "tools", type = "string", description = "Comma-separated trait paths to expose as tools (default: sys.call,sys.list,sys.registry,kernel.call)", required = false },
-  { name = "model", type = "string", description = "OpenAI model to use (default: gpt-4o-mini)", required = false, default = "gpt-4o-mini" },
+  { name = "model", type = "string", description = "OpenAI model to use (default: gpt-5.4)", required = false, default = "gpt-5.4" },
   { name = "max_steps", type = "int", description = "Maximum agent loop iterations (default: 10)", required = false, default = "10" },
   { name = "api_secret", type = "string", description = "Name of the secret holding the OpenAI API key (default: openai_api_key)", required = false, default = "openai_api_key" },
   { name = "mode", type = "string", description = "Agent mode: 'full' (run to completion) or 'turn' (single turn for buddy/companion UX)", required = false, default = "full" },

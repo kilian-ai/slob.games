@@ -85,10 +85,10 @@ pub fn spa(_args: &[Value]) -> Value {
                         div.form-row {
                           label.select-label for="canvasModelSelect" { "Canvas LLM" }
                           select id="canvasModelSelect" onchange="saveModelPref('SLOB_CANVAS_MODEL', this.value)" {
-                            option value="gpt-4.1" { "gpt-4.1 (default)" }
+                            option value="gpt-4.1" { "gpt-4.1" }
                             option value="gpt-4.1-mini" { "gpt-4.1-mini (fast)" }
                             option value="gpt-4.1-nano" { "gpt-4.1-nano (budget)" }
-                            option value="gpt-5.4" { "gpt-5.4" }
+                            option value="gpt-5.4" { "gpt-5.4 (default)" }
                             option value="gpt-5.3-codex" { "gpt-5.3-codex" }
                             option value="gpt-5.3-mini" { "gpt-5.3-mini" }
                             option value="gpt-4o" { "gpt-4o" }

@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 ///   prompt:     User message (required)
 ///   system:     System prompt (optional, has default coding agent prompt)
 ///   tools:      Comma-separated trait paths to expose as tools, or empty for defaults
-///   model:      OpenAI model (default: gpt-4o-mini)
+///   model:      OpenAI model (default: gpt-5.4)
 ///   max_steps:  Max agent loop iterations (default: 10)
 ///   api_secret: Secret name for OpenAI API key (default: "openai_api_key")
 ///   mode:       "full" (run to completion) or "turn" (single turn for buddy UX)
@@ -45,7 +45,7 @@ pub fn agent(args: &[Value]) -> Value {
     let model = args.get(3)
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
-        .unwrap_or("gpt-4o-mini")
+        .unwrap_or("gpt-5.4")
         .to_string();
 
     let max_steps = args.get(4)
