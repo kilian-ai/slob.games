@@ -733,6 +733,46 @@ pub fn canvas(_args: &[Value]) -> Value {
                             return files;
                         }
 
+                        function _deletePathFromPvfsRaw(raw, path) {
+                            if (!raw || !path) return;
+                            try {
+                                if (Object.prototype.hasOwnProperty.call(raw, path)) delete raw[path];
+                                if (raw.files && typeof raw.files === 'object' && Object.prototype.hasOwnProperty.call(raw.files, path)) {
+                                    delete raw.files[path];
+                                }
+                            } catch(_) {}
+                        }
+
+                        // Move media/sprite artifacts out of localStorage and into IndexedDB.
+                        // This keeps traits.pvfs small and prevents QuotaExceeded on autosave.
+                        async function _offloadPvfsMediaToIdb(opts) {
+                            opts = opts || {};
+                            var minBytes = Number(opts.minBytes || 16 * 1024);
+                            var moved = 0;
+                            try {
+                                var raw = JSON.parse(localStorage.getItem('traits.pvfs') || '{}') || {};
+                                var merged = _readPvfsFiles();
+                                for (var path in merged) {
+                                    if (!Object.prototype.hasOwnProperty.call(merged, path)) continue;
+                                    if (!path || path === 'canvas/app.html' || path === 'canvas/games.json') continue;
+                                    if (!_isSpriteOrMediaPath(path)) continue;
+                                    var val = merged[path];
+                                    if (typeof val !== 'string' || !val) continue;
+                                    if (val.length < minBytes) continue;
+                                    var ok = await _writeIdbSprite(path, val);
+                                    if (ok) {
+                                        _deletePathFromPvfsRaw(raw, path);
+                                        moved++;
+                                    }
+                                }
+                                if (moved > 0) {
+                                    localStorage.setItem('traits.pvfs', JSON.stringify(raw));
+                                    console.log('[sprite-cache] offloaded', moved, 'pvfs media entries to IndexedDB');
+                                }
+                            } catch(_) {}
+                            return moved;
+                        }
+
                         // Kick off cache load immediately
                         _loadIdbSpriteCache();
 
@@ -1650,7 +1690,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     if (!active || !active.content) return false;
 
                                     const gameId = active._sync_game_id || active.game_id || _slugifyGameId(active.name || activeId);
-                                    const pkg = _collectGameResourcesForContent(active.content || '', 2 * 1024 * 1024);
+                                    // Keep autosync payload small. Large assets live in IndexedDB
+                                    // locally and can be pushed explicitly via backfill when needed.
+                                    const pkg = { resources: {}, bytes: 0 };
                                     const contentOnlyHash = await _shortContentHash(active.content || '');
                                     const syncKey = [activeId, gameId, active.name || '', active.updated || '', contentOnlyHash, Object.keys(pkg.resources).length].join('|');
                                     if (syncKey === __lastRelayInternalSyncKey) return true;
@@ -2396,6 +2438,10 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 const sdk = window._traitsSDK;
                                 if (!sdk) return;
                                 __lastPersistedContent = text;
+
+                                // Proactively shrink localStorage before any sys.canvas/sys.game_vcs writes.
+                                await _offloadPvfsMediaToIdb({ minBytes: 8 * 1024 });
+
                                 await sdk.call('sys.canvas', ['set', text]);
                                 await _autoNameActiveGame(text);
 
@@ -2407,15 +2453,17 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     const ag = aid ? (col.games || {})[aid] : null;
                                     if (ag) {
                                         const key = _revisionKeyForGame(ag, aid);
-                                        const pkg = _collectGameResourcesForContent(text, 2 * 1024 * 1024);
                                         await sdk.call('sys.game_vcs', [
                                             'commit', key, text,
                                             ag.name || 'untitled',
                                             ag.version || '',
-                                            JSON.stringify(pkg.resources || {})
+                                            '{}'
                                         ]);
                                     }
                                 } catch (_) {}
+
+                                // Run once more after writes to catch newly created media artifacts.
+                                await _offloadPvfsMediaToIdb({ minBytes: 8 * 1024 });
 
                                 _syncActiveToRelayInternal({ immediate: immediateRelaySync }).catch(() => {});
                             } catch(_) {}
