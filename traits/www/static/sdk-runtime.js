@@ -937,6 +937,54 @@ function _agentLog(msg, level) {
     } catch(_) {}
 }
 
+function _estimateDataUrlBytes(dataUrl) {
+    const s = String(dataUrl || '');
+    const i = s.indexOf(',');
+    if (i < 0) return 0;
+    return Math.floor((s.length - i - 1) * 0.75);
+}
+
+function _captureVoiceCanvasImage(options) {
+    const opts = options || {};
+    const maxBytes = Number(opts.maxBytes || 10000);
+    const maxW = Number(opts.maxWidth || 128);
+    const maxH = Number(opts.maxHeight || 280);
+    const qualities = [0.45, 0.35, 0.25, 0.2];
+    const scales = [1, 0.85, 0.7, 0.55, 0.45];
+
+    try {
+        const iframe = document.getElementById('phone-viewport');
+        const iDoc = iframe && iframe.contentDocument;
+        const src = iDoc && iDoc.querySelector('canvas');
+        if (!src || !src.width || !src.height) return null;
+
+        const fit = Math.min(1, maxW / src.width, maxH / src.height);
+        let best = null;
+
+        for (const scale of scales) {
+            const w = Math.max(64, Math.floor(src.width * fit * scale));
+            const h = Math.max(64, Math.floor(src.height * fit * scale));
+            const out = document.createElement('canvas');
+            out.width = w;
+            out.height = h;
+            const ctx = out.getContext('2d', { alpha: false });
+            if (!ctx) continue;
+            ctx.drawImage(src, 0, 0, w, h);
+
+            for (const q of qualities) {
+                const dataUrl = out.toDataURL('image/jpeg', q);
+                const bytes = _estimateDataUrlBytes(dataUrl);
+                if (!best || bytes < best.bytes) best = { dataUrl, bytes, width: w, height: h, quality: q };
+                if (bytes <= maxBytes) return { dataUrl, bytes, width: w, height: h, quality: q };
+            }
+        }
+
+        return best;
+    } catch(_) {
+        return null;
+    }
+}
+
 // ── Shared canvas agent runner — used by BOTH WebRTC and local voice paths ──
 // Prefers browser-native direct OpenAI fetch (no helper/server needed).
 let _canvasAgentRunning = false;
@@ -3121,6 +3169,23 @@ class Traits {
                             }
                         };
 
+                        const _sendDcJson = (payload, label) => {
+                            if (!_voiceDc || _voiceDc.readyState !== 'open') return false;
+                            try {
+                                const wire = JSON.stringify(payload);
+                                // Guard against RTC data channel payload-size failures.
+                                if (wire.length > 16000) {
+                                    console.warn('[Voice] Skip oversized DataChannel payload:', label || 'payload', wire.length, 'chars');
+                                    return false;
+                                }
+                                _voiceDc.send(wire);
+                                return true;
+                            } catch (e) {
+                                console.warn('[Voice] Failed to send DataChannel payload:', label || 'payload', e && e.message ? e.message : e);
+                                return false;
+                            }
+                        };
+
                         // Handle synthetic canvas tool — route to shared _runCanvasAgent
                         if (funcName === 'canvas') {
                             let request = '';
@@ -3130,12 +3195,9 @@ class Traits {
                             // ── Before screenshot ──
                             let beforeScreenshot = null;
                             try {
-                                const iframe = document.getElementById('phone-viewport');
-                                const iDoc = iframe?.contentDocument;
-                                const cvs = iDoc?.querySelector('canvas');
-                                if (cvs) {
-                                    beforeScreenshot = cvs.toDataURL('image/jpeg', 0.6);
-                                    console.log('[Voice/Canvas] Before screenshot captured');
+                                beforeScreenshot = _captureVoiceCanvasImage({ maxBytes: 10000, maxWidth: 128, maxHeight: 280 });
+                                if (beforeScreenshot && beforeScreenshot.dataUrl) {
+                                    console.log('[Voice/Canvas] Before screenshot captured:', beforeScreenshot.width + 'x' + beforeScreenshot.height, beforeScreenshot.bytes + 'B', 'q=' + beforeScreenshot.quality);
                                 }
                             } catch(_) {}
 
@@ -3163,27 +3225,27 @@ class Traits {
                             // ── After screenshot ──
                             let afterScreenshot = null;
                             try {
-                                const iframe = document.getElementById('phone-viewport');
-                                const iDoc = iframe?.contentDocument;
-                                const cvs = iDoc?.querySelector('canvas');
-                                if (cvs) {
-                                    afterScreenshot = cvs.toDataURL('image/jpeg', 0.6);
-                                    console.log('[Voice/Canvas] After screenshot captured');
+                                afterScreenshot = _captureVoiceCanvasImage({ maxBytes: 10000, maxWidth: 128, maxHeight: 280 });
+                                if (afterScreenshot && afterScreenshot.dataUrl) {
+                                    console.log('[Voice/Canvas] After screenshot captured:', afterScreenshot.width + 'x' + afterScreenshot.height, afterScreenshot.bytes + 'B', 'q=' + afterScreenshot.quality);
                                 }
                             } catch(_) {}
 
                             if (_voiceDc && _voiceDc.readyState === 'open') {
-                                // Inject before/after screenshots so the model can see the visual diff
-                                const contentParts = [];
-                                if (beforeScreenshot) contentParts.push({ type: 'input_image', image_url: beforeScreenshot });
-                                if (afterScreenshot) contentParts.push({ type: 'input_image', image_url: afterScreenshot });
+                                let sentBefore = false;
+                                let sentAfter = false;
+                                if (beforeScreenshot && beforeScreenshot.dataUrl) {
+                                    sentBefore = _sendDcJson({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_image', image_url: beforeScreenshot.dataUrl }] } }, 'before screenshot');
+                                }
+                                if (afterScreenshot && afterScreenshot.dataUrl) {
+                                    sentAfter = _sendDcJson({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_image', image_url: afterScreenshot.dataUrl }] } }, 'after screenshot');
+                                }
                                 const completionText = ok
                                     ? 'Canvas agent finished. The implementation tasks are now done and auto-saved.' +
-                                      (beforeScreenshot && afterScreenshot ? ' I\'ve attached BEFORE and AFTER screenshots. Describe the visual changes you can see.' : ' Briefly summarize the concrete changes you made.')
+                                      (sentBefore && sentAfter ? ' I\'ve attached BEFORE and AFTER screenshots. Describe the visual changes you can see.' : ' Briefly summarize the concrete changes you made.')
                                     : 'Canvas update failed. Explain the error and ask whether to retry with a simpler request.';
-                                contentParts.push({ type: 'input_text', text: completionText });
-                                _voiceDc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: contentParts } }));
-                                _voiceDc.send(JSON.stringify({ type: 'response.create' }));
+                                _sendDcJson({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: completionText }] } }, 'canvas completion text');
+                                _sendDcJson({ type: 'response.create' }, 'response.create');
                             }
                             if (opts.onToolResult) opts.onToolResult(funcName, truncated);
                             _dispatchVoiceEvent('tool_result', { name: funcName, result: truncated });
@@ -3214,12 +3276,14 @@ class Traits {
                                 if (funcName === 'game_screenshot') {
                                     const cvs = iDoc?.querySelector('canvas');
                                     if (cvs) {
-                                        const dataUrl = cvs.toDataURL('image/jpeg', 0.7);
+                                        const shot = _captureVoiceCanvasImage({ maxBytes: 10000, maxWidth: 128, maxHeight: 280 });
                                         _sendOutput(JSON.stringify({ ok: true, width: cvs.width, height: cvs.height, format: 'jpeg' }));
                                         // Inject screenshot as user message for the model to see
                                         if (_voiceDc && _voiceDc.readyState === 'open') {
-                                            _voiceDc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_image', image_url: dataUrl }] } }));
-                                            _voiceDc.send(JSON.stringify({ type: 'response.create' }));
+                                            if (shot && shot.dataUrl) {
+                                                _sendDcJson({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_image', image_url: shot.dataUrl }] } }, 'game_screenshot');
+                                            }
+                                            _sendDcJson({ type: 'response.create' }, 'response.create after game_screenshot');
                                         }
                                         console.log('[Voice/DevTools] Screenshot captured:', cvs.width, 'x', cvs.height);
                                         return false; // manages own response.create
