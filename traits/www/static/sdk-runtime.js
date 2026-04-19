@@ -985,6 +985,61 @@ function _captureVoiceCanvasImage(options) {
     }
 }
 
+async function _getCurrentCanvasSource(seed) {
+    const candidates = [];
+    if (seed) candidates.push(String(seed));
+
+    // localStorage (flat + nested formats)
+    try {
+        const pvfs = JSON.parse(localStorage.getItem('traits.pvfs') || '{}');
+        if (pvfs['canvas/app.html']) candidates.push(String(pvfs['canvas/app.html']));
+        if (pvfs.files && pvfs.files['canvas/app.html']) {
+            const entry = pvfs.files['canvas/app.html'];
+            candidates.push(typeof entry === 'string' ? entry : String((entry && entry.content) || ''));
+        }
+    } catch(_) {}
+
+    // WASM persistent/session VFS
+    try {
+        if (wasmReady && wasm && wasm.persistent_vfs_read) {
+            const s = wasm.persistent_vfs_read('canvas/app.html') || '';
+            if (s) candidates.push(String(s));
+        }
+    } catch(_) {}
+    try {
+        if (wasmReady && wasm && wasm.vfs_read) {
+            const s = wasm.vfs_read('canvas/app.html') || '';
+            if (s) candidates.push(String(s));
+        }
+    } catch(_) {}
+
+    // IndexedDB fallback
+    try {
+        const idbEntry = await _idbGetVfsEntry('canvas/app.html');
+        if (idbEntry && idbEntry.content) candidates.push(String(idbEntry.content));
+    } catch(_) {}
+
+    let best = '';
+    for (const c of candidates) {
+        if (c && c.length > best.length) best = c;
+    }
+    return best;
+}
+
+function _renderCanvasSourceBlockForPrompt(source) {
+    const s = String(source || '');
+    if (!s) return '';
+    const maxChars = 60000;
+    const trimmed = s.length > maxChars ? s.slice(0, maxChars) : s;
+    const note = s.length > maxChars
+        ? '\nNOTE: Source was truncated to ' + maxChars + ' chars for prompt size.'
+        : '';
+    return '\n\nCURRENT canvas/app.html SOURCE (authoritative baseline):\n' +
+        '- Treat this as the current game code to modify incrementally.\n' +
+        '- Preserve all unchanged behavior and structure.\n' +
+        '--- CANVAS_SOURCE_START ---\n' + trimmed + '\n--- CANVAS_SOURCE_END ---' + note + '\n';
+}
+
 // ── Shared canvas agent runner — used by BOTH WebRTC and local voice paths ──
 // Prefers browser-native direct OpenAI fetch (no helper/server needed).
 let _canvasAgentRunning = false;
@@ -1009,6 +1064,10 @@ async function _runCanvasAgent(sdk, request) {
         _existing = pvfs['canvas/app.html'] || '';
     } catch(_) {}
 
+    // Resolve current source from all known stores so incremental updates are reliable.
+    _existing = await _getCurrentCanvasSource(_existing);
+    const _sourceBlock = _renderCanvasSourceBlockForPrompt(_existing);
+
     // Collect recent game console logs for diagnostic context
     let _gameLogs = '';
     try {
@@ -1031,7 +1090,7 @@ async function _runCanvasAgent(sdk, request) {
 
     // ── Fallback: dispatch through SDK cascade (needs helper or server) ──
     const prompt = _existing
-        ? `User request: ${request}${_gameLogs}\n\nIMPORTANT: A game already exists. Keep the existing game and only make the specific incremental change requested. Do NOT rebuild or rewrite the game from scratch. Preserve all existing features, sprites, levels, sounds, and gameplay. Read canvas/app.html, apply ONLY the requested change, write the COMPLETE updated file back immediately.`
+        ? `User request: ${request}${_gameLogs}\n\nIMPORTANT: A game already exists. Keep the existing game and only make the specific incremental change requested. Do NOT rebuild or rewrite the game from scratch. Preserve all existing features, sprites, levels, sounds, and gameplay. Read canvas/app.html, apply ONLY the requested change, write the COMPLETE updated file back immediately.${_sourceBlock}`
 : `Build the following for the canvas:\n\n${request}\n\nWrite a complete, self-contained HTML+CSS+JS file to canvas/app.html. Requirements:\n- 390px wide × 844px tall, fills the phone viewport\n- Dark theme: background #0a0a0a, bright accent colors\n- Inline all CSS and JS — no external dependencies\n- querySelector('canvas') for canvas access (scripts run inside an iframe)\n- let (not const) for any reassigned variables\n- Cancel any existing animation first: if(window.__canvasAnimId) cancelAnimationFrame(window.__canvasAnimId)\n- Store new animation ID: window.__canvasAnimId = requestAnimationFrame(loop)\n- No DOMContentLoaded listeners`;
 
     const agentArgs = [prompt, CANVAS_AGENT_SYSTEM, 'sys.vfs,sys.canvas', _canvasModel, 20];
@@ -1134,10 +1193,11 @@ async function _runCanvasAgentBrowser(request, existing, apiKey, gameLogs, canva
         }
     };
 
+    const existingSourceBlock = _renderCanvasSourceBlockForPrompt(existing);
     const messages = [
         { role: 'system', content: CANVAS_AGENT_SYSTEM },
         { role: 'user', content: existing
-            ? `User request: ${request}${gameLogs}\n\nIMPORTANT: A game already exists. Keep the existing game and only make the specific incremental change requested. Do NOT rebuild or rewrite the game from scratch. Preserve all existing features, sprites, levels, sounds, and gameplay. Read canvas/app.html, apply ONLY the requested change, write the COMPLETE updated file back immediately.`
+            ? `User request: ${request}${gameLogs}\n\nIMPORTANT: A game already exists. Keep the existing game and only make the specific incremental change requested. Do NOT rebuild or rewrite the game from scratch. Preserve all existing features, sprites, levels, sounds, and gameplay. Read canvas/app.html, apply ONLY the requested change, write the COMPLETE updated file back immediately.${existingSourceBlock}`
 : `Build the following for the canvas:\n\n${request}${gameLogs}\n\nWrite a complete, self-contained HTML+CSS+JS file to canvas/app.html. Requirements:\n- 390px wide × 844px tall, fills the phone viewport\n- Dark theme: background #0a0a0a, bright accent colors\n- Inline all CSS and JS — no external dependencies\n- querySelector('canvas') for canvas access (scripts run inside an iframe)\n- let (not const) for any reassigned variables\n- Cancel any existing animation first: if(window.__canvasAnimId) cancelAnimationFrame(window.__canvasAnimId)\n- Store new animation ID: window.__canvasAnimId = requestAnimationFrame(loop)\n- No DOMContentLoaded listeners`
         }
     ];
