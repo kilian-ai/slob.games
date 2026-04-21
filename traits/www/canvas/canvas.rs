@@ -373,6 +373,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                         /* ── Mobile fullscreen ── */
                         @media (max-width: 768px) and (pointer: coarse) {
                             .canvas-header { display: none !important; }
+                            :root { --mobile-vp-trim: 14px; }
                             #canvas-container {
                                 height: var(--app-vh) !important;
                                 min-height: var(--app-vh) !important;
@@ -393,7 +394,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             .phone-nav-bracket { display: none !important; }
                             #phone-viewport {
                                 width: 100% !important;
-                                height: var(--app-vh) !important;
+                                height: calc(var(--app-vh) - var(--mobile-vp-trim)) !important;
                                 border-radius: 0 !important;
                             }
                             #canvas-fab {
