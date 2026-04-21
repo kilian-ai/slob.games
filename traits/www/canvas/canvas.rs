@@ -11,7 +11,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                 title { "slob.games — Canvas" }
                 style {
                     (PreEscaped(r#"
-                        :root { --bg: #0a0a0a; --fg: #e0e0e0; --accent: #00e0ff; --border: #1a1a2e; }
+                        :root { --bg: #0a0a0a; --fg: #e0e0e0; --accent: #00e0ff; --border: #1a1a2e; --app-vh: 100vh; }
                         html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); font-family: 'Courier New', Menlo, monospace; overflow: hidden; height: 100%; }
                         .canvas-header {
                             display: flex; align-items: center; justify-content: space-between;
@@ -374,13 +374,16 @@ pub fn canvas(_args: &[Value]) -> Value {
                         @media (max-width: 768px) and (pointer: coarse) {
                             .canvas-header { display: none !important; }
                             #canvas-container {
-                                height: 100vh !important; height: 100dvh !important;
+                                height: var(--app-vh) !important;
+                                min-height: var(--app-vh) !important;
                                 padding: 0 !important;
+                                padding-bottom: env(safe-area-inset-bottom) !important;
                                 align-items: stretch !important;
                                 overflow: hidden !important;
                             }
                             #phone-frame {
-                                width: 100% !important; height: 100vh !important; height: 100dvh !important;
+                                width: 100% !important;
+                                height: var(--app-vh) !important;
                                 border-radius: 0 !important;
                                 border: none !important; box-shadow: none !important;
                                 padding: 0 !important; background: #000 !important;
@@ -390,15 +393,15 @@ pub fn canvas(_args: &[Value]) -> Value {
                             .phone-notch, .phone-home-bar { display: none !important; }
                             .phone-nav-bracket { display: none !important; }
                             #phone-viewport {
-                                width: 100vw !important;
-                                height: 100vh !important; height: 100dvh !important;
+                                width: 100% !important;
+                                height: calc(var(--app-vh) - env(safe-area-inset-bottom)) !important;
                                 border-radius: 0 !important;
                             }
                             #canvas-fab {
                                 transition: opacity 0.3s;
                             }
                             #canvas-fab.mob-hidden { opacity: 0; pointer-events: none; }
-                            .canvas-empty { height: 100vh; height: 100dvh; }
+                            .canvas-empty { height: var(--app-vh); }
 
 
 
@@ -4631,6 +4634,31 @@ pub fn canvas(_args: &[Value]) -> Value {
                             // Run migration after a short delay to ensure WS/auth are ready
                             setTimeout(migrateLocalToRelay, 3000);
                         })();
+
+                        function updateMobileViewportVars() {
+                            if (!isMobile) return;
+                            var h = 0;
+                            try {
+                                if (window.visualViewport && window.visualViewport.height) {
+                                    h = window.visualViewport.height;
+                                }
+                            } catch (_) {}
+                            if (!h || !isFinite(h)) h = window.innerHeight || 0;
+                            if (!h || !isFinite(h)) return;
+                            document.documentElement.style.setProperty('--app-vh', Math.max(0, Math.floor(h)) + 'px');
+                        }
+
+                        if (isMobile) {
+                            updateMobileViewportVars();
+                            window.addEventListener('resize', updateMobileViewportVars);
+                            window.addEventListener('orientationchange', updateMobileViewportVars);
+                            if (window.visualViewport) {
+                                window.visualViewport.addEventListener('resize', updateMobileViewportVars);
+                                window.visualViewport.addEventListener('scroll', updateMobileViewportVars);
+                            }
+                            setTimeout(updateMobileViewportVars, 80);
+                            setTimeout(updateMobileViewportVars, 240);
+                        }
 
                         // ── Desktop: scale phone frame to fit viewport height ──
                         if (!isMobile) {
