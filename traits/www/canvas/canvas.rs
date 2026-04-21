@@ -11,7 +11,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                 title { "slob.games — Canvas" }
                 style {
                     (PreEscaped(r#"
-                        :root { --bg: #0a0a0a; --fg: #e0e0e0; --accent: #00e0ff; --border: #1a1a2e; --app-vh: 100vh; }
+                        :root { --bg: #0a0a0a; --fg: #e0e0e0; --accent: #00e0ff; --border: #1a1a2e; --app-vh: 100dvh; }
                         html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); font-family: 'Courier New', Menlo, monospace; overflow: hidden; height: 100%; }
                         .canvas-header {
                             display: flex; align-items: center; justify-content: space-between;
@@ -377,7 +377,6 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 height: var(--app-vh) !important;
                                 min-height: var(--app-vh) !important;
                                 padding: 0 !important;
-                                padding-bottom: env(safe-area-inset-bottom) !important;
                                 align-items: stretch !important;
                                 overflow: hidden !important;
                             }
@@ -394,7 +393,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             .phone-nav-bracket { display: none !important; }
                             #phone-viewport {
                                 width: 100% !important;
-                                height: calc(var(--app-vh) - env(safe-area-inset-bottom)) !important;
+                                height: var(--app-vh) !important;
                                 border-radius: 0 !important;
                             }
                             #canvas-fab {
@@ -4638,13 +4637,18 @@ pub fn canvas(_args: &[Value]) -> Value {
                         function updateMobileViewportVars() {
                             if (!isMobile) return;
                             var h = 0;
-                            try {
-                                if (window.visualViewport && window.visualViewport.height) {
-                                    h = window.visualViewport.height;
-                                }
-                            } catch (_) {}
-                            if (!h || !isFinite(h)) h = window.innerHeight || 0;
-                            if (!h || !isFinite(h)) return;
+                            var vv = null;
+                            try { vv = window.visualViewport || null; } catch (_) { vv = null; }
+                            if (vv) {
+                                // Primary path: when visualViewport exists, trust it exclusively.
+                                // Avoid falling back to innerHeight here because it can be stale
+                                // during browser-chrome transitions and cause bottom clipping.
+                                h = Number(vv.height || 0);
+                                if (!isFinite(h) || h < 100) return;
+                            } else {
+                                h = Number(window.innerHeight || 0);
+                                if (!isFinite(h) || h < 100) return;
+                            }
                             document.documentElement.style.setProperty('--app-vh', Math.max(0, Math.floor(h)) + 'px');
                         }
 
