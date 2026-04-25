@@ -373,7 +373,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                         /* ── Mobile fullscreen ── */
                         @media (max-width: 768px) and (pointer: coarse) {
                             .canvas-header { display: none !important; }
-                            :root { --mobile-vp-trim: 40px; }
+                            :root { --mobile-vp-trim: 140px; }
                             #canvas-container {
                                 height: var(--app-vh) !important;
                                 min-height: var(--app-vh) !important;
