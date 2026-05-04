@@ -1392,8 +1392,11 @@ const JS: &str = r##"
           // stale token in this browser context; continue as logged-out view
           __relayUser='';
         }else{
-          _setRelayHealth(false,myResp.status,'Could not load private games ('+myResp.status+').');
-          grid.innerHTML='<div class="empty">'+esc(__relayHealth.msg)+'</div>';
+          // Relay is online (public games loaded) but private-games fetch failed.
+          // Don't mark relay offline — show a warning but keep health ok so local
+          // games don't get the misleading "offline" badge.
+          console.warn('[games:renderRelay] /internal/games failed:',myResp.status,myResp.text);
+          grid.innerHTML='<div class="empty">Could not load your games ('+myResp.status+'). <a href="#" style="color:#00e0ff;font-size:0.75em" onclick="renderRelay().catch(function(){renderLocal()});return false">Retry</a></div>';
           await renderLocal();
           return;
         }
