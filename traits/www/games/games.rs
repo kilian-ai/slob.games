@@ -12,6 +12,7 @@ pub fn games_page(_args: &[Value]) -> Value {
                 style { (PreEscaped(CSS)) }
             }
             body {
+                div id="authBar" {}
                 div.games-page {
                     div.games-section id="yourGamesSection" {
                         h2 { "Your Games" }
@@ -23,6 +24,48 @@ pub fn games_page(_args: &[Value]) -> Value {
                         h2 { "Community" }
                         div.games-grid id="relayGrid" {
                             div.loading { "Loading\u{2026}" }
+                        }
+                    }
+                }
+                div id="authModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:1000;align-items:center;justify-content:center;backdrop-filter:blur(4px)" {
+                    div.auth-card {
+                        button.auth-close onclick="hideAuthModal()" { "\u{00d7}" }
+                        div.auth-tabs {
+                            button id="authTabLogin" class="auth-tab auth-tab-active" onclick="_switchAuthTab('login')" { "Sign In" }
+                            button id="authTabRegister" class="auth-tab" onclick="_switchAuthTab('register')" { "Register" }
+                        }
+                        div id="authError" class="auth-error" {}
+                        form id="authLoginForm" onsubmit="_submitLogin(event);return false" {
+                            div.auth-field {
+                                label for="loginUsername" { "Username" }
+                                input id="loginUsername" type="text" autocomplete="username" placeholder="your-username" {}
+                            }
+                            div.auth-field {
+                                label for="loginPassword" { "Password" }
+                                input id="loginPassword" type="password" autocomplete="current-password" placeholder="\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}" {}
+                            }
+                            button id="loginSubmit" class="auth-submit-btn" type="submit" { "Sign In" }
+                            p.auth-switch { "No account? " a href="#" onclick="event.preventDefault();_switchAuthTab('register')" { "Register" } }
+                        }
+                        form id="authRegisterForm" style="display:none" onsubmit="_submitRegister(event);return false" {
+                            div.auth-field {
+                                label for="regUsername" { "Username" }
+                                input id="regUsername" type="text" autocomplete="username" placeholder="your-username" {}
+                            }
+                            div.auth-field {
+                                label for="regEmail" { "Email" }
+                                input id="regEmail" type="email" autocomplete="email" placeholder="you@example.com" {}
+                            }
+                            div.auth-field {
+                                label for="regPassword" { "Password" }
+                                input id="regPassword" type="password" autocomplete="new-password" placeholder="min. 6 characters" {}
+                            }
+                            div.auth-field {
+                                label for="regPassword2" { "Confirm Password" }
+                                input id="regPassword2" type="password" autocomplete="new-password" placeholder="repeat password" {}
+                            }
+                            button id="regSubmit" class="auth-submit-btn" type="submit" { "Create Account" }
+                            p.auth-switch { "Have an account? " a href="#" onclick="event.preventDefault();_switchAuthTab('login')" { "Sign In" } }
                         }
                     }
                 }
@@ -74,6 +117,28 @@ const CSS: &str = r##"
 .status-dot.orange{background:#ffaa00;box-shadow:0 0 4px rgba(255,170,0,0.4)}
 .status-dot.red{background:#ff4444;box-shadow:0 0 4px rgba(255,68,68,0.4)}
 @media(max-width:640px){.games-grid{grid-template-columns:1fr}.games-page{padding:1.5rem 1rem}}
+#authBar{display:flex;align-items:center;justify-content:flex-end;gap:0.75rem;padding:0.6rem 1.5rem;border-bottom:1px solid #13131f;font-size:0.75rem;color:#5a6570;max-width:900px;margin:0 auto}
+#authBar .auth-user{color:#e8e6e3;font-weight:600}
+#authBar .auth-btn{background:none;border:1px solid rgba(0,224,255,0.25);color:#00e0ff;padding:2px 10px;border-radius:4px;cursor:pointer;font-size:0.72rem;font-family:inherit;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;transition:all 0.15s}
+#authBar .auth-btn:hover{background:rgba(0,224,255,0.1);border-color:rgba(0,224,255,0.5)}
+#authBar .auth-btn.secondary{border-color:rgba(90,101,112,0.4);color:#8a9aaa}
+#authBar .auth-btn.secondary:hover{background:rgba(90,101,112,0.12)}
+.auth-card{background:#111118;border:1px solid #1e1e30;border-radius:14px;padding:2rem;width:340px;max-width:calc(100vw - 2rem);position:relative;box-shadow:0 20px 60px rgba(0,0,0,0.6)}
+.auth-close{position:absolute;top:0.75rem;right:0.75rem;background:none;border:none;color:#5a6570;cursor:pointer;font-size:1.2rem;line-height:1;padding:0.1rem 0.3rem;border-radius:3px;transition:color 0.15s}
+.auth-close:hover{color:#e8e6e3}
+.auth-tabs{display:flex;gap:0.25rem;margin-bottom:1.25rem;border-bottom:1px solid #1a1a2e;padding-bottom:0.65rem}
+.auth-tab{background:none;border:none;color:#5a6570;font-size:0.75rem;font-family:inherit;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;cursor:pointer;padding:0.25rem 0.5rem;border-radius:4px;transition:color 0.15s}
+.auth-tab.auth-tab-active{color:#00e0ff}
+.auth-error{color:#ff6666;font-size:0.78rem;min-height:1.1em;margin-bottom:0.5rem}
+.auth-field{margin-bottom:0.8rem}
+.auth-field label{display:block;font-size:0.68rem;color:#5a6570;text-transform:uppercase;letter-spacing:0.07em;font-weight:700;margin-bottom:0.28rem}
+.auth-field input{width:100%;background:#0d0d16;border:1px solid #1e1e30;border-radius:6px;color:#e8e6e3;padding:0.5rem 0.65rem;font-size:0.85rem;font-family:inherit;outline:none;box-sizing:border-box;transition:border-color 0.15s}
+.auth-field input:focus{border-color:rgba(0,224,255,0.45)}
+.auth-submit-btn{width:100%;padding:0.55rem;border-radius:8px;border:1px solid rgba(0,224,255,0.3);background:rgba(0,224,255,0.08);color:#00e0ff;font-family:inherit;font-size:0.85rem;font-weight:700;cursor:pointer;transition:all 0.15s;margin-top:0.15rem}
+.auth-submit-btn:hover{background:rgba(0,224,255,0.16);border-color:rgba(0,224,255,0.6)}
+.auth-submit-btn:disabled{opacity:0.4;cursor:default}
+.auth-switch{font-size:0.72rem;color:#5a6570;margin-top:0.75rem;text-align:center}
+.auth-switch a{color:#00e0ff;text-decoration:none}
 "##;
 
 const JS: &str = r##"
@@ -805,7 +870,7 @@ const JS: &str = r##"
     var newName=prompt('Rename game:',oldName);
     if(!newName||newName===oldName)return;
     var t=getToken();
-    if(!t){alert('Login required to rename.');return}
+    if(!t){showAuthModal('login');return}
     // Use internal API which handles name+content together
     try{
       // First fetch the current content from relay
@@ -863,7 +928,7 @@ const JS: &str = r##"
   async function setPublished(gameId,published){
     var t=getToken();
     console.log('[games:setPublished] gameId=',gameId,'published=',published,'hasToken=',!!t,'relay=',RELAY);
-    if(!t){alert('Login required to publish/unpublish.');return}
+    if(!t){showAuthModal('login');return}
     try{
       var url=RELAY+'/internal/game/'+encodeURIComponent(gameId)+'/publish';
       console.log('[games:setPublished] PATCH',url,'body=',{published:!!published});
@@ -887,7 +952,7 @@ const JS: &str = r##"
 
   async function syncLocalToRelay(localId){
     var t=getToken();
-    if(!t){alert('Login required to publish.');return null}
+    if(!t){showAuthModal('login');return null}
     var col=readGamesCollection();
     var g=col.games[localId];
     if(!g||!g.content){alert('Nothing to publish for this game.');return null}
@@ -1107,7 +1172,7 @@ const JS: &str = r##"
   async function deleteRelayGame(gameId,name){
     if(!confirm('Delete "'+name+'" from server? This cannot be undone.'))return;
     var t=getToken();
-    if(!t){alert('Login required.');return}
+    if(!t){showAuthModal('login');return}
     // Record in deletion blacklist
     _addDeletedGame('',gameId,name);
     try{
@@ -1554,8 +1619,87 @@ const JS: &str = r##"
     finally{if(hashKey)delete __fetchingHashes[hashKey];updateStatusDots()}
   }
 
+  // ── Auth modal ──────────────────────────────────────────────────────────
+  function showAuthModal(mode){
+    var m=document.getElementById('authModal');
+    m.style.display='flex';
+    _switchAuthTab(mode||'login');
+    var firstInput=m.querySelector('form:not([style*="none"]) input');
+    if(firstInput)setTimeout(function(){firstInput.focus()},60);
+  }
+  function hideAuthModal(){
+    document.getElementById('authModal').style.display='none';
+    document.getElementById('authError').textContent='';
+  }
+  function _switchAuthTab(mode){
+    var isReg=(mode==='register');
+    document.getElementById('authTabLogin').classList.toggle('auth-tab-active',!isReg);
+    document.getElementById('authTabRegister').classList.toggle('auth-tab-active',isReg);
+    document.getElementById('authLoginForm').style.display=isReg?'none':'';
+    document.getElementById('authRegisterForm').style.display=isReg?'':'none';
+    document.getElementById('authError').textContent='';
+    var firstInput=document.getElementById('authModal').querySelector('form:not([style*="none"]) input');
+    if(firstInput)setTimeout(function(){firstInput.focus()},40);
+  }
+  async function _submitLogin(event){
+    event.preventDefault();
+    var username=document.getElementById('loginUsername').value.trim();
+    var password=document.getElementById('loginPassword').value;
+    var errEl=document.getElementById('authError');
+    if(!username||!password){errEl.textContent='Enter username and password.';return}
+    var btn=document.getElementById('loginSubmit');
+    btn.disabled=true;btn.textContent='Signing in…';
+    try{
+      var r=await fetch(RELAY+'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:username,password:password})});
+      var d=await r.json().catch(function(){return{}});
+      if(r.ok&&d.token){
+        localStorage.setItem('traits.secret.SLOB_USER_TOKEN',d.token);
+        hideAuthModal();
+        location.reload();
+      }else{errEl.textContent=d.error||'Login failed.'}
+    }catch(ex){errEl.textContent='Network error.'}
+    btn.disabled=false;btn.textContent='Sign In';
+  }
+  async function _submitRegister(event){
+    event.preventDefault();
+    var username=document.getElementById('regUsername').value.trim();
+    var email=document.getElementById('regEmail').value.trim();
+    var password=document.getElementById('regPassword').value;
+    var password2=document.getElementById('regPassword2').value;
+    var errEl=document.getElementById('authError');
+    if(!username||!email||!password){errEl.textContent='All fields required.';return}
+    if(password!==password2){errEl.textContent='Passwords do not match.';return}
+    if(password.length<6){errEl.textContent='Password must be at least 6 characters.';return}
+    var btn=document.getElementById('regSubmit');
+    btn.disabled=true;btn.textContent='Creating account…';
+    try{
+      var r=await fetch(RELAY+'/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:username,email:email,password:password})});
+      var d=await r.json().catch(function(){return{}});
+      if(r.ok&&d.token){
+        localStorage.setItem('traits.secret.SLOB_USER_TOKEN',d.token);
+        hideAuthModal();
+        location.reload();
+      }else{errEl.textContent=d.error||'Registration failed.'}
+    }catch(ex){errEl.textContent='Network error.'}
+    btn.disabled=false;btn.textContent='Create Account';
+  }
+  function _renderAuthBar(username){
+    var bar=document.getElementById('authBar');
+    if(!bar)return;
+    if(username){
+      bar.innerHTML='<span class="auth-user">@'+esc(username)+'</span><button class="auth-btn secondary" onclick="localStorage.removeItem(\'traits.secret.SLOB_USER_TOKEN\');location.reload()">Sign Out</button>';
+    }else{
+      bar.innerHTML='<button class="auth-btn" onclick="showAuthModal(\'login\')">Sign In</button><button class="auth-btn" onclick="showAuthModal(\'register\')">Register</button>';
+    }
+  }
+  // Close modal on backdrop click
+  document.getElementById('authModal').addEventListener('click',function(e){if(e.target===this)hideAuthModal()});
+  // Close modal on Escape
+  document.addEventListener('keydown',function(e){if(e.key==='Escape'){var m=document.getElementById('authModal');if(m&&m.style.display!=='none')hideAuthModal()}});
+
   ensureRelayBase().finally(function(){
-    renderRelay().catch(function(){renderLocal()});
+    _renderAuthBar('');
+    renderRelay().then(function(){_renderAuthBar(__relayUser)}).catch(function(){renderLocal()});
   });
 })();
 "##;
