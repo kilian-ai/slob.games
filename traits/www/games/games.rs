@@ -862,7 +862,9 @@ const JS: &str = r##"
   async function setPublished(gameId,published){
     var t=getToken();
     console.log('[games:setPublished] gameId=',gameId,'published=',published,'hasToken=',!!t,'relay=',RELAY);
-    if(!t){alert('Login required to publish/unpublish.');return}'+encodeURIComponent(gameId)+'/publish';
+    if(!t){alert('Login required to publish/unpublish.');return}
+    try{
+      var url=RELAY+'/internal/game/'+encodeURIComponent(gameId)+'/publish';
       console.log('[games:setPublished] PATCH',url,'body=',{published:!!published});
       var r=await fetch(url,{
         method:'PATCH',headers:authHeaders(),body:JSON.stringify({published:!!published})
