@@ -1666,6 +1666,24 @@ export default {
       return new Response("ok", { headers: cors() });
     }
 
+    // Auth + config routes — handle at worker level by forwarding directly to GameRoomV3.
+    // This makes /auth/* work regardless of whether the client uses /sync/auth/* or /auth/*.
+    if (url.pathname.startsWith('/auth/') || url.pathname === '/config/github-catalog') {
+      const room = env.GAME_ROOM.get(env.GAME_ROOM.idFromName("global"));
+      try {
+        const doRes = await room.fetch(request);
+        if (!doRes.headers.get('Access-Control-Allow-Origin')) {
+          return new Response(doRes.body, {
+            status: doRes.status, statusText: doRes.statusText,
+            headers: { ...Object.fromEntries(doRes.headers.entries()), ...cors() },
+          });
+        }
+        return doRes;
+      } catch (e) {
+        return json({ error: "service temporarily unavailable" }, 503);
+      }
+    }
+
     // POST /relay/register
     if (url.pathname === "/relay/register" && request.method === "POST") {
       let preferred = null;
