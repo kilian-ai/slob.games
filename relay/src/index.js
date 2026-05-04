@@ -609,6 +609,102 @@ export class GameRoomV3 {
     return toDelete.length;
   }
 
+  // ── GitHub publishing ─────────────────────────────────────────────────────
+  async publishToGitHub(row, token, repo) {
+    const owner = normalizeSlug(row.owner, 'public');
+    const gameId = normalizeSlug(row.game_id, 'game');
+    const BASE = `https://api.github.com/repos/${repo}/contents`;
+    const headers = {
+      Authorization: `token ${token}`,
+      'Content-Type': 'application/json',
+      'User-Agent': 'slob-games-relay/1.0',
+      Accept: 'application/vnd.github.v3+json',
+    };
+
+    // 1. Write games/{owner}/{game_id}.json (full content)
+    const resources = parseResourcesField(row.resources);
+    const gamePayload = {
+      name: row.name,
+      content: row.content,
+      version: row.version || '',
+      checksum: row.checksum || row.content_hash,
+      content_hash: row.content_hash,
+      owner,
+      game_id: gameId,
+      updated: row.updated,
+      size: row.size,
+      resources,
+    };
+    const gamePath = `games/${owner}/${gameId}.json`;
+    const gameContent = btoa(unescape(encodeURIComponent(JSON.stringify(gamePayload, null, 2))));
+
+    const existResp = await fetch(`${BASE}/${gamePath}`, { headers });
+    const existData = existResp.ok ? await existResp.json().catch(() => ({})) : {};
+    const gameSha = existData.sha;
+
+    const gamePut = await fetch(`${BASE}/${gamePath}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        message: `publish: ${owner}/${gameId} v${row.version || 'latest'}`,
+        content: gameContent,
+        ...(gameSha ? { sha: gameSha } : {}),
+      }),
+    });
+    if (!gamePut.ok) {
+      const err = await gamePut.json().catch(() => ({}));
+      throw new Error(`GitHub game write failed (${gamePut.status}): ${err.message || ''}`);
+    }
+
+    // 2. Update games/index.json — retry once on 409 SHA conflict
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const idxResp = await fetch(`${BASE}/games/index.json`, { headers });
+      const idxData = idxResp.ok ? await idxResp.json().catch(() => ({})) : {};
+      const idxSha = idxData.sha;
+      let index = { games: [] };
+      if (idxData.content) {
+        try { index = JSON.parse(decodeURIComponent(escape(atob(idxData.content.replace(/\n/g, ''))))); } catch (_) {}
+      }
+      const entry = {
+        id: `${owner}/${gameId}`,
+        owner,
+        game_id: gameId,
+        name: row.name,
+        checksum: row.checksum || row.content_hash,
+        content_hash: row.content_hash,
+        size: row.size,
+        updated: row.updated,
+        version: row.version || '',
+      };
+      const idx = index.games.findIndex(g => g.id === entry.id);
+      if (idx >= 0) index.games[idx] = entry;
+      else index.games.push(entry);
+      index.games.sort((a, b) => a.id.localeCompare(b.id));
+
+      const idxContent = btoa(unescape(encodeURIComponent(JSON.stringify(index, null, 2))));
+      const idxPut = await fetch(`${BASE}/games/index.json`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({
+          message: `index: upsert ${owner}/${gameId}`,
+          content: idxContent,
+          ...(idxSha ? { sha: idxSha } : {}),
+        }),
+      });
+      if (idxPut.ok) break;
+      if (idxPut.status === 409 && attempt === 0) continue; // SHA conflict, retry with fresh SHA
+      const err = await idxPut.json().catch(() => ({}));
+      throw new Error(`GitHub index write failed (${idxPut.status}): ${err.message || ''}`);
+    }
+
+    const rawBase = `https://raw.githubusercontent.com/${repo}/main`;
+    return {
+      ok: true,
+      raw_url: `${rawBase}/${gamePath}`,
+      index_url: `${rawBase}/games/index.json`,
+    };
+  }
+
   async fetch(request) {
     const url = new URL(request.url);
 
@@ -974,6 +1070,15 @@ export class GameRoomV3 {
         return json({ ok: true, username: target, deleted: key });
       }
 
+      // GET /config/github-catalog — returns GitHub raw index URL if GITHUB_REPO is set
+      if (url.pathname === '/config/github-catalog' && request.method === 'GET') {
+        const repo = this.env.GITHUB_REPO || '';
+        const catalogUrl = repo
+          ? `https://raw.githubusercontent.com/${repo}/main/games/index.json`
+          : null;
+        return json({ url: catalogUrl, repo: repo || null });
+      }
+
       // GET /games — list all published games (with high score)
       if (url.pathname === "/games" && request.method === "GET") {
         const rows = this.sql.exec(
@@ -1069,6 +1174,37 @@ export class GameRoomV3 {
           }
         }
         return json({ ok: true, owner, game_id: gameId, published: !!newVal });
+      }
+
+      // PATCH /internal/game/:gameId/github-publish — mirror game to GitHub
+      const githubPublishMatch = url.pathname.match(/^\/internal\/game\/([^/]+)\/github-publish$/);
+      if (githubPublishMatch && request.method === 'PATCH') {
+        const user = await this.authUser(request);
+        if (!user) return json({ error: 'auth required' }, 401);
+        const gameId = normalizeSlug(githubPublishMatch[1], '');
+        if (!gameId) return json({ error: 'missing game id' }, 400);
+
+        const githubToken = this.env.GITHUB_TOKEN;
+        const githubRepo = this.env.GITHUB_REPO;
+        if (!githubToken || !githubRepo) return json({ error: 'GitHub publishing not configured on this relay' }, 503);
+
+        const body = await request.json().catch(() => ({}));
+        const requestedOwner = normalizeSlug(body.owner || user, user);
+        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
+        if (requestedOwner !== user && role !== 'admin') return json({ error: 'forbidden' }, 403);
+
+        const row = this.sql.exec(
+          "SELECT content_hash, name, content, updated, size, owner, game_id, version, checksum, resources FROM games WHERE owner = ? AND game_id = ?",
+          requestedOwner, gameId
+        ).toArray()[0];
+        if (!row) return json({ error: 'game not found' }, 404);
+
+        try {
+          const result = await this.publishToGitHub(row, githubToken, githubRepo);
+          return json(result);
+        } catch (err) {
+          return json({ error: String(err?.message || err) }, 502);
+        }
       }
 
       // POST /internal/fork — fork a game into authenticated user's collection

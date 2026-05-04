@@ -13,7 +13,7 @@ pub fn games_page(_args: &[Value]) -> Value {
             }
             body {
                 div.games-page {
-                    div.games-section {
+                    div.games-section id="yourGamesSection" {
                         h2 { "Your Games" }
                         div.games-grid id="localGrid" {
                             div.loading { "Loading\u{2026}" }
@@ -54,6 +54,10 @@ const CSS: &str = r##"
 .badge.publish-dim{background:rgba(120,136,158,0.12);color:#8da0b8;cursor:pointer;opacity:.82}
 .badge.publish-dim:hover{background:rgba(141,160,184,0.22);color:#b9c7d9;opacity:1}
 .badge.offline{background:rgba(255,176,32,0.12);color:#ffcc66;cursor:default;opacity:.95}
+.publish-all-btn{font-size:0.65rem;padding:2px 8px;border-radius:4px;border:1px solid rgba(0,255,136,0.3);background:rgba(0,255,136,0.06);color:#00ff88;cursor:pointer;font-family:inherit;letter-spacing:0.04em;text-transform:uppercase;font-weight:600;transition:all 0.15s;margin-left:0.75rem;vertical-align:middle}
+.publish-all-btn:hover{background:rgba(0,255,136,0.14);border-color:rgba(0,255,136,0.6)}
+.publish-all-btn:disabled{opacity:0.4;cursor:default}
+#yourGamesSection h2{display:inline}
 .submeta{font-size:0.62rem;color:#6f7f96;opacity:.9}
 .btn-del{background:none;border:1px solid rgba(255,60,60,0.2);color:#ff4444;font-size:0.6rem;padding:1px 6px;border-radius:3px;cursor:pointer;text-transform:uppercase;letter-spacing:0.04em;font-weight:600;transition:all 0.2s}
 .btn-del:hover{background:rgba(255,60,60,0.12);border-color:rgba(255,60,60,0.4)}
@@ -84,6 +88,7 @@ const JS: &str = r##"
   var __reconcileInFlight=false;
   var __relayHealth={ok:true,status:200,msg:''};
   var __fetchingHashes={};
+  var __githubCatalogUrl='';
 
   // ── Deletion blacklist: prevent re-sync of intentionally deleted games ──
   var DELETED_KEY='traits.deleted_games';
@@ -137,6 +142,12 @@ const JS: &str = r##"
         var body=(await res.text()).trim().toLowerCase();
         if(res.ok&&body.indexOf('ok')>=0){
           rememberRelayBase(base);
+          // Fetch GitHub catalog URL in background (best-effort)
+          fetch(base+'/config/github-catalog',{cache:'no-store'}).then(function(r){
+            return r.ok?r.json():null;
+          }).then(function(d){
+            if(d&&d.url)__githubCatalogUrl=String(d.url||'');
+          }).catch(function(){});
           return true;
         }
       }catch(_){ }
@@ -860,7 +871,16 @@ const JS: &str = r##"
         method:'PATCH',headers:authHeaders(),body:JSON.stringify({published:!!published})
       });
       console.log('[games:setPublished] response status=',r.status,'ok=',r.ok);
-      if(r.ok){var rd=null;try{rd=await r.clone().json()}catch(_){}console.log('[games:setPublished] success:',rd);await renderRelay();await renderLocal();}
+      if(r.ok){
+        var rd=null;try{rd=await r.clone().json()}catch(_){}console.log('[games:setPublished] success:',rd);
+        // Mirror to GitHub when publishing (fire-and-forget)
+        if(published){
+          fetch(RELAY+'/internal/game/'+encodeURIComponent(gameId)+'/github-publish',{
+            method:'PATCH',headers:authHeaders(),body:JSON.stringify({})
+          }).then(function(gr){gr.json().then(function(gd){console.log('[games:github-publish]',gd)})}).catch(function(e){console.warn('[games:github-publish] failed:',e)});
+        }
+        await renderRelay();await renderLocal();
+      }
       else{var d=null;try{d=await r.json()}catch(_){} console.error('[games:setPublished] FAILED:',r.status,d);alert((d&&d.error)||'Publish update failed')}
     }catch(e){console.error('[games:setPublished] exception:',e);alert('Publish request failed')}
   }
@@ -1325,19 +1345,38 @@ const JS: &str = r##"
     _setRelayHealth(true,200,'');
 
     var publicResp=await fetchJson('/games');
+    var publicGames=[];
     if(!publicResp.ok){
+      // Relay down — try GitHub catalog fallback
       var hint='Could not load community games.';
       if(publicResp.status===530||/1016/.test(String(publicResp.text||''))){
         hint='Relay unavailable (Cloudflare 1016 / 530). Check relay domain routing.';
       }else if(publicResp.status){
         hint='Could not load community games ('+publicResp.status+').';
       }
-      _setRelayHealth(false,publicResp.status,hint);
-      grid.innerHTML='<div class="empty">'+esc(hint)+'</div>';
-      await renderLocal();
-      return;
+      if(__githubCatalogUrl){
+        try{
+          var ghResp=await fetch(__githubCatalogUrl,{cache:'no-store'});
+          if(ghResp.ok){
+            var ghData=await ghResp.json().catch(function(){return null});
+            if(ghData&&Array.isArray(ghData.games)&&ghData.games.length){
+              publicGames=ghData.games;
+              console.log('[games:renderRelay] using GitHub catalog fallback, games=',publicGames.length);
+              hint='';
+            }
+          }
+        }catch(_){}
+      }
+      if(!publicGames.length){
+        _setRelayHealth(false,publicResp.status,hint);
+        grid.innerHTML='<div class="empty">'+esc(hint)+' <a href="#" style="color:#00e0ff;font-size:0.75em" onclick="this.closest(\'div\').textContent=\'Retrying…\';renderRelay().catch(function(){renderLocal()});return false">Retry</a></div>';
+        await renderLocal();
+        return;
+      }
+      _setRelayHealth(false,publicResp.status,'Relay offline — showing GitHub catalog');
+    }else{
+      publicGames=Array.isArray(publicResp.data)?publicResp.data:[];
     }
-    var publicGames=Array.isArray(publicResp.data)?publicResp.data:[];
 
     // If logged in, show user's own games with publish/delete controls
     if(t){
@@ -1389,6 +1428,7 @@ const JS: &str = r##"
             grid.appendChild(card);
           });
           if(!grid.children.length)grid.innerHTML='<div class="empty">No community games available.</div>';
+          _injectPublishAllBtn();
           await renderLocal();
           return;
         }
@@ -1400,6 +1440,42 @@ const JS: &str = r##"
     publicGames.sort(function(a,b){return String(a.name||'').localeCompare(String(b.name||''))});
     publicGames.forEach(function(g){grid.appendChild(makeCommunityCard(g))});
     await renderLocal();
+  }
+
+  async function publishAllToGitHub(btn){
+    var gameIds=Object.keys(__relayMineByGameId);
+    if(!gameIds.length){alert('No games on relay to publish.');return}
+    if(btn)btn.disabled=true;
+    var ok=0,fail=0,errors=[];
+    for(var i=0;i<gameIds.length;i++){
+      try{
+        var r=await fetch(RELAY+'/internal/game/'+encodeURIComponent(gameIds[i])+'/github-publish',{
+          method:'PATCH',headers:authHeaders(),body:JSON.stringify({})
+        });
+        var d=null;try{d=await r.json()}catch(_){}
+        if(r.ok)ok++;
+        else{fail++;errors.push(gameIds[i]+': '+(d&&d.error||r.status))}
+      }catch(e){fail++;errors.push(gameIds[i]+': '+String(e&&e.message||e))}
+    }
+    if(btn)btn.disabled=false;
+    var msg='Published '+ok+' game'+(ok!==1?'s':'')+ ' to GitHub.';
+    if(fail)msg+='\n'+fail+' failed:\n'+errors.join('\n');
+    alert(msg);
+  }
+
+  function _injectPublishAllBtn(){
+    var sec=document.getElementById('yourGamesSection');
+    if(!sec)return;
+    if(document.getElementById('publishAllBtn'))return;
+    var h2=sec.querySelector('h2');
+    if(!h2)return;
+    var btn=document.createElement('button');
+    btn.id='publishAllBtn';
+    btn.className='publish-all-btn';
+    btn.textContent='↑ GitHub';
+    btn.title='Publish all your games to GitHub catalog';
+    btn.onclick=function(){publishAllToGitHub(btn)};
+    h2.parentNode.insertBefore(btn,h2.nextSibling);
   }
 
   async function fetchAndPlay(hash,name){
@@ -1435,6 +1511,28 @@ const JS: &str = r##"
           content=r2.data.content;
           gameName=r2.data.name||gameName;
         }
+      }
+      // Last resort: look up in GitHub catalog by checksum, then fetch raw content
+      if(!content&&__githubCatalogUrl){
+        try{
+          var ghIdx=await fetch(__githubCatalogUrl,{cache:'no-store'});
+          if(ghIdx.ok){
+            var ghIdxData=await ghIdx.json().catch(function(){return null});
+            var normH=String(hash||'').trim().toLowerCase();
+            var entry=(ghIdxData&&Array.isArray(ghIdxData.games))
+              ?ghIdxData.games.find(function(g){return String(g.checksum||g.content_hash||'').trim().toLowerCase()===normH})
+              :null;
+            if(entry&&entry.owner&&entry.game_id){
+              var rawBase=__githubCatalogUrl.replace(/\/games\/index\.json$/,'');
+              var rawUrl=rawBase+'/games/'+encodeURIComponent(entry.owner)+'/'+encodeURIComponent(entry.game_id)+'.json';
+              var rawResp=await fetch(rawUrl,{cache:'no-store'});
+              if(rawResp.ok){
+                var rawGame=await rawResp.json().catch(function(){return null});
+                if(rawGame&&rawGame.content){content=rawGame.content;gameName=rawGame.name||gameName;console.log('[games] loaded via GitHub fallback:',gameName);}
+              }
+            }
+          }
+        }catch(_){}
       }
       if(!content)return;
       var safeHash=String(hash||'').trim().toLowerCase();
