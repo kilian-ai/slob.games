@@ -2308,6 +2308,53 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     window.parent.postMessage({type:'canvas-two-finger-end'}, '*');
                                 }
                             }, {passive:true});
+                            // Mouse-to-touch shim: many mobile-first games only handle touch
+                            // events. Synthesize TouchEvents from mouse so desktop clicks work.
+                            // Suppress synthesis if a real touch fired recently (mobile native).
+                            (function(){
+                                if (typeof Touch !== 'function' || typeof TouchEvent !== 'function') return;
+                                var _lastRealTouch = 0;
+                                var _down = false;
+                                document.addEventListener('touchstart', function(e){
+                                    if (e.isTrusted) _lastRealTouch = Date.now();
+                                }, true);
+                                function _mkTouch(target, e){
+                                    return new Touch({
+                                        identifier: 1, target: target,
+                                        clientX: e.clientX, clientY: e.clientY,
+                                        pageX: e.pageX, pageY: e.pageY,
+                                        screenX: e.screenX, screenY: e.screenY,
+                                        radiusX: 1, radiusY: 1, rotationAngle: 0, force: 1
+                                    });
+                                }
+                                function _fire(type, target, touches, e){
+                                    try {
+                                        var ev = new TouchEvent(type, {
+                                            cancelable: true, bubbles: true,
+                                            touches: touches, targetTouches: touches, changedTouches: touches,
+                                            ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey, metaKey: e.metaKey
+                                        });
+                                        return target.dispatchEvent(ev);
+                                    } catch(_){ return true; }
+                                }
+                                document.addEventListener('mousedown', function(e){
+                                    if (e.button !== 0) return;
+                                    if (Date.now() - _lastRealTouch < 600) return;
+                                    _down = true;
+                                    _fire('touchstart', e.target, [_mkTouch(e.target, e)], e);
+                                }, true);
+                                document.addEventListener('mousemove', function(e){
+                                    if (!_down) return;
+                                    if (Date.now() - _lastRealTouch < 600) return;
+                                    _fire('touchmove', e.target, [_mkTouch(e.target, e)], e);
+                                }, true);
+                                document.addEventListener('mouseup', function(e){
+                                    if (!_down) return;
+                                    _down = false;
+                                    if (Date.now() - _lastRealTouch < 600) return;
+                                    _fire('touchend', e.target, [], e);
+                                }, true);
+                            })();
                         })();<\/script>`;
 
                         function renderCanvas(content) {
