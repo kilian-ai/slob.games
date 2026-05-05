@@ -3471,6 +3471,11 @@ pub fn canvas(_args: &[Value]) -> Value {
                         let __restoringCommunityCursor = false;
                         async function _restoreLastCommunityCursor() {
                             if (__launchHasHint || __hadExplicitLaunch || __restoringCommunityCursor) return;
+                            // Make sure remote catalog is loaded so we have something to fall back to
+                            // when local pvfs is empty.
+                            if (!__remoteCatalog.length) {
+                                try { await refreshRemoteCatalog(); } catch (_) {}
+                            }
                             const { list, activeId } = _publicGamesList();
                             if (!list.length) return;
                             const ref = _lastCommunityRef();
@@ -3478,14 +3483,14 @@ pub fn canvas(_args: &[Value]) -> Value {
                             if (ref && ref.id) target = list.find(g => g.id === ref.id) || null;
                             if (!target && ref && ref.hash) target = list.find(g => g.hash === ref.hash) || null;
                             if (!target) target = list[0];
-                            if (!target || !target.id) return;
-                            if (activeId === target.id) {
+                            if (!target) return;
+                            if (!target.remote && activeId === target.id) {
                                 const col = readGamesCollection();
                                 _rememberLastCommunity((col.games || {})[target.id], target.id);
                                 return;
                             }
                             __restoringCommunityCursor = true;
-                            try { await activateGame(target.id); } catch (_) {}
+                            try { await _activateCarouselTarget(target); } catch (_) {}
                             __restoringCommunityCursor = false;
                         }
 
