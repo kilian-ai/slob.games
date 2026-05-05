@@ -3345,8 +3345,10 @@ pub fn canvas(_args: &[Value]) -> Value {
                         // Catalog cache — remote games available via REST but not yet downloaded.
                         // Populated by refreshRemoteCatalog(); merged into _publicGamesList() so the
                         // carousel can cycle through every published GitHub game and lazy-fetch on demand.
-                        let __remoteCatalog = [];
-                        const __remoteFetchInflight = new Map(); // hash -> Promise<localId|null>
+                        // NOTE: var (not let) so function declarations that reference it earlier in the
+                        // file (via hoisting) don't hit the temporal dead zone.
+                        var __remoteCatalog = [];
+                        var __remoteFetchInflight = new Map(); // hash -> Promise<localId|null>
 
                         async function refreshRemoteCatalog() {
                             try {
@@ -3384,7 +3386,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 });
                             }
                             // Merge in catalog stubs for games not yet downloaded.
-                            for (const r of __remoteCatalog) {
+                            for (const r of (__remoteCatalog || [])) {
                                 if (!r.hash || localHashes.has(r.hash)) continue;
                                 if (typeof _isDeletedGame === 'function' && _isDeletedGame(r.hash, r.game_id)) continue;
                                 list.push({
@@ -3479,7 +3481,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                             if (__launchHasHint || __hadExplicitLaunch || __restoringCommunityCursor) return;
                             // Make sure remote catalog is loaded so we have something to fall back to
                             // when local pvfs is empty.
-                            if (!__remoteCatalog.length) {
+                            if (!(__remoteCatalog || []).length) {
                                 try { await refreshRemoteCatalog(); } catch (_) {}
                             }
                             const { list, activeId } = _publicGamesList();
