@@ -488,7 +488,7 @@ async function relayFetch(path, opts) {
   await selectApiBase(false);
   var lastErr = null;
   var tokenBase = tokenRelaySyncBase();
-  var isAuthScoped = /^\/(internal|admin|auth)\//.test(String(path || ''));
+  var isAuthScoped = /^\/(internal|admin|auth|github|github-mgr)\//.test(String(path || ''));
   var first = tokenBase || API;
   var ordered = [];
   if (isAuthScoped && tokenBase) {

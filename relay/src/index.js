@@ -611,13 +611,26 @@ async function publishGameToGitHub(row, token, repo) {
 }
 
 // ── Top-level GitHub manager helpers (delete/disable/rename) ──
+function _b64Encode(str) {
+  const bytes = new TextEncoder().encode(String(str || ''));
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+function _b64Decode(b64) {
+  const bin = atob(String(b64 || '').replace(/\s+/g, ''));
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
 async function _ghLoadIndex(BASE, headers) {
   const r = await fetch(`${BASE}/games/index.json`, { headers });
   if (!r.ok) return { sha: null, index: { games: [] } };
   const d = await r.json().catch(() => ({}));
   let index = { games: [] };
   if (d && d.content) {
-    try { index = JSON.parse(decodeURIComponent(escape(atob(d.content.replace(/\n/g, ''))))); }
+    try { index = JSON.parse(_b64Decode(d.content)); }
     catch (_) {}
   }
   return { sha: d?.sha || null, index };
@@ -625,7 +638,7 @@ async function _ghLoadIndex(BASE, headers) {
 
 async function _ghSaveIndex(BASE, headers, index, sha, message) {
   const body = JSON.stringify(index, null, 2);
-  const content = btoa(unescape(encodeURIComponent(body)));
+  const content = _b64Encode(body);
   const put = await fetch(`${BASE}/games/index.json`, {
     method: 'PUT', headers,
     body: JSON.stringify({ message, content, ...(sha ? { sha } : {}) }),
@@ -714,10 +727,10 @@ async function patchGameOnGitHub(owner, gameId, patch, token, repo) {
         const d = await r.json().catch(() => ({}));
         if (d && d.content) {
           let game = {};
-          try { game = JSON.parse(decodeURIComponent(escape(atob(d.content.replace(/\n/g, ''))))); }
+          try { game = JSON.parse(_b64Decode(d.content)); }
           catch (_) {}
           game.name = patch.name.trim().slice(0, 100);
-          const content = btoa(unescape(encodeURIComponent(JSON.stringify(game, null, 2))));
+          const content = _b64Encode(JSON.stringify(game, null, 2));
           await fetch(`${BASE}/${gamePath}`, {
             method: 'PUT', headers,
             body: JSON.stringify({ message: `rename: ${id}`, content, sha: d.sha }),
@@ -2574,7 +2587,8 @@ export default {
             return json(result);
           }
         } catch (e) {
-          return json({ error: String(e?.message || e) }, 502);
+          console.error('[github-mgr]', request.method, owner, gameId, String(e?.message || e).slice(0, 400));
+          return json({ ok: false, error: String(e?.message || e).slice(0, 400) }, 502);
         }
       }
 
