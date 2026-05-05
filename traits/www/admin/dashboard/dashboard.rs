@@ -42,6 +42,13 @@ pub fn dashboard(_args: &[Value]) -> Value {
                         div id="pvfsTable" {}
                     }
 
+                    section.card id="githubCard" {
+                        h2 { "GitHub Catalog" }
+                        p.note id="githubStatus" { "Loading published games\u{2026}" }
+                        p.note { "Games and sprites stored in the GitHub repo. Disable hides from the carousel; delete removes the JSON, sprite folder, and index entry." }
+                        div id="githubTable" {}
+                    }
+
                     section.card id="adminTerminalCard" {
                       h2 { "Traits Terminal" }
                       p.note {
@@ -586,6 +593,184 @@ async function apiPut(path, body) {
   try { parsed = text ? JSON.parse(text) : {}; } catch (_) { parsed = {}; }
   if (!r.ok) return { ok: false, error: parsed.error || ('HTTP ' + r.status) };
   return parsed;
+}
+
+async function apiPatch(path, body) {
+  var r;
+  try {
+    r = await relayFetch(path, {
+      method: 'PATCH',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {})
+    });
+  } catch (e) {
+    return { ok: false, error: 'Failed to fetch relay' };
+  }
+  var text = await r.text();
+  var parsed = {};
+  try { parsed = text ? JSON.parse(text) : {}; } catch (_) { parsed = {}; }
+  if (!r.ok) return { ok: false, error: parsed.error || ('HTTP ' + r.status) };
+  return parsed;
+}
+
+// ── GitHub catalog: published games + sprites stored in the repo ──
+var __ghGames = [];
+var __ghSpritesCache = {}; // owner/gameId -> {files, expanded}
+
+async function refreshGithubCatalog() {
+  var status = document.getElementById('githubStatus');
+  var el = document.getElementById('githubTable');
+  if (!status || !el) return;
+  status.textContent = 'Loading published games\u2026';
+  try {
+    var r = await apiFetch('/github/games');
+    if (!r.ok) {
+      status.textContent = 'Failed: ' + (r.error || 'unknown');
+      el.innerHTML = '';
+      return;
+    }
+    __ghGames = Array.isArray(r.games) ? r.games : [];
+    renderGithubCatalog();
+  } catch (e) {
+    status.textContent = 'Error: ' + (e && e.message || e);
+  }
+}
+
+function renderGithubCatalog() {
+  var status = document.getElementById('githubStatus');
+  var el = document.getElementById('githubTable');
+  if (!status || !el) return;
+  if (!__ghGames.length) {
+    status.textContent = 'No games published to GitHub yet.';
+    el.innerHTML = '';
+    return;
+  }
+  var enabled = __ghGames.filter(function(g){ return g.published !== false; }).length;
+  var disabled = __ghGames.length - enabled;
+  status.textContent = __ghGames.length + ' game' + (__ghGames.length === 1 ? '' : 's') + ' \u2022 ' + enabled + ' enabled \u2022 ' + disabled + ' disabled';
+
+  var h = '<table><tr><th>Name</th><th>Owner</th><th>Hash</th><th>Size</th><th>Sprites</th><th>Updated</th><th>Status</th><th></th></tr>';
+  for (var i = 0; i < __ghGames.length; i++) {
+    var g = __ghGames[i];
+    var ownerEnc = encodeURIComponent(g.owner || '');
+    var idEnc = encodeURIComponent(g.game_id || '');
+    var key = (g.owner || '') + '/' + (g.game_id || '');
+    var keyEsc = key.replace(/'/g, "\\'");
+    var disabled = g.published === false;
+    var spriteCount = (typeof g.sprite_count === 'number') ? g.sprite_count : null;
+    var spritesLabel = (spriteCount === null) ? '<button class="btn-sm" onclick="toggleGithubSprites(\'' + keyEsc + '\')">show</button>'
+      : (spriteCount + ' <button class="btn-sm" onclick="toggleGithubSprites(\'' + keyEsc + '\')">view</button>');
+    var rawUrl = 'https://raw.githubusercontent.com/'
+      + ((window.GITHUB_REPO_HINT || '') || 'OWNER/REPO')
+      + '/main/games/' + (g.owner || '') + '/' + (g.game_id || '') + '.json';
+    h += '<tr id="ghrow-' + esc(key) + '">';
+    h += '<td><strong>' + esc(g.name || '') + '</strong>'
+      + (g.version ? '<br><span class="badge-scope">' + esc(g.version) + '</span>' : '') + '</td>';
+    h += '<td>' + esc(g.owner || '') + '</td>';
+    h += '<td><code title="' + esc(g.content_hash || '') + '">' + esc(String(g.content_hash || '').slice(0, 8)) + '</code></td>';
+    h += '<td>' + (g.size ? (Math.round(g.size / 1024) + ' KB') : '\u2014') + '</td>';
+    h += '<td>' + spritesLabel + '</td>';
+    h += '<td title="' + esc(g.updated || '') + '">' + ago(g.updated || '') + '</td>';
+    h += '<td>' + (disabled ? '<span class="badge-draft">disabled</span>' : '<span class="badge-pub">enabled</span>') + '</td>';
+    h += '<td class="actions">';
+    h += '<a class="btn-sm" href="' + esc(rawUrl) + '" target="_blank" rel="noopener">JSON</a>';
+    h += '<button class="btn-sm" onclick="renameGithubGame(\'' + keyEsc + '\')">Rename</button>';
+    if (disabled) {
+      h += '<button class="btn-sm accent" onclick="enableGithubGame(\'' + keyEsc + '\')">Enable</button>';
+    } else {
+      h += '<button class="btn-sm" onclick="disableGithubGame(\'' + keyEsc + '\')">Disable</button>';
+    }
+    h += '<button class="btn-sm danger" onclick="deleteGithubGame(\'' + keyEsc + '\')">Delete</button>';
+    h += '</td>';
+    h += '</tr>';
+    h += '<tr id="ghsprites-' + esc(key) + '" style="display:none"><td colspan="8" style="background:rgba(255,255,255,0.02)"><div id="ghsprites-body-' + esc(key) + '" style="padding:8px 12px;font-size:12px;color:#888">\u2014</div></td></tr>';
+  }
+  h += '</table>';
+  el.innerHTML = h;
+}
+
+async function toggleGithubSprites(key) {
+  var parts = String(key || '').split('/');
+  if (parts.length !== 2) return;
+  var owner = parts[0], gameId = parts[1];
+  var row = document.getElementById('ghsprites-' + key);
+  var body = document.getElementById('ghsprites-body-' + key);
+  if (!row || !body) return;
+  var visible = row.style.display !== 'none';
+  if (visible) { row.style.display = 'none'; return; }
+  row.style.display = '';
+  body.textContent = 'Loading sprites\u2026';
+  var r;
+  try {
+    r = await apiFetch('/github/games/' + encodeURIComponent(owner) + '/' + encodeURIComponent(gameId) + '/sprites');
+  } catch (e) {
+    body.textContent = 'Failed to load sprites';
+    return;
+  }
+  if (!r.ok) { body.textContent = 'Error: ' + (r.error || 'failed'); return; }
+  var files = (r.files || []).filter(function(f){ return f.path !== (gameId + '.json'); });
+  if (!files.length) { body.textContent = 'No sprite files for this game.'; return; }
+  var h = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px">';
+  for (var i = 0; i < files.length; i++) {
+    var f = files[i];
+    h += '<div style="display:flex;align-items:center;gap:8px;padding:6px;border:1px solid rgba(255,255,255,0.06);border-radius:4px">';
+    var isImage = /\.(png|jpe?g|gif|webp|svg)$/i.test(f.path);
+    if (isImage && f.download_url) {
+      h += '<img src="' + esc(f.download_url) + '" style="width:32px;height:32px;object-fit:contain;background:#000;border-radius:2px" loading="lazy">';
+    } else {
+      h += '<div style="width:32px;height:32px;display:flex;align-items:center;justify-content:center;background:#222;border-radius:2px;font-size:10px;color:#888">file</div>';
+    }
+    h += '<div style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><div title="' + esc(f.path) + '" style="font-size:11px">' + esc(f.path) + '</div>';
+    h += '<div style="font-size:10px;color:#888">' + (f.size ? Math.round(f.size / 1024) + ' KB' : '\u2014') + '</div></div>';
+    if (f.download_url) {
+      h += '<a class="btn-sm" href="' + esc(f.download_url) + '" target="_blank" rel="noopener">DL</a>';
+    }
+    h += '</div>';
+  }
+  h += '</div>';
+  body.innerHTML = h;
+}
+
+async function disableGithubGame(key) {
+  var parts = String(key || '').split('/');
+  if (parts.length !== 2) return;
+  if (!confirm('Disable "' + key + '"? It will be hidden from the carousel until re-enabled.')) return;
+  var r = await apiPatch('/github-mgr/games/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]), { published: false });
+  if (!r.ok) { alert('Disable failed: ' + (r.error || 'unknown')); return; }
+  await refreshGithubCatalog();
+}
+
+async function enableGithubGame(key) {
+  var parts = String(key || '').split('/');
+  if (parts.length !== 2) return;
+  var r = await apiPatch('/github-mgr/games/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]), { published: true });
+  if (!r.ok) { alert('Enable failed: ' + (r.error || 'unknown')); return; }
+  await refreshGithubCatalog();
+}
+
+async function renameGithubGame(key) {
+  var parts = String(key || '').split('/');
+  if (parts.length !== 2) return;
+  var current = '';
+  for (var i = 0; i < __ghGames.length; i++) {
+    if ((__ghGames[i].owner + '/' + __ghGames[i].game_id) === key) { current = __ghGames[i].name || ''; break; }
+  }
+  var next = prompt('New name for "' + key + '":', current);
+  if (next == null) return;
+  next = String(next).trim();
+  if (!next || next === current) return;
+  var r = await apiPatch('/github-mgr/games/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]), { name: next });
+  if (!r.ok) { alert('Rename failed: ' + (r.error || 'unknown')); return; }
+  await refreshGithubCatalog();
+}
+
+async function deleteGithubGame(key) {
+  var parts = String(key || '').split('/');
+  if (parts.length !== 2) return;
+  if (!confirm('Permanently delete "' + key + '" from GitHub?\n\nThis removes the game JSON, all sprite files, and the index entry. This cannot be undone.')) return;
+  var r = await apiDelete('/github-mgr/games/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]));
+  if (!r.ok) { alert('Delete failed: ' + (r.error || 'unknown')); return; }
+  await refreshGithubCatalog();
 }
 
 async function load() {
@@ -1795,8 +1980,15 @@ window.movePvfsRevisionHover = movePvfsRevisionHover;
 window.hidePvfsRevisionHover = hidePvfsRevisionHover;
 window.copyAdminTerminalCommand = copyAdminTerminalCommand;
 window.runAdminTerminalCommand = runAdminTerminalCommand;
+window.refreshGithubCatalog = refreshGithubCatalog;
+window.toggleGithubSprites = toggleGithubSprites;
+window.disableGithubGame = disableGithubGame;
+window.enableGithubGame = enableGithubGame;
+window.renameGithubGame = renameGithubGame;
+window.deleteGithubGame = deleteGithubGame;
 load();
 renderPvfsGames();
+refreshGithubCatalog();
 initAdminTerminal();
 })();
 "##;

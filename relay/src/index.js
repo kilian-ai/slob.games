@@ -435,6 +435,70 @@ const MAX_TOTAL_GAMES = 500;
 const DEFAULT_EXTERNAL_POOL_SIZE = 64;
 
 // ── Top-level GitHub publisher (used by Worker-level /sync/internal/*/github-publish) ──
+// Heuristic for paths that are sprite/audio assets and should be exploded
+// into per-file GitHub blobs (so they can be browsed and managed individually).
+function _isSpriteOrMediaPath(p) {
+  const s = String(p || '').toLowerCase();
+  if (!s) return false;
+  if (s.startsWith('sprites/') || s.startsWith('canvas/sprites/')) return true;
+  if (s.startsWith('assets/') || s.startsWith('images/') || s.startsWith('textures/') || s.startsWith('audio/')) return true;
+  return /\.(png|jpe?g|gif|webp|svg|mp3|wav|ogg|mp4|webm|aac|flac|atlas)$/.test(s);
+}
+
+// Decode a value that might be a data URL, raw base64, or text into base64
+// suitable for the GitHub Contents API.
+function _toBase64ForGitHub(value) {
+  const s = String(value || '');
+  if (!s) return '';
+  // data URL: strip prefix and return the base64 part as-is
+  const m = s.match(/^data:[^;,]+;base64,(.*)$/i);
+  if (m) return m[1];
+  // raw base64 looking string (long, only base64 chars)
+  if (s.length > 32 && /^[A-Za-z0-9+/=\s]+$/.test(s)) {
+    // Likely already base64
+    return s.replace(/\s+/g, '');
+  }
+  // Treat as text — utf-8 encode then base64
+  try { return btoa(unescape(encodeURIComponent(s))); }
+  catch (_) { return ''; }
+}
+
+async function _ghPutFile(BASE, headers, path, base64Content, message) {
+  // Read existing sha first (so subsequent updates can overwrite)
+  const ex = await fetch(`${BASE}/${path}`, { headers });
+  const exData = ex.ok ? await ex.json().catch(() => ({})) : {};
+  const sha = exData.sha;
+  const put = await fetch(`${BASE}/${path}`, {
+    method: 'PUT', headers,
+    body: JSON.stringify({ message, content: base64Content, ...(sha ? { sha } : {}) }),
+  });
+  if (!put.ok) {
+    const err = await put.json().catch(() => ({}));
+    throw new Error(`GitHub PUT ${path} failed (${put.status}): ${err.message || ''}`);
+  }
+  return await put.json().catch(() => ({}));
+}
+
+async function _ghDeleteFile(BASE, headers, path, message) {
+  const ex = await fetch(`${BASE}/${path}`, { headers });
+  if (!ex.ok) return false; // already gone
+  const exData = await ex.json().catch(() => ({}));
+  const sha = exData.sha;
+  if (!sha) return false;
+  const del = await fetch(`${BASE}/${path}`, {
+    method: 'DELETE', headers,
+    body: JSON.stringify({ message, sha }),
+  });
+  return del.ok;
+}
+
+async function _ghListDir(BASE, headers, dirPath) {
+  const r = await fetch(`${BASE}/${dirPath}`, { headers });
+  if (!r.ok) return [];
+  const d = await r.json().catch(() => null);
+  return Array.isArray(d) ? d : [];
+}
+
 async function publishGameToGitHub(row, token, repo) {
   const owner = normalizeSlug(row.owner, 'public');
   const gameId = normalizeSlug(row.game_id, 'game');
@@ -477,6 +541,25 @@ async function publishGameToGitHub(row, token, repo) {
     throw new Error(`GitHub game write failed (${gamePut.status}): ${err.message || ''}`);
   }
 
+  // Explode sprite/media resources to per-file blobs under games/{owner}/{gameId}/
+  // for browseability and management. Errors here are non-fatal — the game JSON
+  // itself still has resources inlined so playback works either way.
+  const spriteResults = [];
+  for (const p of Object.keys(resources)) {
+    if (!_isSpriteOrMediaPath(p)) continue;
+    const b64 = _toBase64ForGitHub(resources[p]);
+    if (!b64) continue;
+    const safe = String(p).replace(/^\/+/, '').replace(/\.\./g, '');
+    if (!safe || safe.length > 240) continue;
+    const filePath = `games/${owner}/${gameId}/${safe}`;
+    try {
+      await _ghPutFile(BASE, headers, filePath, b64, `sprite: ${owner}/${gameId} ${safe}`);
+      spriteResults.push(safe);
+    } catch (e) {
+      console.warn('[publish-sprite-failed]', filePath, String(e?.message || e).slice(0, 200));
+    }
+  }
+
   for (let attempt = 0; attempt < 2; attempt++) {
     const idxResp = await fetch(`${BASE}/games/index.json`, { headers });
     const idxData = idxResp.ok ? await idxResp.json().catch(() => ({})) : {};
@@ -489,9 +572,18 @@ async function publishGameToGitHub(row, token, repo) {
       id: `${owner}/${gameId}`, owner, game_id: gameId, name: row.name,
       checksum: row.checksum || row.content_hash, content_hash: row.content_hash,
       size: row.size, updated: row.updated, version: row.version || '',
+      published: true,
+      sprite_count: spriteResults.length,
     };
     const idx = index.games.findIndex(g => g.id === entry.id);
-    if (idx >= 0) index.games[idx] = entry; else index.games.push(entry);
+    if (idx >= 0) {
+      // Preserve published flag if it was explicitly set to false (disabled)
+      const prev = index.games[idx];
+      if (prev && prev.published === false) entry.published = false;
+      index.games[idx] = entry;
+    } else {
+      index.games.push(entry);
+    }
     index.games.sort((a, b) => a.id.localeCompare(b.id));
     const idxContent = btoa(unescape(encodeURIComponent(JSON.stringify(index, null, 2))));
     const idxPut = await fetch(`${BASE}/games/index.json`, {
@@ -509,7 +601,134 @@ async function publishGameToGitHub(row, token, repo) {
   }
 
   const rawBase = `https://raw.githubusercontent.com/${repo}/main`;
-  return { ok: true, raw_url: `${rawBase}/${gamePath}`, index_url: `${rawBase}/games/index.json` };
+  return {
+    ok: true,
+    raw_url: `${rawBase}/${gamePath}`,
+    index_url: `${rawBase}/games/index.json`,
+    sprites: spriteResults,
+    sprite_count: spriteResults.length,
+  };
+}
+
+// ── Top-level GitHub manager helpers (delete/disable/rename) ──
+async function _ghLoadIndex(BASE, headers) {
+  const r = await fetch(`${BASE}/games/index.json`, { headers });
+  if (!r.ok) return { sha: null, index: { games: [] } };
+  const d = await r.json().catch(() => ({}));
+  let index = { games: [] };
+  if (d && d.content) {
+    try { index = JSON.parse(decodeURIComponent(escape(atob(d.content.replace(/\n/g, ''))))); }
+    catch (_) {}
+  }
+  return { sha: d?.sha || null, index };
+}
+
+async function _ghSaveIndex(BASE, headers, index, sha, message) {
+  const body = JSON.stringify(index, null, 2);
+  const content = btoa(unescape(encodeURIComponent(body)));
+  const put = await fetch(`${BASE}/games/index.json`, {
+    method: 'PUT', headers,
+    body: JSON.stringify({ message, content, ...(sha ? { sha } : {}) }),
+  });
+  if (!put.ok) {
+    const err = await put.json().catch(() => ({}));
+    throw new Error(`GitHub index write failed (${put.status}): ${err.message || ''}`);
+  }
+}
+
+async function deleteGameFromGitHub(owner, gameId, token, repo) {
+  const BASE = `https://api.github.com/repos/${repo}/contents`;
+  const headers = {
+    Authorization: `token ${token}`,
+    'Content-Type': 'application/json',
+    'User-Agent': 'slob-games-relay/1.0',
+    Accept: 'application/vnd.github.v3+json',
+  };
+  // Delete game JSON
+  await _ghDeleteFile(BASE, headers, `games/${owner}/${gameId}.json`, `delete: ${owner}/${gameId}`);
+  // Delete sprite folder recursively (one level only — flat sprite folder)
+  let removedFiles = 0;
+  async function rmDir(dir) {
+    const items = await _ghListDir(BASE, headers, dir);
+    for (const it of items) {
+      if (it.type === 'file') {
+        if (await _ghDeleteFile(BASE, headers, it.path, `delete: ${it.path}`)) removedFiles++;
+      } else if (it.type === 'dir') {
+        await rmDir(it.path);
+      }
+    }
+  }
+  await rmDir(`games/${owner}/${gameId}`);
+  // Remove from index
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { sha, index } = await _ghLoadIndex(BASE, headers);
+    const id = `${owner}/${gameId}`;
+    const before = (index.games || []).length;
+    index.games = (index.games || []).filter(g => g.id !== id);
+    if (index.games.length === before) return { ok: true, removed_files: removedFiles, in_index: false };
+    try {
+      await _ghSaveIndex(BASE, headers, index, sha, `index: remove ${id}`);
+      return { ok: true, removed_files: removedFiles, in_index: true };
+    } catch (e) {
+      if (attempt < 2) continue;
+      throw e;
+    }
+  }
+  return { ok: true, removed_files: removedFiles };
+}
+
+async function patchGameOnGitHub(owner, gameId, patch, token, repo) {
+  const BASE = `https://api.github.com/repos/${repo}/contents`;
+  const headers = {
+    Authorization: `token ${token}`,
+    'Content-Type': 'application/json',
+    'User-Agent': 'slob-games-relay/1.0',
+    Accept: 'application/vnd.github.v3+json',
+  };
+  const id = `${owner}/${gameId}`;
+  // Update index entry first
+  let updatedIndex = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { sha, index } = await _ghLoadIndex(BASE, headers);
+    const idx = (index.games || []).findIndex(g => g.id === id);
+    if (idx < 0) return { ok: false, error: 'not in index' };
+    const entry = index.games[idx];
+    if (typeof patch.published === 'boolean') entry.published = patch.published;
+    if (typeof patch.name === 'string' && patch.name.trim()) entry.name = patch.name.trim().slice(0, 100);
+    index.games[idx] = entry;
+    try {
+      await _ghSaveIndex(BASE, headers, index, sha, `index: patch ${id}`);
+      updatedIndex = true;
+      break;
+    } catch (e) {
+      if (attempt < 2) continue;
+      throw e;
+    }
+  }
+  // Also rename inside game.json so the activated game shows the new name
+  if (typeof patch.name === 'string' && patch.name.trim()) {
+    try {
+      const gamePath = `games/${owner}/${gameId}.json`;
+      const r = await fetch(`${BASE}/${gamePath}`, { headers });
+      if (r.ok) {
+        const d = await r.json().catch(() => ({}));
+        if (d && d.content) {
+          let game = {};
+          try { game = JSON.parse(decodeURIComponent(escape(atob(d.content.replace(/\n/g, ''))))); }
+          catch (_) {}
+          game.name = patch.name.trim().slice(0, 100);
+          const content = btoa(unescape(encodeURIComponent(JSON.stringify(game, null, 2))));
+          await fetch(`${BASE}/${gamePath}`, {
+            method: 'PUT', headers,
+            body: JSON.stringify({ message: `rename: ${id}`, content, sha: d.sha }),
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('[rename-game-json]', String(e?.message || e).slice(0, 200));
+    }
+  }
+  return { ok: true, updated_index: updatedIndex };
 }
 
 // ── Worker-level /sync/internal/* handler — replaces broken DO routes using AUTH_KV ──
@@ -2225,8 +2444,7 @@ export default {
       }
 
       // Worker-level /sync/game/:hash → fetch single game JSON from GitHub by content_hash
-      const syncGameMatch = url.pathname.match(/^\/sync\/game\/([^/]+)$/);
-      if (syncGameMatch && request.method === 'GET') {
+      const syncGameMatch = url.pathname.match(/^\/sync\/game\/([^/]+)$/);      if (syncGameMatch && request.method === 'GET') {
         const hash = decodeURIComponent(syncGameMatch[1]).trim().toLowerCase();
         if (!hash) return json({ error: 'missing hash' }, 400);
         if (!env.GITHUB_REPO) return json({ error: 'catalog not configured' }, 503);
@@ -2268,6 +2486,96 @@ export default {
       // Forward /sync/internal/* to Worker-level handler (uses AUTH_KV instead of broken DO)
       if (url.pathname.startsWith('/sync/internal/')) {
         return handleInternalRoutes(url, request, env);
+      }
+
+      // ── /sync/github/* — public read endpoints for the dashboard ──
+      // GET /sync/github/games → enriched index.json (includes published flag, sprite_count)
+      if (url.pathname === '/sync/github/games' && request.method === 'GET') {
+        if (!env.GITHUB_REPO) return json({ error: 'catalog not configured' }, 503);
+        try {
+          const catUrl = `https://raw.githubusercontent.com/${env.GITHUB_REPO}/main/games/index.json?cb=${Date.now()}`;
+          const catRes = await fetch(catUrl, { headers: { 'User-Agent': 'slob-games-relay/1.0' } });
+          if (!catRes.ok) return json({ games: [] });
+          const cat = await catRes.json().catch(() => ({ games: [] }));
+          return json(cat);
+        } catch (e) {
+          return json({ error: String(e?.message || e) }, 502);
+        }
+      }
+
+      // GET /sync/github/games/:owner/:gameId/sprites → list sprite files for a game
+      const ghSpritesMatch = url.pathname.match(/^\/sync\/github\/games\/([^/]+)\/([^/]+)\/sprites$/);
+      if (ghSpritesMatch && request.method === 'GET') {
+        if (!env.GITHUB_REPO) return json({ error: 'catalog not configured' }, 503);
+        const owner = normalizeSlug(ghSpritesMatch[1], '');
+        const gameId = normalizeSlug(ghSpritesMatch[2], '');
+        if (!owner || !gameId) return json({ error: 'bad path' }, 400);
+        const apiUrl = `https://api.github.com/repos/${env.GITHUB_REPO}/contents/games/${owner}/${gameId}`;
+        try {
+          const apiHeaders = {
+            'User-Agent': 'slob-games-relay/1.0',
+            Accept: 'application/vnd.github.v3+json',
+            ...(env.GITHUB_TOKEN ? { Authorization: `token ${env.GITHUB_TOKEN}` } : {}),
+          };
+          const r = await fetch(apiUrl, { headers: apiHeaders });
+          if (!r.ok) return json({ files: [] });
+          const items = await r.json().catch(() => []);
+          const files = [];
+          async function walk(arr, prefix) {
+            for (const it of (Array.isArray(arr) ? arr : [])) {
+              if (it.type === 'file') {
+                const p = (prefix ? (prefix + '/') : '') + it.name;
+                files.push({
+                  path: p,
+                  size: it.size,
+                  download_url: it.download_url,
+                  sha: it.sha,
+                });
+              } else if (it.type === 'dir') {
+                const sub = await fetch(`${apiUrl}/${it.name}`, { headers: apiHeaders });
+                if (sub.ok) {
+                  const subItems = await sub.json().catch(() => []);
+                  await walk(subItems, (prefix ? (prefix + '/') : '') + it.name);
+                }
+              }
+            }
+          }
+          await walk(items, '');
+          return json({ owner, game_id: gameId, files });
+        } catch (e) {
+          return json({ error: String(e?.message || e) }, 502);
+        }
+      }
+
+      // ── /sync/github-mgr/* — destructive endpoints (require auth token) ──
+      const ghMgrMatch = url.pathname.match(/^\/sync\/github-mgr\/games\/([^/]+)\/([^/]+)$/);
+      if (ghMgrMatch && (request.method === 'DELETE' || request.method === 'PATCH')) {
+        if (!env.RELAY_SECRET) return json({ error: 'RELAY_SECRET not configured' }, 503);
+        const authHeader = request.headers.get('Authorization') || '';
+        const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+        const tokenPayload = token ? await verifyUserToken(token, env.RELAY_SECRET) : null;
+        if (!tokenPayload?.sub) return json({ error: 'auth required' }, 401);
+        const ghToken = env.GITHUB_TOKEN;
+        const ghRepo = env.GITHUB_REPO;
+        if (!ghToken || !ghRepo) return json({ error: 'GitHub not configured' }, 503);
+        const owner = normalizeSlug(ghMgrMatch[1], '');
+        const gameId = normalizeSlug(ghMgrMatch[2], '');
+        if (!owner || !gameId) return json({ error: 'bad path' }, 400);
+        try {
+          if (request.method === 'DELETE') {
+            const result = await deleteGameFromGitHub(owner, gameId, ghToken, ghRepo);
+            return json({ ok: true, ...result });
+          } else {
+            const body = await request.json().catch(() => ({}));
+            const patch = {};
+            if (typeof body.published === 'boolean') patch.published = body.published;
+            if (typeof body.name === 'string' && body.name.trim()) patch.name = body.name.trim();
+            const result = await patchGameOnGitHub(owner, gameId, patch, ghToken, ghRepo);
+            return json(result);
+          }
+        } catch (e) {
+          return json({ error: String(e?.message || e) }, 502);
+        }
       }
 
       // Forward /sync/admin/* to Worker-level handler
