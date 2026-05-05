@@ -2506,11 +2506,26 @@ export default {
       if (url.pathname === '/sync/github/games' && request.method === 'GET') {
         if (!env.GITHUB_REPO) return json({ error: 'catalog not configured' }, 503);
         try {
-          const catUrl = `https://raw.githubusercontent.com/${env.GITHUB_REPO}/main/games/index.json?cb=${Date.now()}`;
-          const catRes = await fetch(catUrl, { headers: { 'User-Agent': 'slob-games-relay/1.0' } });
-          if (!catRes.ok) return json({ games: [] });
-          const cat = await catRes.json().catch(() => ({ games: [] }));
-          return json(cat);
+          // Use the Contents API (not raw.githubusercontent.com) so we don't
+          // hit aggressive CDN caching after deletes/edits.
+          const apiUrl = `https://api.github.com/repos/${env.GITHUB_REPO}/contents/games/index.json`;
+          const apiHeaders = {
+            'User-Agent': 'slob-games-relay/1.0',
+            Accept: 'application/vnd.github.v3+json',
+            'Cache-Control': 'no-cache',
+            ...(env.GITHUB_TOKEN ? { Authorization: `token ${env.GITHUB_TOKEN}` } : {}),
+          };
+          const r = await fetch(apiUrl, { headers: apiHeaders, cf: { cacheTtl: 0 } });
+          if (!r.ok) return json({ games: [] });
+          const d = await r.json().catch(() => ({}));
+          let cat = { games: [] };
+          if (d && d.content) {
+            try { cat = JSON.parse(_b64Decode(d.content)); } catch (_) {}
+          }
+          return new Response(JSON.stringify(cat), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...cors() },
+          });
         } catch (e) {
           return json({ error: String(e?.message || e) }, 502);
         }

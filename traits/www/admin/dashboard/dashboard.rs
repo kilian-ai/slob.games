@@ -755,13 +755,46 @@ async function renameGithubGame(key) {
   for (var i = 0; i < __ghGames.length; i++) {
     if ((__ghGames[i].owner + '/' + __ghGames[i].game_id) === key) { current = __ghGames[i].name || ''; break; }
   }
-  var next = prompt('New name for "' + key + '":', current);
-  if (next == null) return;
-  next = String(next).trim();
-  if (!next || next === current) return;
-  var r = await apiPatch('/github-mgr/games/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]), { name: next });
-  if (!r.ok) { alert('Rename failed: ' + (r.error || 'unknown')); return; }
-  await refreshGithubCatalog();
+  // Inline rename row instead of prompt() (some browsers suppress prompt dialogs)
+  var row = document.getElementById('ghrow-' + key);
+  if (!row) return;
+  var existing = document.getElementById('ghrename-' + key);
+  if (existing) { existing.remove(); return; }
+  var tr = document.createElement('tr');
+  tr.id = 'ghrename-' + key;
+  var td = document.createElement('td');
+  td.colSpan = 8;
+  td.style.cssText = 'background:rgba(255,255,255,0.04);padding:10px';
+  td.innerHTML = 'Rename <strong>' + esc(key) + '</strong>: '
+    + '<input type="text" id="ghrename-input-' + esc(key) + '" style="width:280px;padding:4px;background:#111;color:#eee;border:1px solid #333;border-radius:3px" />'
+    + ' <button class="btn-sm accent" id="ghrename-save-' + esc(key) + '">Save</button>'
+    + ' <button class="btn-sm" id="ghrename-cancel-' + esc(key) + '">Cancel</button>';
+  row.parentNode.insertBefore(tr, row.nextSibling);
+  tr.appendChild(td);
+  var input = document.getElementById('ghrename-input-' + key);
+  input.value = current;
+  input.focus();
+  input.select();
+  document.getElementById('ghrename-cancel-' + key).addEventListener('click', function(){ tr.remove(); });
+  async function doSave() {
+    var next = String(input.value || '').trim();
+    if (!next || next === current) { tr.remove(); return; }
+    var btn = document.getElementById('ghrename-save-' + key);
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving\u2026'; }
+    var r = await apiPatch('/github-mgr/games/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]), { name: next });
+    if (!r || r.ok === false) {
+      alert('Rename failed: ' + ((r && r.error) || 'unknown'));
+      if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+      return;
+    }
+    tr.remove();
+    await refreshGithubCatalog();
+  }
+  document.getElementById('ghrename-save-' + key).addEventListener('click', doSave);
+  input.addEventListener('keydown', function(ev){
+    if (ev.key === 'Enter') { ev.preventDefault(); doSave(); }
+    else if (ev.key === 'Escape') { tr.remove(); }
+  });
 }
 
 async function deleteGithubGame(key) {
