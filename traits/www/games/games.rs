@@ -289,6 +289,42 @@ const JS: &str = r##"
     return refs;
   }
 
+  function _isSpriteOrMediaPath(p){
+    var s=String(p||'').toLowerCase();
+    if(/^sprites\//.test(s))return true;
+    if(/^canvas\/sprites\//.test(s))return true;
+    if(/^assets\//.test(s))return true;
+    if(/^images\//.test(s))return true;
+    if(/^textures\//.test(s))return true;
+    if(/^audio\//.test(s))return true;
+    return /\.(png|jpe?g|gif|webp|svg|mp3|wav|ogg|mp4|webm|aac|flac|atlas)$/.test(s);
+  }
+
+  async function collectResourcesForContentWithIdb(content,maxBytes){
+    var refs=collectResourcesForContent(content,maxBytes);
+    var total=0;
+    for(var k in refs){ if(typeof refs[k]==='string') total+=refs[k].length; }
+    var cap=maxBytes||(8*1024*1024);
+    var vfs=window.__traitsBrowserVfs;
+    if(!vfs||typeof vfs.listIndexedDbEntries!=='function')return refs;
+    try{
+      var entries=await vfs.listIndexedDbEntries('');
+      if(!Array.isArray(entries))return refs;
+      for(var i=0;i<entries.length;i++){
+        var e=entries[i]||{};
+        var path=normalizeResourcePath(e.path||'');
+        if(!path||refs[path])continue;
+        if(!_isSpriteOrMediaPath(path))continue;
+        var val=(typeof e.content==='string')?e.content:'';
+        if(!val)continue;
+        if((total+val.length)>cap)continue;
+        refs[path]=val;
+        total+=val.length;
+      }
+    }catch(_){}
+    return refs;
+  }
+
   function getSdk(){
     return window._traitsSDK||null;
   }
@@ -897,7 +933,7 @@ const JS: &str = r##"
       content:String(g.content||''),
       version:g.version||'',
       scope:'internal',
-      resources:collectResourcesForContent(g.content||'',2*1024*1024)
+      resources:await collectResourcesForContentWithIdb(g.content||'',8*1024*1024)
     };
     var r=await fetch(RELAY+'/internal/game/'+encodeURIComponent(gameId),{
       method:'PUT',headers:authHeaders(),body:JSON.stringify(payload)
