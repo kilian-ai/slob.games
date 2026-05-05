@@ -624,12 +624,12 @@ async function refreshGithubCatalog() {
   status.textContent = 'Loading published games\u2026';
   try {
     var r = await apiFetch('/github/games');
-    if (!r.ok) {
+    if (r && r.ok === false) {
       status.textContent = 'Failed: ' + (r.error || 'unknown');
       el.innerHTML = '';
       return;
     }
-    __ghGames = Array.isArray(r.games) ? r.games : [];
+    __ghGames = (r && Array.isArray(r.games)) ? r.games : [];
     renderGithubCatalog();
   } catch (e) {
     status.textContent = 'Error: ' + (e && e.message || e);
@@ -707,8 +707,8 @@ async function toggleGithubSprites(key) {
     body.textContent = 'Failed to load sprites';
     return;
   }
-  if (!r.ok) { body.textContent = 'Error: ' + (r.error || 'failed'); return; }
-  var files = (r.files || []).filter(function(f){ return f.path !== (gameId + '.json'); });
+  if (r && r.ok === false) { body.textContent = 'Error: ' + (r.error || 'failed'); return; }
+  var files = ((r && r.files) || []).filter(function(f){ return f.path !== (gameId + '.json'); });
   if (!files.length) { body.textContent = 'No sprite files for this game.'; return; }
   var h = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px">';
   for (var i = 0; i < files.length; i++) {
