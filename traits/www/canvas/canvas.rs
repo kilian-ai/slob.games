@@ -3415,36 +3415,79 @@ pub fn canvas(_args: &[Value]) -> Value {
                             } catch (_) { return 0; }
                         }
 
-                        // Build sorted list of all games for carousel rotation.
-                        // Includes remote-catalog stubs (id="remote:<hash>") for games not yet in local storage.
+                        // Build sorted list of games for carousel rotation.
+                        // Once the remote catalog is loaded, the carousel ONLY rotates the
+                        // games published in that catalog (deduped by content_hash). Local
+                        // copies of those games are preferred (so they activate without a
+                        // re-fetch); games not yet downloaded appear as stubs (id="remote:<hash>").
+                        // Local-only games (drafts, deleted-from-catalog, history dupes) are
+                        // excluded so the user only cycles the canonical GitHub set.
+                        // Exception: the currently-active game is always kept in the list
+                        // so the user never loses what they're viewing.
                         function _publicGamesList() {
                             const col = readGamesCollection();
-                            const list = [];
-                            const localHashes = new Set();
+                            const catalog = __remoteCatalog || [];
+                            const useCatalogOnly = catalog.length > 0;
+                            // Map hash -> first local game id (prefer non-deleted)
+                            const localByHash = new Map();
                             for (const [id, g] of Object.entries(col.games || {})) {
                                 const h = String(g._sync_hash || g.checksum || '').trim().toLowerCase();
-                                if (h) localHashes.add(h);
-                                list.push({
-                                    id,
-                                    name: g.name || 'untitled',
-                                    hash: h,
-                                    active: col.active === id,
-                                    remote: false,
-                                });
+                                if (h && !localByHash.has(h)) localByHash.set(h, { id, g });
                             }
-                            // Merge in catalog stubs for games not yet downloaded.
-                            for (const r of (__remoteCatalog || [])) {
-                                if (!r.hash || localHashes.has(r.hash)) continue;
-                                if (typeof _isDeletedGame === 'function' && _isDeletedGame(r.hash, r.game_id)) continue;
-                                list.push({
-                                    id: 'remote:' + r.hash,
-                                    name: r.name || 'untitled',
-                                    hash: r.hash,
-                                    active: false,
-                                    remote: true,
-                                    owner: r.owner,
-                                    game_id: r.game_id,
-                                });
+                            const list = [];
+                            const seen = new Set();
+                            if (useCatalogOnly) {
+                                for (const r of catalog) {
+                                    if (!r.hash || seen.has(r.hash)) continue;
+                                    if (typeof _isDeletedGame === 'function' && _isDeletedGame(r.hash, r.game_id)) continue;
+                                    seen.add(r.hash);
+                                    const local = localByHash.get(r.hash);
+                                    if (local) {
+                                        list.push({
+                                            id: local.id,
+                                            name: local.g.name || r.name || 'untitled',
+                                            hash: r.hash,
+                                            active: col.active === local.id,
+                                            remote: false,
+                                        });
+                                    } else {
+                                        list.push({
+                                            id: 'remote:' + r.hash,
+                                            name: r.name || 'untitled',
+                                            hash: r.hash,
+                                            active: false,
+                                            remote: true,
+                                            owner: r.owner,
+                                            game_id: r.game_id,
+                                        });
+                                    }
+                                }
+                                // Always include the active game even if it's not in the catalog.
+                                if (col.active && col.games && col.games[col.active]) {
+                                    const ag = col.games[col.active];
+                                    const ah = String(ag._sync_hash || ag.checksum || '').trim().toLowerCase();
+                                    if (!ah || !seen.has(ah)) {
+                                        list.push({
+                                            id: col.active,
+                                            name: ag.name || 'untitled',
+                                            hash: ah,
+                                            active: true,
+                                            remote: false,
+                                        });
+                                    }
+                                }
+                            } else {
+                                // No catalog yet — fall back to local games so first paint works.
+                                for (const [id, g] of Object.entries(col.games || {})) {
+                                    const h = String(g._sync_hash || g.checksum || '').trim().toLowerCase();
+                                    list.push({
+                                        id,
+                                        name: g.name || 'untitled',
+                                        hash: h,
+                                        active: col.active === id,
+                                        remote: false,
+                                    });
+                                }
                             }
                             list.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
                             return { list, activeId: col.active };
