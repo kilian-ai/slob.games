@@ -3442,6 +3442,12 @@ pub fn canvas(_args: &[Value]) -> Value {
                         // Resolve a carousel target to a local game id, fetching on demand.
                         async function _activateCarouselTarget(target) {
                             if (!target) return;
+                            // Wait for SDK to be ready — first-load restore can fire before init.
+                            let _waits = 0;
+                            while (!window._traitsSDK && _waits < 60) {
+                                await new Promise(r => setTimeout(r, 200));
+                                _waits++;
+                            }
                             if (target.remote) {
                                 const localId = await _fetchRemoteGameByHash(target.hash);
                                 if (localId) { try { await activateGame(localId); } catch (_) {} }
