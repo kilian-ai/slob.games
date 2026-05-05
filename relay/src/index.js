@@ -2224,6 +2224,47 @@ export default {
         return json([]);
       }
 
+      // Worker-level /sync/game/:hash → fetch single game JSON from GitHub by content_hash
+      const syncGameMatch = url.pathname.match(/^\/sync\/game\/([^/]+)$/);
+      if (syncGameMatch && request.method === 'GET') {
+        const hash = decodeURIComponent(syncGameMatch[1]).trim().toLowerCase();
+        if (!hash) return json({ error: 'missing hash' }, 400);
+        if (!env.GITHUB_REPO) return json({ error: 'catalog not configured' }, 503);
+        try {
+          const catUrl = `https://raw.githubusercontent.com/${env.GITHUB_REPO}/main/games/index.json`;
+          const catRes = await fetch(catUrl, { headers: { 'User-Agent': 'slob-games-relay/1.0' } });
+          if (!catRes.ok) return json({ error: 'catalog fetch failed' }, 502);
+          const cat = await catRes.json();
+          const entry = (cat.games || []).find(g =>
+            String(g.content_hash || '').toLowerCase() === hash ||
+            String(g.checksum || '').toLowerCase() === hash
+          );
+          if (!entry || !entry.owner || !entry.game_id) return json({ error: 'not found' }, 404);
+          const fileUrl = `https://raw.githubusercontent.com/${env.GITHUB_REPO}/main/games/${entry.owner}/${entry.game_id}.json`;
+          const fileRes = await fetch(fileUrl, { headers: { 'User-Agent': 'slob-games-relay/1.0' } });
+          if (!fileRes.ok) return json({ error: 'game file fetch failed' }, 502);
+          const game = await fileRes.json();
+          // Normalize shape expected by frontend
+          return json({
+            content_hash: entry.content_hash || entry.checksum || hash,
+            checksum: entry.checksum || entry.content_hash || hash,
+            owner: entry.owner,
+            game_id: entry.game_id,
+            name: game.name || entry.name || '',
+            content: game.content || '',
+            version: game.version || entry.version || '',
+            size: game.size || entry.size || 0,
+            updated: game.updated || entry.updated || '',
+            scope: 'external',
+            published: 1,
+            resources: game.resources || {},
+            resource_paths: game.resources ? Object.keys(game.resources).sort() : [],
+          });
+        } catch (e) {
+          return json({ error: String(e?.message || e) }, 502);
+        }
+      }
+
       // Forward /sync/internal/* to Worker-level handler (uses AUTH_KV instead of broken DO)
       if (url.pathname.startsWith('/sync/internal/')) {
         return handleInternalRoutes(url, request, env);
