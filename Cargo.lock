@@ -553,7 +553,7 @@ dependencies = [
 
 [[package]]
 name = "kernel-logic"
-version = "0.260505.260505"
+version = "0.260505.32226"
 dependencies = [
  "js-sys",
  "serde",
@@ -1323,7 +1323,7 @@ dependencies = [
 
 [[package]]
 name = "traits-wasm"
-version = "0.260505.260505"
+version = "0.260505.32226"
 dependencies = [
  "getrandom",
  "js-sys",

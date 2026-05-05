@@ -3342,21 +3342,119 @@ pub fn canvas(_args: &[Value]) -> Value {
                         vcmInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') vcmSendText(); });
 
                         // ── Mobile fullscreen: auto-hide chrome, two-finger carousel ──
-                        // Build sorted list of all games for carousel rotation
+                        // Catalog cache — remote games available via REST but not yet downloaded.
+                        // Populated by refreshRemoteCatalog(); merged into _publicGamesList() so the
+                        // carousel can cycle through every published GitHub game and lazy-fetch on demand.
+                        let __remoteCatalog = [];
+                        const __remoteFetchInflight = new Map(); // hash -> Promise<localId|null>
+
+                        async function refreshRemoteCatalog() {
+                            try {
+                                const resp = await fetch('https://relay.slob.games/sync/games');
+                                if (!resp.ok) return 0;
+                                const cat = await resp.json();
+                                if (!Array.isArray(cat)) return 0;
+                                __remoteCatalog = cat
+                                    .filter(g => g && g.content_hash && g.name)
+                                    .map(g => ({
+                                        hash: String(g.content_hash).trim().toLowerCase(),
+                                        name: g.name,
+                                        owner: g.owner || 'public',
+                                        game_id: g.game_id || '',
+                                    }));
+                                return __remoteCatalog.length;
+                            } catch (_) { return 0; }
+                        }
+
+                        // Build sorted list of all games for carousel rotation.
+                        // Includes remote-catalog stubs (id="remote:<hash>") for games not yet in local storage.
                         function _publicGamesList() {
                             const col = readGamesCollection();
                             const list = [];
+                            const localHashes = new Set();
                             for (const [id, g] of Object.entries(col.games || {})) {
+                                const h = String(g._sync_hash || g.checksum || '').trim().toLowerCase();
+                                if (h) localHashes.add(h);
                                 list.push({
                                     id,
                                     name: g.name || 'untitled',
-                                    hash: String(g._sync_hash || g.checksum || '').trim().toLowerCase(),
-                                    active: col.active === id
+                                    hash: h,
+                                    active: col.active === id,
+                                    remote: false,
+                                });
+                            }
+                            // Merge in catalog stubs for games not yet downloaded.
+                            for (const r of __remoteCatalog) {
+                                if (!r.hash || localHashes.has(r.hash)) continue;
+                                if (typeof _isDeletedGame === 'function' && _isDeletedGame(r.hash, r.game_id)) continue;
+                                list.push({
+                                    id: 'remote:' + r.hash,
+                                    name: r.name || 'untitled',
+                                    hash: r.hash,
+                                    active: false,
+                                    remote: true,
+                                    owner: r.owner,
+                                    game_id: r.game_id,
                                 });
                             }
                             list.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
                             return { list, activeId: col.active };
                         }
+
+                        // Fetch a single remote game by hash and ingest it via addSyncedGames.
+                        // Returns the resulting local game id (or null on failure).
+                        async function _fetchRemoteGameByHash(hash) {
+                            hash = String(hash || '').trim().toLowerCase();
+                            if (!hash) return null;
+                            // Already local?
+                            const col0 = readGamesCollection();
+                            for (const [id, g] of Object.entries(col0.games || {})) {
+                                const h = String(g._sync_hash || g.checksum || '').trim().toLowerCase();
+                                if (h === hash) return id;
+                            }
+                            if (__remoteFetchInflight.has(hash)) return __remoteFetchInflight.get(hash);
+                            const p = (async () => {
+                                try {
+                                    console.log('[carousel] lazy-fetching game', hash);
+                                    const resp = await fetch('https://relay.slob.games/sync/game/' + encodeURIComponent(hash));
+                                    if (!resp.ok) return null;
+                                    const game = await resp.json();
+                                    if (!game || !game.content || !game.content_hash) return null;
+                                    const localHashes = (await localGamesWithHashes()).map(g => g.hash);
+                                    addSyncedGames([game], localHashes);
+                                    const col = readGamesCollection();
+                                    for (const [id, g] of Object.entries(col.games || {})) {
+                                        const h = String(g._sync_hash || g.checksum || '').trim().toLowerCase();
+                                        if (h === hash) return id;
+                                    }
+                                    return null;
+                                } catch (e) {
+                                    console.warn('[carousel] fetch failed for', hash, e);
+                                    return null;
+                                } finally {
+                                    __remoteFetchInflight.delete(hash);
+                                }
+                            })();
+                            __remoteFetchInflight.set(hash, p);
+                            return p;
+                        }
+
+                        // Resolve a carousel target to a local game id, fetching on demand.
+                        async function _activateCarouselTarget(target) {
+                            if (!target) return;
+                            if (target.remote) {
+                                const localId = await _fetchRemoteGameByHash(target.hash);
+                                if (localId) { try { await activateGame(localId); } catch (_) {} }
+                                else console.warn('[carousel] could not fetch', target.name);
+                                return;
+                            }
+                            try { await activateGame(target.id); } catch (_) {}
+                        }
+
+                        // Refresh catalog on canvas mount so all GitHub games show up immediately.
+                        refreshRemoteCatalog().then(n => {
+                            if (n > 0) console.log('[carousel] catalog ready:', n, 'remote games');
+                        }).catch(() => {});
 
                         // Log carousel game list once games are loaded
                         setTimeout(function() {
@@ -3443,9 +3541,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 const next = direction === 'next'
                                     ? (idx + 1) % list.length
                                     : (idx - 1 + list.length) % list.length;
-                                console.log('[carousel] ' + direction + ': ' + (list[idx]?.name || '?') + ' [' + (idx+1) + '/' + list.length + '] → ' + list[next].name + ' [' + (next+1) + '/' + list.length + ']');
-                                console.log('[carousel] games:', list.map((g,i) => (i===next ? '▶ ' : '  ') + (i+1) + '. ' + g.name).join('\n'));
-                                activateGame(list[next].id);
+                                console.log('[carousel] ' + direction + ': ' + (list[idx]?.name || '?') + ' [' + (idx+1) + '/' + list.length + '] → ' + list[next].name + ' [' + (next+1) + '/' + list.length + ']' + (list[next].remote ? ' (remote, fetching)' : ''));
+                                console.log('[carousel] games:', list.map((g,i) => (i===next ? '▶ ' : '  ') + (i+1) + '. ' + g.name + (g.remote ? ' [remote]' : '')).join('\n'));
+                                _activateCarouselTarget(list[next]);
                             }
 
                             function getGameLabel(direction) {
@@ -3630,7 +3728,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     let idx = list.findIndex(g => g.id === activeId);
                                     if (idx < 0) idx = 0;
                                     const next = (idx + 1) % list.length;
-                                    activateGame(list[next].id);
+                                    _activateCarouselTarget(list[next]);
                                     fabGameSelect.querySelector('span:last-child').textContent = list[next].name;
                                 });
                             }
@@ -3676,9 +3774,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 const next = direction === 'next'
                                     ? (idx + 1) % list.length
                                     : (idx - 1 + list.length) % list.length;
-                                console.log('[carousel] ' + direction + ': ' + (list[idx]?.name || '?') + ' [' + (idx+1) + '/' + list.length + '] → ' + list[next].name + ' [' + (next+1) + '/' + list.length + ']');
-                                console.log('[carousel] games:', list.map((g,i) => (i===next ? '▶ ' : '  ') + (i+1) + '. ' + g.name).join('\n'));
-                                activateGame(list[next].id);
+                                console.log('[carousel] ' + direction + ': ' + (list[idx]?.name || '?') + ' [' + (idx+1) + '/' + list.length + '] → ' + list[next].name + ' [' + (next+1) + '/' + list.length + ']' + (list[next].remote ? ' (remote, fetching)' : ''));
+                                console.log('[carousel] games:', list.map((g,i) => (i===next ? '▶ ' : '  ') + (i+1) + '. ' + g.name + (g.remote ? ' [remote]' : '')).join('\n'));
+                                _activateCarouselTarget(list[next]);
                             }
 
                             function animateSwitch(direction) {
