@@ -977,6 +977,13 @@ async function submitEditUser(usernameEnc) {
         break;
       }
     }
+    // If admin changed their own role, persist locally so SPA shell picks it up immediately
+    try {
+      var me = (localStorage.getItem('traits.env.SLOB_USERNAME') || '').trim();
+      if (role && me && me === username) {
+        localStorage.setItem('traits.env.SLOB_USER_ROLE', role);
+      }
+    } catch(_) {}
     renderUsers();
   } else {
     alert(r.error || 'Update failed');

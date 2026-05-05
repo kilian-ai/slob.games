@@ -566,7 +566,7 @@ async function navigate(route, pushState = true) {
   // Permission gate: check role for restricted routes
   const requiredRole = ROUTE_ROLES[route];
   if (requiredRole) {
-    const role = _userRole || (localStorage.getItem('traits.env.SLOB_USER_ROLE') || '');
+    const role = (localStorage.getItem('traits.env.SLOB_USER_ROLE') || '') || _userRole || '';
     if (role !== requiredRole) {
       frame.innerHTML = '<div style="padding:4rem;text-align:center;color:var(--muted);font-family:Courier New,monospace"><h2>Access Denied</h2><p>This page requires the <strong>' + requiredRole + '</strong> role.</p><p style="margin-top:1rem"><a data-href="/settings" style="color:#00e0ff;cursor:pointer">Go to Settings</a></p></div>';
       return;

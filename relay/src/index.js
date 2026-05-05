@@ -434,96 +434,550 @@ const MAX_GAME_PACKAGE_SIZE = 2 * 1024 * 1024; // HTML + resources bundle cap
 const MAX_TOTAL_GAMES = 500;
 const DEFAULT_EXTERNAL_POOL_SIZE = 64;
 
-export class GameRoomV3 {
+// ── Top-level GitHub publisher (used by Worker-level /sync/internal/*/github-publish) ──
+async function publishGameToGitHub(row, token, repo) {
+  const owner = normalizeSlug(row.owner, 'public');
+  const gameId = normalizeSlug(row.game_id, 'game');
+  const BASE = `https://api.github.com/repos/${repo}/contents`;
+  const headers = {
+    Authorization: `token ${token}`,
+    'Content-Type': 'application/json',
+    'User-Agent': 'slob-games-relay/1.0',
+    Accept: 'application/vnd.github.v3+json',
+  };
+
+  const resources = parseResourcesField(row.resources);
+  const gamePayload = {
+    name: row.name,
+    content: row.content,
+    version: row.version || '',
+    checksum: row.checksum || row.content_hash,
+    content_hash: row.content_hash,
+    owner, game_id: gameId,
+    updated: row.updated, size: row.size,
+    resources,
+  };
+  const gamePath = `games/${owner}/${gameId}.json`;
+  const gameContent = btoa(unescape(encodeURIComponent(JSON.stringify(gamePayload, null, 2))));
+
+  const existResp = await fetch(`${BASE}/${gamePath}`, { headers });
+  const existData = existResp.ok ? await existResp.json().catch(() => ({})) : {};
+  const gameSha = existData.sha;
+
+  const gamePut = await fetch(`${BASE}/${gamePath}`, {
+    method: 'PUT', headers,
+    body: JSON.stringify({
+      message: `publish: ${owner}/${gameId} v${row.version || 'latest'}`,
+      content: gameContent,
+      ...(gameSha ? { sha: gameSha } : {}),
+    }),
+  });
+  if (!gamePut.ok) {
+    const err = await gamePut.json().catch(() => ({}));
+    throw new Error(`GitHub game write failed (${gamePut.status}): ${err.message || ''}`);
+  }
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const idxResp = await fetch(`${BASE}/games/index.json`, { headers });
+    const idxData = idxResp.ok ? await idxResp.json().catch(() => ({})) : {};
+    const idxSha = idxData.sha;
+    let index = { games: [] };
+    if (idxData.content) {
+      try { index = JSON.parse(decodeURIComponent(escape(atob(idxData.content.replace(/\n/g, ''))))); } catch (_) {}
+    }
+    const entry = {
+      id: `${owner}/${gameId}`, owner, game_id: gameId, name: row.name,
+      checksum: row.checksum || row.content_hash, content_hash: row.content_hash,
+      size: row.size, updated: row.updated, version: row.version || '',
+    };
+    const idx = index.games.findIndex(g => g.id === entry.id);
+    if (idx >= 0) index.games[idx] = entry; else index.games.push(entry);
+    index.games.sort((a, b) => a.id.localeCompare(b.id));
+    const idxContent = btoa(unescape(encodeURIComponent(JSON.stringify(index, null, 2))));
+    const idxPut = await fetch(`${BASE}/games/index.json`, {
+      method: 'PUT', headers,
+      body: JSON.stringify({
+        message: `index: upsert ${owner}/${gameId}`,
+        content: idxContent,
+        ...(idxSha ? { sha: idxSha } : {}),
+      }),
+    });
+    if (idxPut.ok) break;
+    if (idxPut.status === 409 && attempt === 0) continue;
+    const err = await idxPut.json().catch(() => ({}));
+    throw new Error(`GitHub index write failed (${idxPut.status}): ${err.message || ''}`);
+  }
+
+  const rawBase = `https://raw.githubusercontent.com/${repo}/main`;
+  return { ok: true, raw_url: `${rawBase}/${gamePath}`, index_url: `${rawBase}/games/index.json` };
+}
+
+// ── Worker-level /sync/internal/* handler — replaces broken DO routes using AUTH_KV ──
+// Key scheme:
+//   mygame:{owner}:{game_id} → full record { content, name, version, resources, ... }
+//   mygames:{owner} → array of summaries (no content)
+async function handleInternalRoutes(url, request, env) {
+  if (!env.AUTH_KV) return json({ error: 'storage not configured' }, 503);
+  if (!env.RELAY_SECRET) return json({ error: 'RELAY_SECRET not configured' }, 503);
+
+  // /sync/internal/... → /internal/...
+  const path = url.pathname.startsWith('/sync/internal/')
+    ? url.pathname.slice(5)
+    : url.pathname;
+
+  const authHeader = request.headers.get('Authorization') || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+  const tokenPayload = token ? await verifyUserToken(token, env.RELAY_SECRET) : null;
+  const user = tokenPayload?.sub || null;
+  if (!user) return json({ error: 'auth required' }, 401);
+
+  // KV helpers for user games
+  const getGame = async (owner, gameId) => {
+    return (await env.AUTH_KV.get(`mygame:${owner}:${gameId}`, { type: 'json' })) || null;
+  };
+  const putGame = async (row) => {
+    await env.AUTH_KV.put(`mygame:${row.owner}:${row.game_id}`, JSON.stringify(row));
+    const summaries = (await env.AUTH_KV.get(`mygames:${row.owner}`, { type: 'json' })) || [];
+    const summary = {
+      content_hash: row.content_hash, checksum: row.checksum || row.content_hash,
+      owner: row.owner, game_id: row.game_id, name: row.name, version: row.version || '',
+      size: row.size, updated: row.updated, scope: row.scope || 'internal',
+      published: row.published ? 1 : 0,
+      forked_from_hash: row.forked_from_hash || null,
+      resource_paths: row.resource_paths || [],
+    };
+    const idx = summaries.findIndex(g => g.game_id === row.game_id);
+    if (idx >= 0) summaries[idx] = summary; else summaries.push(summary);
+    await env.AUTH_KV.put(`mygames:${row.owner}`, JSON.stringify(summaries));
+  };
+  const deleteGame = async (owner, gameId) => {
+    await env.AUTH_KV.delete(`mygame:${owner}:${gameId}`);
+    const summaries = (await env.AUTH_KV.get(`mygames:${owner}`, { type: 'json' })) || [];
+    await env.AUTH_KV.put(`mygames:${owner}`, JSON.stringify(summaries.filter(g => g.game_id !== gameId)));
+  };
+  const getUserRole = async (username) => {
+    const u = await env.AUTH_KV.get(`user:${username}`, { type: 'json' });
+    return u?.role || 'user';
+  };
+
+  // GET /internal/games — list user's games
+  if (path === '/internal/games' && request.method === 'GET') {
+    const summaries = (await env.AUTH_KV.get(`mygames:${user}`, { type: 'json' })) || [];
+    summaries.sort((a, b) => String(b.updated || '').localeCompare(String(a.updated || '')));
+    return json(summaries);
+  }
+
+  // PATCH /internal/game/:gameId/publish
+  const publishMatch = path.match(/^\/internal\/game\/([^/]+)\/publish$/);
+  if (publishMatch && request.method === 'PATCH') {
+    const gameId = normalizeSlug(publishMatch[1], '');
+    if (!gameId) return json({ error: 'missing game id' }, 400);
+    const body = await request.json().catch(() => ({}));
+    const role = await getUserRole(user);
+    const requestedOwner = normalizeSlug(
+      request.headers.get('X-Game-Owner') || body.owner || user,
+      user
+    );
+    const owner = requestedOwner || user;
+    if (owner !== user && role !== 'admin') return json({ error: 'forbidden' }, 403);
+    const row = await getGame(owner, gameId);
+    if (!row) return json({ error: 'not found' }, 404);
+    const explicit = (typeof body.published === 'boolean') ? (body.published ? 1 : 0) : null;
+    const newVal = (explicit === null) ? (row.published ? 0 : 1) : explicit;
+    await putGame({ ...row, published: newVal });
+    return json({ ok: true, owner, game_id: gameId, published: !!newVal });
+  }
+
+  // PATCH /internal/game/:gameId/github-publish
+  const githubPublishMatch = path.match(/^\/internal\/game\/([^/]+)\/github-publish$/);
+  if (githubPublishMatch && request.method === 'PATCH') {
+    const gameId = normalizeSlug(githubPublishMatch[1], '');
+    if (!gameId) return json({ error: 'missing game id' }, 400);
+    const githubToken = env.GITHUB_TOKEN;
+    const githubRepo = env.GITHUB_REPO;
+    if (!githubToken || !githubRepo) return json({ error: 'GitHub publishing not configured on this relay' }, 503);
+    const body = await request.json().catch(() => ({}));
+    const requestedOwner = normalizeSlug(body.owner || user, user);
+    const role = await getUserRole(user);
+    if (requestedOwner !== user && role !== 'admin') return json({ error: 'forbidden' }, 403);
+    const row = await getGame(requestedOwner, gameId);
+    if (!row) return json({ error: 'game not found' }, 404);
+    try {
+      const result = await publishGameToGitHub(row, githubToken, githubRepo);
+      return json(result);
+    } catch (err) {
+      return json({ error: String(err?.message || err) }, 502);
+    }
+  }
+
+  // PUT /internal/game/:gameId — save
+  if (path.startsWith('/internal/game/') && request.method === 'PUT') {
+    const gameId = normalizeSlug(path.slice('/internal/game/'.length), '');
+    if (!gameId) return json({ error: 'missing game id' }, 400);
+    const body = await request.json().catch(() => ({}));
+    const content = String(body.content || '');
+    if (!content) return json({ error: 'missing content' }, 400);
+    if (content.length > MAX_GAME_SIZE) return json({ error: 'too large' }, 413);
+    const name = String(body.name || gameId).slice(0, 100);
+    const version = String(body.version || makeReleaseVersion());
+    const updated = new Date().toISOString();
+    const prev = await getGame(user, gameId);
+    const prevResources = parseResourcesField(prev?.resources);
+    const resourcesMap = (body.resources === undefined)
+      ? prevResources
+      : parseResourcesField(body.resources);
+    const paths = resourcePaths(resourcesMap);
+    const resourcePayloadBytes = resourceBytes(resourcesMap);
+    const packageSize = content.length + resourcePayloadBytes;
+    if (packageSize > MAX_GAME_PACKAGE_SIZE) return json({ error: 'package too large' }, 413);
+    const prevPublished = prev ? (prev.published ?? 0) : 0;
+    const size = content.length;
+    const checksum = await packageHash16(content);
+    const nextScope = String(body.scope || (prev && prev.scope) || 'internal').trim().toLowerCase() === 'external'
+      ? 'external' : 'internal';
+    await putGame({
+      content_hash: checksum, name, content, updated, size,
+      owner: user, game_id: gameId, scope: nextScope, version, checksum,
+      resources: encodeResourcesField(resourcesMap),
+      forked_from_hash: prev?.forked_from_hash || null,
+      published: prevPublished,
+      resource_paths: paths,
+    });
+    return json({ ok: true, owner: user, game_id: gameId, content_hash: checksum, checksum, version, published: !!prevPublished });
+  }
+
+  // GET /internal/game/:gameId — get full content
+  if (path.startsWith('/internal/game/') && request.method === 'GET') {
+    const gameId = normalizeSlug(path.slice('/internal/game/'.length), '');
+    if (!gameId) return json({ error: 'missing game id' }, 400);
+    const owner = url.searchParams.get('owner') || user;
+    const row = await getGame(owner, gameId);
+    if (!row) return json({ error: 'not found' }, 404);
+    const resources = parseResourcesField(row.resources);
+    return json({ ...row, resource_paths: Object.keys(resources).sort(), resources });
+  }
+
+  // DELETE /internal/game/:gameId — delete
+  if (path.startsWith('/internal/game/') && request.method === 'DELETE') {
+    const gameId = normalizeSlug(path.slice('/internal/game/'.length), '');
+    if (!gameId) return json({ error: 'missing game id' }, 400);
+    const owner = url.searchParams.get('owner') || user;
+    const role = await getUserRole(user);
+    if (owner !== user && role !== 'admin') return json({ error: 'forbidden' }, 403);
+    const row = await getGame(owner, gameId);
+    if (!row) return json({ error: 'not found' }, 404);
+    await deleteGame(owner, gameId);
+    return json({ ok: true, deleted: gameId });
+  }
+
+  return json({ error: 'not found' }, 404);
+}
+
+
+// ── Worker-level /sync/admin/* and /admin/* handler — replaces broken DO admin routes ──
+async function handleAdminRoutes(url, request, env) {
+  if (!env.AUTH_KV) return json({ error: 'storage not configured' }, 503);
+  if (!env.RELAY_SECRET) return json({ error: 'RELAY_SECRET not configured' }, 503);
+
+  // Normalize /sync/admin/... → /admin/...
+  const path = url.pathname.startsWith('/sync/admin/')
+    ? url.pathname.slice(5)
+    : url.pathname;
+
+  const authHeader = request.headers.get('Authorization') || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+  const tokenPayload = token ? await verifyUserToken(token, env.RELAY_SECRET) : null;
+  const user = tokenPayload?.sub || null;
+  if (!user) return json({ error: 'auth required' }, 401);
+
+  const kvGetUser = async (username) => {
+    return (await env.AUTH_KV.get(`user:${username}`, { type: 'json' })) || null;
+  };
+  const kvPutUser = async (row) => {
+    await env.AUTH_KV.put(`user:${row.username}`, JSON.stringify(row));
+    if (row.email) await env.AUTH_KV.put(`user_email:${row.email.toLowerCase()}`, row.username);
+    const rawIndex = await env.AUTH_KV.get('users:index', { type: 'json' });
+    const index = rawIndex || [];
+    const summary = { username: row.username, email: row.email, role: row.role, created: row.created, last_login: row.last_login };
+    const idx = index.findIndex(u => u.username === row.username);
+    if (idx >= 0) index[idx] = summary; else index.push(summary);
+    await env.AUTH_KV.put('users:index', JSON.stringify(index));
+  };
+  const kvDeleteUser = async (username) => {
+    const u = await kvGetUser(username);
+    if (u?.email) await env.AUTH_KV.delete(`user_email:${String(u.email).toLowerCase()}`);
+    await env.AUTH_KV.delete(`user:${username}`);
+    const rawIndex = await env.AUTH_KV.get('users:index', { type: 'json' });
+    const index = rawIndex || [];
+    await env.AUTH_KV.put('users:index', JSON.stringify(index.filter(u => u.username !== username)));
+  };
+
+  const role = (await kvGetUser(user))?.role || 'user';
+  if (role !== 'admin') return json({ error: 'admin required' }, 403);
+
+  // GET /admin/users
+  if (path === '/admin/users' && request.method === 'GET') {
+    const index = (await env.AUTH_KV.get('users:index', { type: 'json' })) || [];
+    index.sort((a, b) => String(a.created || '').localeCompare(String(b.created || '')));
+    return json(index);
+  }
+
+  // GET /admin/games — aggregate all users' games
+  if (path === '/admin/games' && request.method === 'GET') {
+    const index = (await env.AUTH_KV.get('users:index', { type: 'json' })) || [];
+    const all = [];
+    for (const u of index) {
+      const games = (await env.AUTH_KV.get(`mygames:${u.username}`, { type: 'json' })) || [];
+      for (const g of games) all.push(g);
+    }
+    all.sort((a, b) => `${a.owner}/${a.name}`.localeCompare(`${b.owner}/${b.name}`));
+    return json({ external: all, internal: [] });
+  }
+
+  // GET /admin/stats
+  if (path === '/admin/stats' && request.method === 'GET') {
+    const index = (await env.AUTH_KV.get('users:index', { type: 'json' })) || [];
+    let total = 0, published = 0, draft = 0, bytes = 0;
+    for (const u of index) {
+      const games = (await env.AUTH_KV.get(`mygames:${u.username}`, { type: 'json' })) || [];
+      total += games.length;
+      for (const g of games) {
+        if (g.published) published++; else draft++;
+        bytes += g.size || 0;
+      }
+    }
+    return json({
+      ok: true,
+      generated_at: new Date().toISOString(),
+      runtime: { active_websockets: 0, auth_rate_limit_entries: 0 },
+      games: { total, internal: 0, external: total, published, draft, content_bytes_total: bytes },
+      resources: { cached_rows: 0, cached_bytes_total: 0 },
+      users: { total: index.length, highscore_rows: 0 },
+      storage: { sqlite_page_count: 0, sqlite_page_size: 0, sqlite_db_bytes_approx: 0 },
+    });
+  }
+
+  // PUT /admin/users/:username — edit role/email/password
+  const userEdit = path.match(/^\/admin\/users\/([^/]+)$/);
+  if (userEdit && request.method === 'PUT') {
+    const target = decodeURIComponent(userEdit[1]);
+    const exists = await kvGetUser(target);
+    if (!exists) return json({ error: 'user not found' }, 404);
+    const body = await request.json().catch(() => ({}));
+    const updated = { ...exists };
+    if (body.role && ['user', 'admin'].includes(body.role)) updated.role = body.role;
+    if (body.email && typeof body.email === 'string' && body.email.includes('@')) updated.email = body.email;
+    if (body.password && typeof body.password === 'string' && body.password.length >= 4) {
+      const newSalt = generateSalt();
+      const newHash = await pbkdf2Hash(body.password, newSalt);
+      updated.password_hash = newHash;
+      updated.salt = newSalt;
+    }
+    await kvPutUser(updated);
+    return json({ ok: true, updated: target, role: updated.role });
+  }
+
+  // DELETE /admin/users/:username
+  if (userEdit && request.method === 'DELETE') {
+    const target = decodeURIComponent(userEdit[1]);
+    if (target === user) return json({ error: 'cannot delete yourself' }, 400);
+    if (!(await kvGetUser(target))) return json({ error: 'user not found' }, 404);
+    await kvDeleteUser(target);
+    return json({ ok: true, deleted: target });
+  }
+
+  // DELETE /admin/games/:hash — delete game by content hash (search across users)
+  const adminGameDel = path.match(/^\/admin\/games\/([^/]+)$/);
+  if (adminGameDel && request.method === 'DELETE') {
+    const hash = decodeURIComponent(adminGameDel[1]);
+    const index = (await env.AUTH_KV.get('users:index', { type: 'json' })) || [];
+    for (const u of index) {
+      const games = (await env.AUTH_KV.get(`mygames:${u.username}`, { type: 'json' })) || [];
+      const hit = games.find(g => g.content_hash === hash || g.checksum === hash);
+      if (hit) {
+        await env.AUTH_KV.delete(`mygame:${u.username}:${hit.game_id}`);
+        await env.AUTH_KV.put(`mygames:${u.username}`, JSON.stringify(games.filter(g => g.game_id !== hit.game_id)));
+        return json({ ok: true, deleted: hash });
+      }
+    }
+    return json({ error: 'game not found' }, 404);
+  }
+
+  // Stub admin secrets endpoints (not stored in AUTH_KV — return empty / not-supported)
+  if (path.match(/^\/admin\/users\/[^/]+\/secrets$/) && request.method === 'GET') {
+    return json([]);
+  }
+  if (path.match(/^\/admin\/users\/[^/]+\/secrets\/[^/]+$/)) {
+    return json({ error: 'admin secrets storage not available on KV backend' }, 503);
+  }
+
+  return json({ error: 'not found' }, 404);
+}
+
+
+export class GameRoomV6 {
   constructor(state, env) {
+    console.log('[GameRoomV6] constructor start');
     this.state = state;
     this.env = env;
-    this.sql = state.storage.sql;
-    this.sql.exec(`CREATE TABLE IF NOT EXISTS games (
-      content_hash TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      content TEXT NOT NULL,
-      updated TEXT NOT NULL,
-      size INTEGER NOT NULL
-    )`);
-    const gameCols = this.sql.exec("PRAGMA table_info(games)").toArray().map(r => r.name);
-    if (!gameCols.includes('owner')) this.sql.exec("ALTER TABLE games ADD COLUMN owner TEXT NOT NULL DEFAULT 'public'");
-    if (!gameCols.includes('game_id')) this.sql.exec("ALTER TABLE games ADD COLUMN game_id TEXT NOT NULL DEFAULT ''");
-    if (!gameCols.includes('scope')) this.sql.exec("ALTER TABLE games ADD COLUMN scope TEXT NOT NULL DEFAULT 'external'");
-    if (!gameCols.includes('version')) this.sql.exec("ALTER TABLE games ADD COLUMN version TEXT NOT NULL DEFAULT ''");
-    if (!gameCols.includes('checksum')) this.sql.exec("ALTER TABLE games ADD COLUMN checksum TEXT NOT NULL DEFAULT ''");
-    if (!gameCols.includes('resources')) this.sql.exec("ALTER TABLE games ADD COLUMN resources TEXT NOT NULL DEFAULT '{}'");
-    if (!gameCols.includes('forked_from_hash')) this.sql.exec("ALTER TABLE games ADD COLUMN forked_from_hash TEXT");
-    if (!gameCols.includes('published')) this.sql.exec("ALTER TABLE games ADD COLUMN published INTEGER NOT NULL DEFAULT 1");
+    this.authAttempts = new Map();
+  }
 
-    // Migrate internal_games → games (one-time), then stop using internal_games
-    try {
-      const hasTbl = this.sql.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='internal_games'").toArray();
-      if (hasTbl.length) {
-        const rows = this.sql.exec("SELECT * FROM internal_games").toArray();
-        for (const r of rows) {
-          const exists = this.sql.exec("SELECT 1 FROM games WHERE owner = ? AND game_id = ?", r.owner, r.game_id).toArray();
-          if (!exists.length && r.content) {
-            const paths = parseManifestField(r.resources);
-            this.sql.exec("DELETE FROM games WHERE content_hash = ?", r.content_hash);
-            this.sql.exec(
-              `INSERT INTO games (content_hash, name, content, updated, size, owner, game_id, scope, version, checksum, resources, forked_from_hash)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'external', ?, ?, ?, ?)`,
-              r.content_hash, r.name, r.content, r.updated, r.size || r.content.length,
-              r.owner, r.game_id, r.version || '', r.checksum || r.content_hash,
-              JSON.stringify(paths), r.forked_from_hash || null
-            );
-          }
-        }
-        this.sql.exec("DROP TABLE IF EXISTS internal_games");
-      }
-    } catch(_) {}
+  // ── KV storage helpers ────────────────────────────────────────────────────
 
-    this.sql.exec(`CREATE TABLE IF NOT EXISTS users (
-      username TEXT PRIMARY KEY,
-      email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      created TEXT NOT NULL
-    )`);
-    const userCols = this.sql.exec("PRAGMA table_info(users)").toArray().map(r => r.name);
-    if (!userCols.includes('salt')) this.sql.exec("ALTER TABLE users ADD COLUMN salt TEXT NOT NULL DEFAULT ''");
-    if (!userCols.includes('role')) this.sql.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'");
-    if (!userCols.includes('last_login')) this.sql.exec("ALTER TABLE users ADD COLUMN last_login TEXT NOT NULL DEFAULT ''");
+  async _getGame(hash) {
+    return (await this.state.storage.get(`game:${hash}`)) || null;
+  }
 
-    // Seed kilian-ai as admin if exists
-    this.sql.exec("UPDATE users SET role = 'admin' WHERE username = 'kilian-ai' AND role != 'admin'");
+  async _getGamesIndex() {
+    return (await this.state.storage.get('games:index')) || [];
+  }
 
-    // In-memory rate limiting for auth endpoints
-    this.authAttempts = new Map(); // username → { count, lastAttempt }
-    this.sql.exec(`CREATE TABLE IF NOT EXISTS scores (
-      game_hash TEXT PRIMARY KEY,
-      score INTEGER NOT NULL,
-      player TEXT NOT NULL DEFAULT '',
-      updated TEXT NOT NULL
-    )`);
+  async _getGameByOwnerGameId(owner, gameId) {
+    const hash = await this.state.storage.get(`gameid:${owner}:${gameId}`);
+    if (!hash) return null;
+    return this._getGame(hash);
+  }
 
-    this.sql.exec(`CREATE TABLE IF NOT EXISTS resource_cache (
-      game_hash TEXT NOT NULL,
-      path TEXT NOT NULL,
-      value TEXT NOT NULL,
-      updated TEXT NOT NULL,
-      PRIMARY KEY (game_hash, path)
-    )`);
-    this.sql.exec(`CREATE TABLE IF NOT EXISTS user_secrets (
-      username TEXT NOT NULL,
-      key TEXT NOT NULL,
-      value TEXT NOT NULL,
-      updated TEXT NOT NULL,
-      PRIMARY KEY (username, key)
-    )`);
+  async _putGame(row) {
+    await this.state.storage.put(`game:${row.content_hash}`, row);
+    if (row.owner && row.game_id) {
+      await this.state.storage.put(`gameid:${row.owner}:${row.game_id}`, row.content_hash);
+    }
+    const index = await this._getGamesIndex();
+    const existing = index.findIndex(g => g.content_hash === row.content_hash);
+    const prev = existing >= 0 ? index[existing] : {};
+    const summary = {
+      content_hash: row.content_hash, name: row.name, size: row.size,
+      updated: row.updated, owner: row.owner, game_id: row.game_id,
+      scope: row.scope, version: row.version, checksum: row.checksum,
+      published: row.published, forked_from_hash: row.forked_from_hash || null,
+      resources: row.resources,
+      highscore: prev.highscore, highscore_player: prev.highscore_player,
+    };
+    if (existing >= 0) index[existing] = summary;
+    else index.push(summary);
+    await this.state.storage.put('games:index', index);
+  }
+
+  async _deleteGame(hash) {
+    const row = await this._getGame(hash);
+    if (!row) return;
+    await this.state.storage.delete(`game:${hash}`);
+    if (row.owner && row.game_id) {
+      await this.state.storage.delete(`gameid:${row.owner}:${row.game_id}`);
+    }
+    const index = await this._getGamesIndex();
+    await this.state.storage.put('games:index', index.filter(g => g.content_hash !== hash));
+  }
+
+  async _getUser(username) {
+    return (await this.state.storage.get(`user:${username}`)) || null;
+  }
+
+  async _getUserByEmail(email) {
+    const username = await this.state.storage.get(`user_email:${email.toLowerCase()}`);
+    if (!username) return null;
+    return this._getUser(username);
+  }
+
+  async _putUser(row) {
+    await this.state.storage.put(`user:${row.username}`, row);
+    if (row.email) await this.state.storage.put(`user_email:${row.email.toLowerCase()}`, row.username);
+    const index = await this._getUsersIndex();
+    const idx = index.findIndex(u => u.username === row.username);
+    const summary = { username: row.username, email: row.email, role: row.role, created: row.created, last_login: row.last_login };
+    if (idx >= 0) index[idx] = summary;
+    else index.push(summary);
+    await this.state.storage.put('users:index', index);
+  }
+
+  async _deleteUser(username) {
+    const row = await this._getUser(username);
+    if (!row) return;
+    await this.state.storage.delete(`user:${username}`);
+    if (row.email) await this.state.storage.delete(`user_email:${row.email.toLowerCase()}`);
+    const index = await this._getUsersIndex();
+    await this.state.storage.put('users:index', index.filter(u => u.username !== username));
+  }
+
+  async _getUsersIndex() {
+    return (await this.state.storage.get('users:index')) || [];
+  }
+
+  async _getUserRole(username) {
+    const u = await this._getUser(username);
+    return u?.role || 'user';
+  }
+
+  async _getScore(gameHash) {
+    return (await this.state.storage.get(`score:${gameHash}`)) || null;
+  }
+
+  async _putScore(gameHash, score, player) {
+    const updated = new Date().toISOString();
+    await this.state.storage.put(`score:${gameHash}`, { game_hash: gameHash, score, player, updated });
+    const index = await this._getGamesIndex();
+    const idx = index.findIndex(g => g.content_hash === gameHash);
+    if (idx >= 0) {
+      index[idx].highscore = score;
+      index[idx].highscore_player = player;
+      await this.state.storage.put('games:index', index);
+    }
+  }
+
+  async _getAllScores() {
+    const map = await this.state.storage.list({ prefix: 'score:' });
+    return Array.from(map.values());
+  }
+
+  async _getResource(gameHash, path) {
+    return (await this.state.storage.get(`res:${gameHash}:${encodeURIComponent(path)}`)) || null;
+  }
+
+  async _putResources(gameHash, resources) {
+    const hash = String(gameHash || '').trim();
+    if (!hash) return 0;
+    const normalized = normalizeResourcesMap(resources);
+    const entries = Object.entries(normalized);
+    if (!entries.length) return 0;
+    const batch = {};
+    for (const [path, value] of entries) {
+      batch[`res:${hash}:${encodeURIComponent(path)}`] = value;
+    }
+    const existing = (await this.state.storage.get(`res_paths:${hash}`)) || [];
+    const pathSet = new Set([...existing, ...Object.keys(normalized)]);
+    batch[`res_paths:${hash}`] = Array.from(pathSet);
+    await this.state.storage.put(batch);
+    return entries.length;
+  }
+
+  async _getSecretKeys(username) {
+    return (await this.state.storage.get(`secret_keys:${username}`)) || [];
+  }
+
+  async _getSecret(username, key) {
+    return (await this.state.storage.get(`secret:${username}:${encodeURIComponent(key)}`)) || null;
+  }
+
+  async _putSecret(username, key, encryptedValue, updated) {
+    await this.state.storage.put(`secret:${username}:${encodeURIComponent(key)}`, { value: encryptedValue, updated });
+    const keys = await this._getSecretKeys(username);
+    if (!keys.includes(key)) {
+      keys.push(key);
+      await this.state.storage.put(`secret_keys:${username}`, keys);
+    }
+  }
+
+  async _deleteSecret(username, key) {
+    await this.state.storage.delete(`secret:${username}:${encodeURIComponent(key)}`);
+    const keys = (await this._getSecretKeys(username)).filter(k => k !== key);
+    await this.state.storage.put(`secret_keys:${username}`, keys);
   }
 
   _trackFailedAuth(username) {
     const attempt = this.authAttempts.get(username) || { count: 0, lastAttempt: 0 };
-    // Reset counter if cooldown has expired
-    if (Date.now() - attempt.lastAttempt >= AUTH_COOLDOWN_MS) {
-      attempt.count = 0;
-    }
+    if (Date.now() - attempt.lastAttempt >= AUTH_COOLDOWN_MS) attempt.count = 0;
     attempt.count++;
     attempt.lastAttempt = Date.now();
     this.authAttempts.set(username, attempt);
@@ -564,26 +1018,6 @@ export class GameRoomV3 {
     return out;
   }
 
-  cacheResourcesForGame(gameHash, resources) {
-    const hash = String(gameHash || '').trim();
-    if (!hash) return 0;
-    const normalized = normalizeResourcesMap(resources);
-    const entries = Object.entries(normalized);
-    if (!entries.length) return 0;
-    const updated = new Date().toISOString();
-    let wrote = 0;
-    for (const [path, value] of entries) {
-      this.sql.exec(
-        `INSERT INTO resource_cache (game_hash, path, value, updated)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(game_hash, path) DO UPDATE SET value=excluded.value, updated=excluded.updated`,
-        hash, path, value, updated
-      );
-      wrote++;
-    }
-    return wrote;
-  }
-
   broadcast(message) {
     for (const sock of this.state.getWebSockets()) {
       try { sock.send(message); } catch (_) {}
@@ -596,16 +1030,14 @@ export class GameRoomV3 {
     return Math.floor(raw);
   }
 
-  trimExternalPool() {
+  async trimExternalPool() {
     const keep = this.getExternalPoolLimit();
-    const rows = this.sql.exec(
-      "SELECT content_hash FROM games WHERE scope = 'external' ORDER BY updated DESC, rowid DESC"
-    ).toArray();
-    if (rows.length <= keep) return 0;
-    const toDelete = rows.slice(keep);
-    for (const row of toDelete) {
-      this.sql.exec("DELETE FROM games WHERE content_hash = ?", row.content_hash);
-    }
+    const index = await this._getGamesIndex();
+    const external = index.filter(g => g.scope === 'external');
+    if (external.length <= keep) return 0;
+    external.sort((a, b) => b.updated.localeCompare(a.updated)); // newest first
+    const toDelete = external.slice(keep);
+    for (const g of toDelete) await this._deleteGame(g.content_hash);
     return toDelete.length;
   }
 
@@ -706,10 +1138,22 @@ export class GameRoomV3 {
   }
 
   async fetch(request) {
+    try {
+      return await this._fetch(request);
+    } catch(e) {
+      console.error('[DO fetch]', String(e && e.message), String(e && e.stack).slice(0,200));
+      throw e;
+    }
+  }
+
+  async _fetch(request) {
     const url = new URL(request.url);
 
     // ── REST API (non-WebSocket) ──
     if (request.headers.get("Upgrade") !== "websocket") {
+      // /health responds immediately — no DB work, confirms DO is alive.
+      if (url.pathname === '/health') return json({ ok: true });
+
       // POST /auth/register — create user + issue token
       if (url.pathname === "/auth/register" && request.method === "POST") {
         if (!this.env.RELAY_SECRET) return json({ error: "RELAY_SECRET not configured" }, 503);
@@ -721,16 +1165,14 @@ export class GameRoomV3 {
         if (!/^\S+@\S+\.\S+$/.test(email)) return json({ error: "invalid email" }, 400);
         if (password.length < 6) return json({ error: "password must be at least 6 chars" }, 400);
 
-        const exists = this.sql.exec("SELECT 1 FROM users WHERE username = ? OR email = ?", username, email).toArray();
-        if (exists.length > 0) return json({ error: "username or email already exists" }, 409);
+        const existUser = await this._getUser(username);
+        const existEmail = await this._getUserByEmail(email);
+        if (existUser || existEmail) return json({ error: "username or email already exists" }, 409);
 
         const salt = generateSalt();
         const hashed = await pbkdf2Hash(password, salt);
         const created = new Date().toISOString();
-        this.sql.exec(
-          "INSERT INTO users (username, email, password_hash, salt, created) VALUES (?, ?, ?, ?, ?)",
-          username, email, hashed, salt, created
-        );
+        await this._putUser({ username, email, password_hash: hashed, salt, role: 'user', created, last_login: '' });
         const token = await signUserToken(username, new URL(request.url).origin, this.env.RELAY_SECRET);
         return json({ ok: true, username, token, role: 'user' });
       }
@@ -748,9 +1190,7 @@ export class GameRoomV3 {
           return json({ error: "too many attempts, try again later" }, 429);
         }
 
-        const row = this.sql.exec(
-          "SELECT username, password_hash, salt FROM users WHERE username = ?", username
-        ).toArray()[0];
+        const row = await this._getUser(username);
         if (!row) {
           this._trackFailedAuth(username);
           return json({ error: "invalid credentials" }, 401);
@@ -769,10 +1209,7 @@ export class GameRoomV3 {
             // Migrate to PBKDF2
             const newSalt = generateSalt();
             const newHash = await pbkdf2Hash(password, newSalt);
-            this.sql.exec(
-              "UPDATE users SET password_hash = ?, salt = ? WHERE username = ?",
-              newHash, newSalt, username
-            );
+            await this._putUser({ ...row, password_hash: newHash, salt: newSalt });
           }
         }
 
@@ -783,21 +1220,19 @@ export class GameRoomV3 {
 
         // Success — clear rate limit counter and update last_login
         this.authAttempts.delete(username);
-        this.sql.exec("UPDATE users SET last_login = ? WHERE username = ?", new Date().toISOString(), username);
-        const userRole = this.sql.exec("SELECT role FROM users WHERE username = ?", username).toArray()[0]?.role || 'user';
+        await this._putUser({ ...row, last_login: new Date().toISOString() });
         const token = await signUserToken(username, new URL(request.url).origin, this.env.RELAY_SECRET);
-        return json({ ok: true, username, token, role: userRole });
+        return json({ ok: true, username, token, role: row.role || 'user' });
       }
 
       // GET /auth/me — get current user info (including role)
       if (url.pathname === "/auth/me" && request.method === "GET") {
         const user = await this.authUser(request);
         if (!user) return json({ error: "auth required" }, 401);
-        const row = this.sql.exec(
-          "SELECT username, email, role, created, last_login FROM users WHERE username = ?", user
-        ).toArray()[0];
+        const row = await this._getUser(user);
         if (!row) return json({ error: "user not found" }, 404);
-        return json({ ok: true, ...row });
+        const { password_hash, salt, ...safe } = row;
+        return json({ ok: true, ...safe });
       }
 
       // POST /auth/refresh — issue a fresh token (extends session)
@@ -813,16 +1248,16 @@ export class GameRoomV3 {
         const user = await this.authUser(request);
         if (!user) return json({ error: "auth required" }, 401);
         if (!this.env.RELAY_SECRET) return json({ error: "encryption not configured" }, 503);
-        const rows = this.sql.exec(
-          "SELECT key, value, updated FROM user_secrets WHERE username = ?", user
-        ).toArray();
+        const keys = await this._getSecretKeys(user);
         const secrets = [];
-        for (const row of rows) {
+        for (const key of keys) {
+          const s = await this._getSecret(user, key);
+          if (!s) continue;
           try {
-            const val = await decryptSecret(row.value, this.env.RELAY_SECRET, user);
-            secrets.push({ key: row.key, value: val, updated: row.updated });
+            const val = await decryptSecret(s.value, this.env.RELAY_SECRET, user);
+            secrets.push({ key, value: val, updated: s.updated });
           } catch (_) {
-            secrets.push({ key: row.key, value: null, updated: row.updated, error: 'decrypt failed' });
+            secrets.push({ key, value: null, updated: s.updated, error: 'decrypt failed' });
           }
         }
         return json(secrets);
@@ -840,11 +1275,7 @@ export class GameRoomV3 {
         const value = String(body.value || '');
         if (!value) return json({ error: "value required" }, 400);
         const encrypted = await encryptSecret(value, this.env.RELAY_SECRET, user);
-        const updated = new Date().toISOString();
-        this.sql.exec(
-          "INSERT OR REPLACE INTO user_secrets (username, key, value, updated) VALUES (?, ?, ?, ?)",
-          user, key, encrypted, updated
-        );
+        await this._putSecret(user, key, encrypted, new Date().toISOString());
         return json({ ok: true, key });
       }
 
@@ -854,7 +1285,7 @@ export class GameRoomV3 {
         const user = await this.authUser(request);
         if (!user) return json({ error: "auth required" }, 401);
         const key = decodeURIComponent(authSecretDel[1]);
-        this.sql.exec("DELETE FROM user_secrets WHERE username = ? AND key = ?", user, key);
+        await this._deleteSecret(user, key);
         return json({ ok: true, deleted: key });
       }
 
@@ -864,27 +1295,19 @@ export class GameRoomV3 {
       if (url.pathname === "/admin/users" && request.method === "GET") {
         const user = await this.authUser(request);
         if (!user) return json({ error: "auth required" }, 401);
-        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
-        if (role !== 'admin') return json({ error: "admin required" }, 403);
-        const rows = this.sql.exec(
-          "SELECT username, email, role, created, last_login FROM users ORDER BY created ASC"
-        ).toArray();
-        return json(rows);
+        if (await this._getUserRole(user) !== 'admin') return json({ error: "admin required" }, 403);
+        const index = await this._getUsersIndex();
+        index.sort((a, b) => (a.created || '').localeCompare(b.created || ''));
+        return json(index);
       }
 
       // GET /admin/games — list all games (external + internal) with owner info + high scores
       if (url.pathname === "/admin/games" && request.method === "GET") {
         const user = await this.authUser(request);
         if (!user) return json({ error: "auth required" }, 401);
-        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
-        if (role !== 'admin') return json({ error: "admin required" }, 403);
-        const external = this.sql.exec(
-          `SELECT g.content_hash, g.name, g.size, g.updated, g.owner, g.game_id, g.scope, g.version, g.forked_from_hash, g.published,
-                  s.score AS highscore, s.player AS highscore_player
-           FROM games g
-           LEFT JOIN scores s ON s.game_hash = g.content_hash
-           ORDER BY g.owner ASC, g.name ASC`
-        ).toArray();
+        if (await this._getUserRole(user) !== 'admin') return json({ error: "admin required" }, 403);
+        const index = await this._getGamesIndex();
+        const external = index.sort((a, b) => `${a.owner}/${a.name}`.localeCompare(`${b.owner}/${b.name}`));
         return json({ external, internal: [] });
       }
 
@@ -892,28 +1315,17 @@ export class GameRoomV3 {
       if (url.pathname === "/admin/stats" && request.method === "GET") {
         const user = await this.authUser(request);
         if (!user) return json({ error: "auth required" }, 401);
-        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
-        if (role !== 'admin') return json({ error: "admin required" }, 403);
+        if (await this._getUserRole(user) !== 'admin') return json({ error: "admin required" }, 403);
 
-        const totalGames = this.sql.exec("SELECT COUNT(*) AS n FROM games").toArray()[0]?.n || 0;
-        const internalGames = this.sql.exec("SELECT COUNT(*) AS n FROM games WHERE scope = 'internal'").toArray()[0]?.n || 0;
-        const externalGames = this.sql.exec("SELECT COUNT(*) AS n FROM games WHERE scope = 'external'").toArray()[0]?.n || 0;
-        const publishedGames = this.sql.exec("SELECT COUNT(*) AS n FROM games WHERE published = 1").toArray()[0]?.n || 0;
-        const draftGames = this.sql.exec("SELECT COUNT(*) AS n FROM games WHERE published != 1").toArray()[0]?.n || 0;
-
-        const totalGameContentBytes = this.sql.exec("SELECT COALESCE(SUM(size), 0) AS n FROM games").toArray()[0]?.n || 0;
-        const totalResourceRows = this.sql.exec("SELECT COUNT(*) AS n FROM resource_cache").toArray()[0]?.n || 0;
-        const totalResourceBytes = this.sql.exec("SELECT COALESCE(SUM(LENGTH(value)), 0) AS n FROM resource_cache").toArray()[0]?.n || 0;
-
-        const users = this.sql.exec("SELECT COUNT(*) AS n FROM users").toArray()[0]?.n || 0;
-        const highScores = this.sql.exec("SELECT COUNT(*) AS n FROM scores").toArray()[0]?.n || 0;
-
-        const pageCount = this.sql.exec("PRAGMA page_count").toArray()[0]?.page_count || 0;
-        const pageSize = this.sql.exec("PRAGMA page_size").toArray()[0]?.page_size || 0;
-        const dbApproxBytes = pageCount * pageSize;
-
+        const index = await this._getGamesIndex();
+        const externalGames = index.filter(g => g.scope === 'external').length;
+        const internalGames = index.filter(g => g.scope === 'internal').length;
+        const publishedGames = index.filter(g => g.published).length;
+        const draftGames = index.filter(g => !g.published).length;
+        const totalGameContentBytes = index.reduce((s, g) => s + (g.size || 0), 0);
+        const usersIndex = await this._getUsersIndex();
+        const scores = await this._getAllScores();
         const externalPoolLimit = this.getExternalPoolLimit();
-        const externalOverLimit = Math.max(0, Number(externalGames) - Number(externalPoolLimit));
 
         return json({
           ok: true,
@@ -923,27 +1335,21 @@ export class GameRoomV3 {
             auth_rate_limit_entries: this.authAttempts.size,
           },
           games: {
-            total: totalGames,
+            total: index.length,
             internal: internalGames,
             external: externalGames,
             published: publishedGames,
             draft: draftGames,
             external_pool_limit: externalPoolLimit,
-            external_over_limit: externalOverLimit,
+            external_over_limit: Math.max(0, externalGames - externalPoolLimit),
             content_bytes_total: totalGameContentBytes,
           },
-          resources: {
-            cached_rows: totalResourceRows,
-            cached_bytes_total: totalResourceBytes,
-          },
-          users: {
-            total: users,
-            highscore_rows: highScores,
-          },
+          resources: { cached_rows: 0, cached_bytes_total: 0 },
+          users: { total: usersIndex.length, highscore_rows: scores.length },
           storage: {
-            sqlite_page_count: pageCount,
-            sqlite_page_size: pageSize,
-            sqlite_db_bytes_approx: dbApproxBytes,
+            sqlite_page_count: 0,
+            sqlite_page_size: 0,
+            sqlite_db_bytes_approx: 0,
           },
         });
       }
@@ -953,13 +1359,11 @@ export class GameRoomV3 {
       if (adminUserDelete && request.method === "DELETE") {
         const user = await this.authUser(request);
         if (!user) return json({ error: "auth required" }, 401);
-        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
-        if (role !== 'admin') return json({ error: "admin required" }, 403);
+        if (await this._getUserRole(user) !== 'admin') return json({ error: "admin required" }, 403);
         const target = decodeURIComponent(adminUserDelete[1]);
         if (target === user) return json({ error: "cannot delete yourself" }, 400);
-        const exists = this.sql.exec("SELECT username FROM users WHERE username = ?", target).toArray()[0];
-        if (!exists) return json({ error: "user not found" }, 404);
-        this.sql.exec("DELETE FROM users WHERE username = ?", target);
+        if (!(await this._getUser(target))) return json({ error: "user not found" }, 404);
+        await this._deleteUser(target);
         return json({ ok: true, deleted: target });
       }
 
@@ -968,23 +1372,22 @@ export class GameRoomV3 {
       if (adminUserEdit && request.method === "PUT") {
         const user = await this.authUser(request);
         if (!user) return json({ error: "auth required" }, 401);
-        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
+        const role = await this._getUserRole(user);
         if (role !== 'admin') return json({ error: "admin required" }, 403);
         const target = decodeURIComponent(adminUserEdit[1]);
         const body = await request.json().catch(() => ({}));
-        const exists = this.sql.exec("SELECT username FROM users WHERE username = ?", target).toArray()[0];
+        const exists = await this._getUser(target);
         if (!exists) return json({ error: "user not found" }, 404);
-        if (body.role && ['user', 'admin'].includes(body.role)) {
-          this.sql.exec("UPDATE users SET role = ? WHERE username = ?", body.role, target);
-        }
-        if (body.email && typeof body.email === 'string' && body.email.includes('@')) {
-          this.sql.exec("UPDATE users SET email = ? WHERE username = ?", body.email, target);
-        }
+        const updated = { ...exists };
+        if (body.role && ['user', 'admin'].includes(body.role)) updated.role = body.role;
+        if (body.email && typeof body.email === 'string' && body.email.includes('@')) updated.email = body.email;
         if (body.password && typeof body.password === 'string' && body.password.length >= 4) {
           const newSalt = crypto.randomUUID();
           const newHash = await pbkdf2Hash(body.password, newSalt);
-          this.sql.exec("UPDATE users SET password_hash = ?, salt = ? WHERE username = ?", newHash, newSalt, target);
+          updated.password_hash = newHash;
+          updated.salt = newSalt;
         }
+        await this._putUser(updated);
         return json({ ok: true, updated: target });
       }
 
@@ -993,12 +1396,10 @@ export class GameRoomV3 {
       if (adminGameDelete && request.method === "DELETE") {
         const user = await this.authUser(request);
         if (!user) return json({ error: "auth required" }, 401);
-        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
-        if (role !== 'admin') return json({ error: "admin required" }, 403);
+        if (await this._getUserRole(user) !== 'admin') return json({ error: "admin required" }, 403);
         const hash = decodeURIComponent(adminGameDelete[1]);
-        const ext = this.sql.exec("SELECT content_hash FROM games WHERE content_hash = ?", hash).toArray()[0];
-        if (!ext) return json({ error: "game not found" }, 404);
-        this.sql.exec("DELETE FROM games WHERE content_hash = ?", hash);
+        if (!(await this._getGame(hash))) return json({ error: "game not found" }, 404);
+        await this._deleteGame(hash);
         this.broadcast(JSON.stringify({ type: 'game-deleted', content_hash: hash }));
         return json({ ok: true, deleted: hash });
       }
@@ -1008,15 +1409,14 @@ export class GameRoomV3 {
       if (adminGameAssign && request.method === "PUT") {
         const user = await this.authUser(request);
         if (!user) return json({ error: "auth required" }, 401);
-        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
-        if (role !== 'admin') return json({ error: "admin required" }, 403);
+        if (await this._getUserRole(user) !== 'admin') return json({ error: "admin required" }, 403);
         const hash = decodeURIComponent(adminGameAssign[1]);
         const body = await request.json().catch(() => ({}));
         const newOwner = (body.owner || '').trim();
         if (!newOwner) return json({ error: "owner required" }, 400);
-        const ext = this.sql.exec("SELECT content_hash FROM games WHERE content_hash = ?", hash).toArray()[0];
-        if (!ext) return json({ error: "game not found" }, 404);
-        this.sql.exec("UPDATE games SET owner = ? WHERE content_hash = ?", newOwner, hash);
+        const game = await this._getGame(hash);
+        if (!game) return json({ error: "game not found" }, 404);
+        await this._putGame({ ...game, owner: newOwner });
         return json({ ok: true, hash, owner: newOwner });
       }
 
@@ -1025,12 +1425,14 @@ export class GameRoomV3 {
       if (adminUserSecrets && request.method === "GET") {
         const user = await this.authUser(request);
         if (!user) return json({ error: "auth required" }, 401);
-        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
-        if (role !== 'admin') return json({ error: "admin required" }, 403);
+        if (await this._getUserRole(user) !== 'admin') return json({ error: "admin required" }, 403);
         const target = decodeURIComponent(adminUserSecrets[1]);
-        const rows = this.sql.exec(
-          "SELECT key, updated FROM user_secrets WHERE username = ?", target
-        ).toArray();
+        const keys = await this._getSecretKeys(target);
+        const rows = [];
+        for (const key of keys) {
+          const s = await this._getSecret(target, key);
+          if (s) rows.push({ key, updated: s.updated });
+        }
         return json(rows);
       }
 
@@ -1039,8 +1441,7 @@ export class GameRoomV3 {
       if (adminUserSecretPut && request.method === "PUT") {
         const user = await this.authUser(request);
         if (!user) return json({ error: "auth required" }, 401);
-        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
-        if (role !== 'admin') return json({ error: "admin required" }, 403);
+        if (await this._getUserRole(user) !== 'admin') return json({ error: "admin required" }, 403);
         if (!this.env.RELAY_SECRET) return json({ error: "encryption not configured" }, 503);
         const target = decodeURIComponent(adminUserSecretPut[1]);
         const key = decodeURIComponent(adminUserSecretPut[2]);
@@ -1049,11 +1450,7 @@ export class GameRoomV3 {
         const value = String(body.value || '');
         if (!value) return json({ error: "value required" }, 400);
         const encrypted = await encryptSecret(value, this.env.RELAY_SECRET, target);
-        const updated = new Date().toISOString();
-        this.sql.exec(
-          "INSERT OR REPLACE INTO user_secrets (username, key, value, updated) VALUES (?, ?, ?, ?)",
-          target, key, encrypted, updated
-        );
+        await this._putSecret(target, key, encrypted, new Date().toISOString());
         return json({ ok: true, username: target, key });
       }
 
@@ -1062,11 +1459,10 @@ export class GameRoomV3 {
       if (adminUserSecretDel && request.method === "DELETE") {
         const user = await this.authUser(request);
         if (!user) return json({ error: "auth required" }, 401);
-        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
-        if (role !== 'admin') return json({ error: "admin required" }, 403);
+        if (await this._getUserRole(user) !== 'admin') return json({ error: "admin required" }, 403);
         const target = decodeURIComponent(adminUserSecretDel[1]);
         const key = decodeURIComponent(adminUserSecretDel[2]);
-        this.sql.exec("DELETE FROM user_secrets WHERE username = ? AND key = ?", target, key);
+        await this._deleteSecret(target, key);
         return json({ ok: true, username: target, deleted: key });
       }
 
@@ -1081,56 +1477,40 @@ export class GameRoomV3 {
 
       // GET /games — list all published games (with high score)
       if (url.pathname === "/games" && request.method === "GET") {
-        const rows = this.sql.exec(
-          `SELECT g.content_hash, g.name, g.size, g.updated, g.owner, g.game_id, g.scope, g.version, g.checksum, g.resources,
-                  s.score AS highscore, s.player AS highscore_player
-           FROM games g
-           LEFT JOIN scores s ON s.game_hash = g.content_hash
-           WHERE g.published = 1
-           ORDER BY g.name ASC`
-        ).toArray().map((r) => this.normalizeExternalGameRow(r));
+        const index = await this._getGamesIndex();
+        const rows = index.filter(g => g.published).map(r => this.normalizeExternalGameRow(r));
+        rows.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
         return json(rows);
       }
 
       // GET /games.toml — export published game manifests as TOML
       if (url.pathname === '/games.toml' && request.method === 'GET') {
-        const rows = this.sql.exec(
-          "SELECT content_hash, name, size, updated, owner, game_id, version, checksum FROM games WHERE published = 1 ORDER BY owner ASC, game_id ASC"
-        ).toArray().map((r) => this.normalizeExternalGameRow(r));
-        const out = rows.map((g) => {
-          return [
-            '[[game]]',
-            `id = "${g.owner}/${g.game_id}"`,
-            `name = "${String(g.name || '').replace(/"/g, '\\"')}"`,
-            `owner = "${g.owner}"`,
-            `game_id = "${g.game_id}"`,
-            `version = "${g.version || ''}"`,
-            `checksum = "${g.checksum || g.content_hash}"`,
-            `content_hash = "${g.content_hash}"`,
-            `published = true`,
-            `size = ${Number(g.size || 0)}`,
-            `updated = "${g.updated}"`,
-          ].join('\n');
-        }).join('\n\n');
-        return new Response(out, {
-          status: 200,
-          headers: { 'Content-Type': 'text/plain; charset=utf-8', ...cors() }
-        });
+        const index = await this._getGamesIndex();
+        const rows = index.filter(g => g.published).map(r => this.normalizeExternalGameRow(r));
+        rows.sort((a, b) => `${a.owner}/${a.game_id}`.localeCompare(`${b.owner}/${b.game_id}`));
+        const out = rows.map((g) => [
+          '[[game]]',
+          `id = "${g.owner}/${g.game_id}"`,
+          `name = "${String(g.name || '').replace(/"/g, '\\"')}"`,
+          `owner = "${g.owner}"`,
+          `game_id = "${g.game_id}"`,
+          `version = "${g.version || ''}"`,
+          `checksum = "${g.checksum || g.content_hash}"`,
+          `content_hash = "${g.content_hash}"`,
+          `published = true`,
+          `size = ${Number(g.size || 0)}`,
+          `updated = "${g.updated}"`,
+        ].join('\n')).join('\n\n');
+        return new Response(out, { status: 200, headers: { 'Content-Type': 'text/plain; charset=utf-8', ...cors() } });
       }
 
       // GET /internal/games — list authenticated user's games (with high score)
       if (url.pathname === "/internal/games" && request.method === "GET") {
         const user = await this.authUser(request);
         if (!user) return json({ error: "auth required" }, 401);
-        const rows = this.sql.exec(
-            `SELECT g.owner, g.game_id, g.name, g.content_hash, g.checksum, g.version, g.size, g.updated, g.forked_from_hash, g.scope, g.published,
-                  s.score AS highscore, s.player AS highscore_player
-           FROM games g
-           LEFT JOIN scores s ON s.game_hash = g.content_hash
-           WHERE g.owner = ?
-           ORDER BY g.updated DESC`,
-          user
-        ).toArray();
+        const index = await this._getGamesIndex();
+        const rows = index.filter(g => g.owner === user);
+        rows.sort((a, b) => b.updated.localeCompare(a.updated));
         return json(rows);
       }
 
@@ -1143,7 +1523,7 @@ export class GameRoomV3 {
         if (!gameId) return json({ error: 'missing game id' }, 400);
         const body = await request.json().catch(() => ({}));
 
-        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
+        const role = await this._getUserRole(user);
         const requestedOwner = normalizeSlug(
           request.headers.get('X-Game-Owner') || body.owner || user,
           user
@@ -1151,23 +1531,17 @@ export class GameRoomV3 {
         const owner = requestedOwner || user;
         if (owner !== user && role !== 'admin') return json({ error: 'forbidden' }, 403);
 
-        const row = this.sql.exec(
-          "SELECT published, content_hash FROM games WHERE owner = ? AND game_id = ?",
-          owner, gameId
-        ).toArray()[0];
+        const row = await this._getGameByOwnerGameId(owner, gameId);
         if (!row) return json({ error: 'not found' }, 404);
         const explicit = (typeof body.published === 'boolean') ? (body.published ? 1 : 0) : null;
         const newVal = (explicit === null) ? (row.published ? 0 : 1) : explicit;
-        this.sql.exec("UPDATE games SET published = ? WHERE owner = ? AND game_id = ?", newVal, owner, gameId);
+        await this._putGame({ ...row, published: newVal });
         if (newVal === 0) {
           // Notify clients to remove unpublished game from their catalog
           this.broadcast(JSON.stringify({ type: 'game-deleted', content_hash: row.content_hash }));
         } else {
           // Re-broadcast the game to all clients
-          const full = this.sql.exec(
-            "SELECT content_hash, name, content, updated, owner, game_id, scope, version, checksum, resources FROM games WHERE owner = ? AND game_id = ?",
-            owner, gameId
-          ).toArray()[0];
+          const full = await this._getGame(row.content_hash);
           if (full) {
             const norm = this.normalizeExternalGameRow(full, true);
             this.broadcast(JSON.stringify({ type: 'sync', games: [norm] }));
@@ -1190,13 +1564,10 @@ export class GameRoomV3 {
 
         const body = await request.json().catch(() => ({}));
         const requestedOwner = normalizeSlug(body.owner || user, user);
-        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
+        const role = await this._getUserRole(user);
         if (requestedOwner !== user && role !== 'admin') return json({ error: 'forbidden' }, 403);
 
-        const row = this.sql.exec(
-          "SELECT content_hash, name, content, updated, size, owner, game_id, version, checksum, resources FROM games WHERE owner = ? AND game_id = ?",
-          requestedOwner, gameId
-        ).toArray()[0];
+        const row = await this._getGameByOwnerGameId(requestedOwner, gameId);
         if (!row) return json({ error: 'game not found' }, 404);
 
         try {
@@ -1215,9 +1586,7 @@ export class GameRoomV3 {
         const sourceHash = String(body.source_hash || '').trim();
         if (!sourceHash) return json({ error: "source_hash required" }, 400);
 
-        const src = this.sql.exec(
-          "SELECT content_hash, name, content, resources, checksum FROM games WHERE content_hash = ?", sourceHash
-        ).toArray()[0];
+        const src = await this._getGame(sourceHash);
         if (!src) return json({ error: "source game not found" }, 404);
 
         const gameId = this.deriveGameId(src.name, body.game_id);
@@ -1227,15 +1596,14 @@ export class GameRoomV3 {
         const updated = new Date().toISOString();
         const size = src.content.length;
 
-        this.sql.exec("DELETE FROM games WHERE owner = ? AND game_id = ?", user, gameId);
-        this.sql.exec(
-          `INSERT INTO games
-           (content_hash, name, content, updated, size, owner, game_id, scope, version, checksum, resources, forked_from_hash)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'internal', ?, ?, ?, ?)`,
-          checksum, String(body.name || src.name).slice(0, 100), src.content,
-          updated, size, user, gameId, version, checksum, encodeResourcesField(srcResources), sourceHash
-        );
-        this.cacheResourcesForGame(checksum, srcResources);
+        const prevFork = await this._getGameByOwnerGameId(user, gameId);
+        if (prevFork) await this._deleteGame(prevFork.content_hash);
+        await this._putGame({
+          content_hash: checksum, name: String(body.name || src.name).slice(0, 100), content: src.content,
+          updated, size, owner: user, game_id: gameId, scope: 'internal', version,
+          checksum, resources: encodeResourcesField(srcResources), forked_from_hash: sourceHash, published: 0,
+        });
+        await this._putResources(checksum, srcResources);
         return json({ ok: true, owner: user, game_id: gameId, forked_from_hash: sourceHash, checksum, version });
       }
 
@@ -1243,21 +1611,17 @@ export class GameRoomV3 {
       if (url.pathname.startsWith("/game/") && request.method === "GET") {
         const hash = url.pathname.slice(6);
         if (!hash) return json({ error: "missing hash" }, 400);
-        const rows = this.sql.exec(
-          "SELECT content_hash, name, content, updated, owner, game_id, scope, version, checksum, resources FROM games WHERE content_hash = ?", hash
-        ).toArray().map((r) => this.normalizeExternalGameRow(r, true));
-        if (rows.length === 0) return json({ error: "not found" }, 404);
-        return json(rows[0]);
+        const row = await this._getGame(hash);
+        if (!row) return json({ error: "not found" }, 404);
+        return json(this.normalizeExternalGameRow(row, true));
       }
 
       // PUT /game/:hash — update game content, broadcast to all connected clients
       if (url.pathname.startsWith("/game/") && request.method === "PUT") {
         const hash = url.pathname.slice(6);
         if (!hash) return json({ error: "missing hash" }, 400);
-        const existing = this.sql.exec(
-          "SELECT content_hash, name, resources FROM games WHERE content_hash = ?", hash
-        ).toArray();
-        if (existing.length === 0) return json({ error: "not found" }, 404);
+        const existing = await this._getGame(hash);
+        if (!existing) return json({ error: "not found" }, 404);
 
         const body = await request.json();
         const content = body.content;
@@ -1284,36 +1648,30 @@ export class GameRoomV3 {
         const version = String(body.version || makeReleaseVersion());
         const updated = new Date().toISOString();
 
-        this.sql.exec("DELETE FROM games WHERE name = ? AND scope = 'external'", name.slice(0, 100));
-        this.sql.exec("DELETE FROM games WHERE owner = ? AND game_id = ? AND scope = 'external'", owner, gameId);
-
-        // Delete old row, insert with new hash
-        this.sql.exec("DELETE FROM games WHERE content_hash = ?", hash);
-        this.sql.exec(
-          `INSERT INTO games
-           (content_hash, name, content, updated, size, owner, game_id, scope, version, checksum, resources)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'external', ?, ?, ?)` ,
-          newHash, name.slice(0, 100), content, updated, size,
-          owner, gameId, version, newHash, encodeResourcesField(incomingResources)
-        );
-        this.cacheResourcesForGame(newHash, incomingResources);
-        this.trimExternalPool();
+        // Delete old row and any duplicates by name/owner+gameId in external scope
+        await this._deleteGame(hash);
+        const curIndex = await this._getGamesIndex();
+        for (const g of curIndex.filter(g => g.name === name.slice(0, 100) && g.scope === 'external' && g.content_hash !== newHash)) {
+          await this._deleteGame(g.content_hash);
+        }
+        for (const g of (await this._getGamesIndex()).filter(g => g.owner === owner && g.game_id === gameId && g.scope === 'external' && g.content_hash !== newHash)) {
+          await this._deleteGame(g.content_hash);
+        }
+        await this._putGame({
+          content_hash: newHash, name: name.slice(0, 100), content, updated, size,
+          owner, game_id: gameId, scope: 'external', version, checksum: newHash,
+          resources: encodeResourcesField(incomingResources), published: 1,
+        });
+        await this._putResources(newHash, incomingResources);
+        await this.trimExternalPool();
 
         // Broadcast updated game to all connected WebSocket clients
         const msg = JSON.stringify({
           type: 'sync',
           games: [{
-            content_hash: newHash,
-            checksum: newHash,
-            owner,
-            game_id: gameId,
-            scope: 'external',
-            version,
-            name: name.slice(0, 100),
-            content,
-              resources: incomingResources,
-            resource_paths: paths,
-            updated
+            content_hash: newHash, checksum: newHash, owner, game_id: gameId,
+            scope: 'external', version, name: name.slice(0, 100), content,
+            resources: incomingResources, resource_paths: paths, updated,
           }]
         });
         for (const sock of this.state.getWebSockets()) {
@@ -1325,17 +1683,15 @@ export class GameRoomV3 {
 
       // GET /scores — all high scores
       if (url.pathname === "/scores" && request.method === "GET") {
-        const rows = this.sql.exec("SELECT game_hash, score, player, updated FROM scores").toArray();
-        return json(rows);
+        return json(await this._getAllScores());
       }
 
       // DELETE /game/:hash — remove a game
       if (url.pathname.startsWith("/game/") && request.method === "DELETE") {
         const hash = url.pathname.slice(6);
         if (!hash) return json({ error: "missing hash" }, 400);
-        const exists = this.sql.exec("SELECT 1 FROM games WHERE content_hash = ?", hash).toArray();
-        if (exists.length === 0) return json({ error: "not found" }, 404);
-        this.sql.exec("DELETE FROM games WHERE content_hash = ?", hash);
+        if (!(await this._getGame(hash))) return json({ error: "not found" }, 404);
+        await this._deleteGame(hash);
         return json({ ok: true, deleted: hash });
       }
 
@@ -1354,11 +1710,8 @@ export class GameRoomV3 {
         const version = String(body.version || makeReleaseVersion());
         const updated = new Date().toISOString();
 
-        const prev = this.sql.exec(
-          "SELECT resources, forked_from_hash, published, checksum, content_hash, scope FROM games WHERE owner = ? AND game_id = ?",
-          user, gameId
-        ).toArray()[0];
-        const prevResources = parseResourcesField(prev && prev.resources);
+        const prev = await this._getGameByOwnerGameId(user, gameId);
+        const prevResources = parseResourcesField(prev?.resources);
         const resourcesMap = (body.resources === undefined)
           ? prevResources
           : parseResourcesField(body.resources);
@@ -1372,16 +1725,16 @@ export class GameRoomV3 {
         const nextPublished = prevPublished;
         const nextScope = String(body.scope || (prev && prev.scope) || 'internal').trim().toLowerCase() === 'external' ? 'external' : 'internal';
 
-        this.sql.exec("DELETE FROM games WHERE owner = ? AND game_id = ?", user, gameId);
-        this.sql.exec(
-          `INSERT INTO games
-           (content_hash, name, content, updated, size, owner, game_id, scope, version, checksum, resources, forked_from_hash, published)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          checksum, name, content, updated, size, user, gameId, nextScope, version, checksum,
-          encodeResourcesField(resourcesMap), (prev && prev.forked_from_hash) || null, nextPublished
-        );
-        this.cacheResourcesForGame(checksum, resourcesMap);
-        this.trimExternalPool();
+        if (prev) await this._deleteGame(prev.content_hash);
+        await this._putGame({
+          content_hash: checksum, name, content, updated, size, owner: user, game_id: gameId,
+          scope: nextScope, version, checksum,
+          resources: encodeResourcesField(resourcesMap),
+          forked_from_hash: (prev?.forked_from_hash) || null,
+          published: nextPublished,
+        });
+        await this._putResources(checksum, resourcesMap);
+        await this.trimExternalPool();
 
         // Publish state is authoritative on the private row itself.
         // Content edits do not implicitly change published/draft.
@@ -1417,15 +1770,10 @@ export class GameRoomV3 {
         const gameId = normalizeSlug(url.pathname.slice('/internal/game/'.length), '');
         if (!gameId) return json({ error: 'missing game id' }, 400);
         const owner = url.searchParams.get('owner') || user;
-        const row = this.sql.exec(
-          "SELECT owner, game_id, name, content, content_hash, checksum, version, resources, size, updated, forked_from_hash FROM games WHERE owner = ? AND game_id = ?",
-          owner, gameId
-        ).toArray()[0];
+        const row = await this._getGameByOwnerGameId(owner, gameId);
         if (!row) return json({ error: 'not found' }, 404);
         const resources = parseResourcesField(row.resources);
-        row.resource_paths = Object.keys(resources).sort();
-        row.resources = resources;
-        return json(row);
+        return json({ ...row, resource_paths: Object.keys(resources).sort(), resources });
       }
 
       // DELETE /internal/game/:gameId — delete authenticated user's game
@@ -1435,11 +1783,11 @@ export class GameRoomV3 {
         const gameId = normalizeSlug(url.pathname.slice('/internal/game/'.length), '');
         if (!gameId) return json({ error: 'missing game id' }, 400);
         const owner = url.searchParams.get('owner') || user;
-        const role = this.sql.exec("SELECT role FROM users WHERE username = ?", user).toArray()[0]?.role;
+        const role = await this._getUserRole(user);
         if (owner !== user && role !== 'admin') return json({ error: 'forbidden' }, 403);
-        const exists = this.sql.exec("SELECT 1 FROM games WHERE owner = ? AND game_id = ?", owner, gameId).toArray()[0];
-        if (!exists) return json({ error: 'not found' }, 404);
-        this.sql.exec("DELETE FROM games WHERE owner = ? AND game_id = ?", owner, gameId);
+        const row = await this._getGameByOwnerGameId(owner, gameId);
+        if (!row) return json({ error: 'not found' }, 404);
+        await this._deleteGame(row.content_hash);
         return json({ ok: true, deleted: gameId });
       }
 
@@ -1449,14 +1797,12 @@ export class GameRoomV3 {
     // ── WebSocket upgrade ──
     const pair = new WebSocketPair();
     this.state.acceptWebSocket(pair[1]);
-
-    // Send catalog (hashes only) to the new client — only published games
-    const rows = this.sql.exec("SELECT content_hash FROM games WHERE published = 1").toArray();
-    const hashes = rows.map(r => r.content_hash);
+    const index = await this._getGamesIndex();
+    const hashes = index.filter(g => g.published).map(g => g.content_hash);
     pair[1].send(JSON.stringify({ type: 'catalog', hashes }));
 
     // Send all high scores to the new client
-    const scoreRows = this.sql.exec("SELECT game_hash, score, player FROM scores").toArray();
+    const scoreRows = await this._getAllScores();
     if (scoreRows.length > 0) {
       pair[1].send(JSON.stringify({ type: 'scores', scores: scoreRows }));
     }
@@ -1472,16 +1818,13 @@ export class GameRoomV3 {
       case 'need': {
         // Client wants full content for specific hashes
         if (!Array.isArray(data.hashes) || data.hashes.length === 0) return;
-        // Limit to 50 at a time
         const wanted = data.hashes.slice(0, 50);
-        const ph = wanted.map(() => '?').join(',');
-        const rows = this.sql.exec(
-          `SELECT content_hash, name, content, updated, owner, game_id, scope, version, checksum, resources FROM games WHERE content_hash IN (${ph}) AND published = 1`,
-          ...wanted
-        ).toArray().map((r) => this.normalizeExternalGameRow(r, true));
-        if (rows.length > 0) {
-          ws.send(JSON.stringify({ type: 'games', games: rows }));
+        const gameRows = [];
+        for (const h of wanted) {
+          const row = await this._getGame(h);
+          if (row && row.published) gameRows.push(this.normalizeExternalGameRow(row, true));
         }
+        if (gameRows.length > 0) ws.send(JSON.stringify({ type: 'games', games: gameRows }));
         break;
       }
 
@@ -1499,38 +1842,20 @@ export class GameRoomV3 {
         const player = (typeof data.player === 'string' ? data.player : '').slice(0, 50);
 
         // Only store if it's higher than existing (or same score adding player info)
-        const existing = this.sql.exec(
-          "SELECT score, player FROM scores WHERE game_hash = ?", data.game_hash
-        ).toArray();
-
-        if (existing.length > 0) {
-          const dominated = incoming < existing[0].score ||
-            (incoming === existing[0].score && (!player || existing[0].player));
+        const existing = await this._getScore(data.game_hash);
+        if (existing) {
+          const dominated = incoming < existing.score ||
+            (incoming === existing.score && (!player || existing.player));
           if (dominated) {
-            ws.send(JSON.stringify({
-              type: 'score-update',
-              game_hash: data.game_hash,
-              score: existing[0].score,
-              player: existing[0].player || ''
-            }));
+            ws.send(JSON.stringify({ type: 'score-update', game_hash: data.game_hash, score: existing.score, player: existing.player || '' }));
             return;
           }
         }
 
-        const updated = new Date().toISOString();
-        this.sql.exec(
-          `INSERT INTO scores (game_hash, score, player, updated) VALUES (?, ?, ?, ?)
-           ON CONFLICT(game_hash) DO UPDATE SET score=excluded.score, player=excluded.player, updated=excluded.updated`,
-          data.game_hash, incoming, player, updated
-        );
+        await this._putScore(data.game_hash, incoming, player);
 
         // Broadcast new high score to ALL clients (including sender)
-        const msg = JSON.stringify({
-          type: 'score-update',
-          game_hash: data.game_hash,
-          score: incoming,
-          player
-        });
+        const msg = JSON.stringify({ type: 'score-update', game_hash: data.game_hash, score: incoming, player });
         for (const sock of this.state.getWebSockets()) {
           try { sock.send(msg); } catch (_) {}
         }
@@ -1550,12 +1875,9 @@ export class GameRoomV3 {
             const hash = String(item && item.game_hash || '').trim();
             const path = String(item && item.path || '').trim();
             if (!hash || !path) continue;
-            const row = this.sql.exec(
-              "SELECT value FROM resource_cache WHERE game_hash = ? AND path = ?",
-              hash, path
-            ).toArray()[0];
-            if (row && typeof row.value === 'string' && row.value) {
-              hits.push({ game_hash: hash, path, value: row.value });
+            const value = await this._getResource(hash, path);
+            if (value) {
+              hits.push({ game_hash: hash, path, value });
             } else {
               misses.push({ game_hash: hash, path });
             }
@@ -1595,7 +1917,7 @@ export class GameRoomV3 {
             grouped[hash][path] = value;
           }
           for (const hash of Object.keys(grouped)) {
-            this.cacheResourcesForGame(hash, grouped[hash]);
+            await this._putResources(hash, grouped[hash]);
           }
         }
         // Limit forwarded payload to ~900KB to stay under WS frame limits
@@ -1612,12 +1934,9 @@ export class GameRoomV3 {
         const hash = String(data.hash || '').trim();
         const nonce = String(data.nonce || '');
         if (!hash || !nonce) return;
-        const row = this.sql.exec(
-          "SELECT content_hash, name, content, updated, owner, game_id, scope, version, checksum, resources FROM games WHERE content_hash = ? AND published = 1",
-          hash
-        ).toArray()[0];
-        if (row && row.content) {
-          const norm = this.normalizeExternalGameRow(row, true);
+        const gameRow = await this._getGame(hash);
+        if (gameRow && gameRow.published && gameRow.content) {
+          const norm = this.normalizeExternalGameRow(gameRow, true);
           ws.send(JSON.stringify({ type: 'have-game', nonce, hash, name: norm.name || '', content: norm.content || '' }));
         } else {
           // Forward to all other clients
@@ -1648,8 +1967,10 @@ export class GameRoomV3 {
 }
 
 // Keep legacy class exports so existing DO dependencies can still load.
-export class GameRoomV2 extends GameRoomV3 {}
-export class GameRoom extends GameRoomV3 {}
+export class GameRoomV5 extends GameRoomV6 {}
+export class GameRoomV4 extends GameRoomV6 {}
+export class GameRoomV2 extends GameRoomV6 {}
+export class GameRoom extends GameRoomV6 {}
 
 // ── Main Worker ───────────────────────────────────────────────────────────────
 
@@ -1666,22 +1987,116 @@ export default {
       return new Response("ok", { headers: cors() });
     }
 
-    // Auth + config routes — handle at worker level by forwarding directly to GameRoomV3.
-    // This makes /auth/* work regardless of whether the client uses /sync/auth/* or /auth/*.
-    if (url.pathname.startsWith('/auth/') || url.pathname === '/config/github-catalog') {
-      const room = env.GAME_ROOM.get(env.GAME_ROOM.idFromName("global"));
-      try {
-        const doRes = await room.fetch(request);
-        if (!doRes.headers.get('Access-Control-Allow-Origin')) {
-          return new Response(doRes.body, {
-            status: doRes.status, statusText: doRes.statusText,
-            headers: { ...Object.fromEntries(doRes.headers.entries()), ...cors() },
-          });
-        }
-        return doRes;
-      } catch (e) {
-        return json({ error: "service temporarily unavailable" }, 503);
+    // Auth routes — handled directly in Worker using AUTH_KV (bypasses broken DO)
+    // Also handles /sync/auth/* (frontend uses these paths)
+    if (url.pathname.startsWith('/auth/') || url.pathname.startsWith('/sync/auth/') || url.pathname === '/config/github-catalog') {
+      if (!env.AUTH_KV) return json({ error: "auth storage not configured" }, 503);
+      if (!env.RELAY_SECRET) return json({ error: "RELAY_SECRET not configured" }, 503);
+
+      // Normalize /sync/auth/* → /auth/* for routing below
+      const authPath = url.pathname.startsWith('/sync/auth/')
+        ? url.pathname.slice(5)  // strip '/sync'
+        : url.pathname;
+
+      // KV helpers scoped to AUTH_KV
+      const kvGetUser = async (username) => {
+        return (await env.AUTH_KV.get(`user:${username}`, { type: 'json' })) || null;
+      };
+      const kvGetUserByEmail = async (email) => {
+        const username = await env.AUTH_KV.get(`user_email:${email.toLowerCase()}`);
+        if (!username) return null;
+        return kvGetUser(username);
+      };
+      const kvPutUser = async (row) => {
+        await env.AUTH_KV.put(`user:${row.username}`, JSON.stringify(row));
+        if (row.email) await env.AUTH_KV.put(`user_email:${row.email.toLowerCase()}`, row.username);
+        const rawIndex = await env.AUTH_KV.get('users:index', { type: 'json' });
+        const index = rawIndex || [];
+        const summary = { username: row.username, email: row.email, role: row.role, created: row.created, last_login: row.last_login };
+        const idx = index.findIndex(u => u.username === row.username);
+        if (idx >= 0) index[idx] = summary; else index.push(summary);
+        await env.AUTH_KV.put('users:index', JSON.stringify(index));
+      };
+      const kvAuthUser = async (req) => {
+        const authHeader = req.headers.get('Authorization') || '';
+        const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+        if (!token) return null;
+        const payload = await verifyUserToken(token, env.RELAY_SECRET);
+        return payload?.sub || null;
+      };
+
+      // POST /auth/register
+      if (authPath === '/auth/register' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const username = normalizeSlug(body.username || '', '');
+        const email = String(body.email || '').trim().toLowerCase();
+        const password = String(body.password || '');
+        if (!username || username.length < 3) return json({ error: "username must be at least 3 chars" }, 400);
+        if (!/^\S+@\S+\.\S+$/.test(email)) return json({ error: "invalid email" }, 400);
+        if (password.length < 6) return json({ error: "password must be at least 6 chars" }, 400);
+        const existUser = await kvGetUser(username);
+        const existEmail = await kvGetUserByEmail(email);
+        if (existUser || existEmail) return json({ error: "username or email already exists" }, 409);
+        const salt = generateSalt();
+        const hashed = await pbkdf2Hash(password, salt);
+        const created = new Date().toISOString();
+        await kvPutUser({ username, email, password_hash: hashed, salt, role: 'user', created, last_login: '' });
+        const token = await signUserToken(username, url.origin, env.RELAY_SECRET);
+        return json({ ok: true, username, token, role: 'user' });
       }
+
+      // POST /auth/login
+      if (authPath === '/auth/login' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const username = normalizeSlug(body.username || '', '');
+        const password = String(body.password || '');
+        if (!username || !password) return json({ error: "username and password required" }, 400);
+        const row = await kvGetUser(username);
+        if (!row) return json({ error: "invalid credentials" }, 401);
+        let valid = false;
+        if (row.salt) {
+          valid = (await pbkdf2Hash(password, row.salt)) === row.password_hash;
+        } else {
+          const hashed = await legacyPasswordHash(username, password, env.RELAY_SECRET);
+          valid = (hashed === row.password_hash);
+          if (valid) {
+            const newSalt = generateSalt();
+            const newHash = await pbkdf2Hash(password, newSalt);
+            await kvPutUser({ ...row, password_hash: newHash, salt: newSalt });
+          }
+        }
+        if (!valid) return json({ error: "invalid credentials" }, 401);
+        await kvPutUser({ ...row, last_login: new Date().toISOString() });
+        const token = await signUserToken(username, url.origin, env.RELAY_SECRET);
+        return json({ ok: true, username, token, role: row.role || 'user' });
+      }
+
+      // GET /auth/me
+      if (authPath === '/auth/me' && request.method === 'GET') {
+        const user = await kvAuthUser(request);
+        if (!user) return json({ error: "auth required" }, 401);
+        const row = await kvGetUser(user);
+        if (!row) return json({ error: "user not found" }, 404);
+        const { password_hash, salt, ...safe } = row;
+        return json({ ok: true, ...safe });
+      }
+
+      // POST /auth/refresh
+      if (authPath === '/auth/refresh' && request.method === 'POST') {
+        const user = await kvAuthUser(request);
+        if (!user) return json({ error: "auth required" }, 401);
+        const token = await signUserToken(user, url.origin, env.RELAY_SECRET);
+        return json({ ok: true, token, username: user });
+      }
+
+      // GET /config/github-catalog
+      if (authPath === '/config/github-catalog' && request.method === 'GET') {
+        const repo = env.GITHUB_REPO || '';
+        const catalogUrl = repo ? `https://raw.githubusercontent.com/${repo}/main/games/index.json` : null;
+        return json({ url: catalogUrl, repo: repo || null });
+      }
+
+      return json({ error: "not found" }, 404);
     }
 
     // POST /relay/register
@@ -1776,14 +2191,62 @@ export default {
 
     // /sync routes → global GameRoomV3
     if (url.pathname === "/sync" || url.pathname.startsWith("/sync/")) {
-      const room = env.GAME_ROOM.get(env.GAME_ROOM.idFromName("global"));
+      // Handle /sync/health directly in Worker — DO may be unavailable
+      if (url.pathname === "/sync/health") {
+        return json({ ok: true });
+      }
+
+      // Handle /sync/games with GitHub catalog fallback when DO is unavailable
+      if (url.pathname === "/sync/games" && request.method === "GET") {
+        if (env.GITHUB_REPO) {
+          try {
+            const catUrl = `https://raw.githubusercontent.com/${env.GITHUB_REPO}/main/games/index.json`;
+            const catRes = await fetch(catUrl, { headers: { 'User-Agent': 'slob-games-relay/1.0' } });
+            if (catRes.ok) {
+              const cat = await catRes.json();
+              const games = (cat.games || []).map(g => ({
+                owner: g.owner || 'public',
+                game_id: g.game_id || '',
+                name: g.name || '',
+                checksum: g.checksum || g.content_hash || '',
+                content_hash: g.content_hash || g.checksum || '',
+                size: g.size || 0,
+                updated: g.updated || '',
+                version: g.version || '',
+                scope: 'external',
+                published: 1,
+                resource_paths: [],
+              }));
+              return json(games);
+            }
+          } catch (_) {}
+        }
+        return json([]);
+      }
+
+      // Forward /sync/internal/* to Worker-level handler (uses AUTH_KV instead of broken DO)
+      if (url.pathname.startsWith('/sync/internal/')) {
+        return handleInternalRoutes(url, request, env);
+      }
+
+      // Forward /sync/admin/* to Worker-level handler
+      if (url.pathname.startsWith('/sync/admin/')) {
+        return handleAdminRoutes(url, request, env);
+      }
+
+      const room = env.GAME_ROOM.get(env.GAME_ROOM.idFromName("global6"));
 
       // WebSocket upgrade: /sync
       if (url.pathname === "/sync") {
         if (request.headers.get("Upgrade") !== "websocket") {
           return json({ error: "WebSocket upgrade required" }, 426);
         }
-        return room.fetch(request);
+        try {
+          return await room.fetch(request);
+        } catch (e) {
+          console.error('[sync-ws-error]', String(e?.message || e).slice(0, 300));
+          return new Response('Service unavailable', { status: 503 });
+        }
       }
 
       // REST: /sync/games → DO /games
@@ -1805,6 +2268,7 @@ export default {
         }
         return doRes;
       } catch (e) {
+        console.error('[sync-do-error]', String(e?.message || e).slice(0, 300));
         return json({ error: "service temporarily unavailable" }, 503);
       }
     }
