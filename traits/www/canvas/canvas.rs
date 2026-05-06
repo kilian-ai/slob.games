@@ -3406,6 +3406,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                         // file (via hoisting) don't hit the temporal dead zone.
                         var __remoteCatalog = [];
                         var __remoteFetchInflight = new Map(); // hash -> Promise<localId|null>
+                        var __remoteFailedHashes = new Set(); // hashes whose fetch failed — skipped by carousel
                         // Bridge for sync helpers defined inside initGameSync() (which is wrapped in
                         // an async IIFE far below). Outer-scope code (carousel prefetch / lazy fetch)
                         // sets these via initGameSync once available, then waits for them.
@@ -3465,6 +3466,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 for (const r of catalog) {
                                     if (!r.hash || seen.has(r.hash)) continue;
                                     if (typeof _isDeletedGame === 'function' && _isDeletedGame(r.hash, r.game_id)) continue;
+                                    // Skip games we already failed to fetch and have no local copy of —
+                                    // they would just produce another carousel dead-end.
+                                    if (__remoteFailedHashes.has(r.hash) && !localByHash.has(r.hash)) continue;
                                     seen.add(r.hash);
                                     const local = localByHash.get(r.hash);
                                     if (local) {
@@ -3534,9 +3538,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 try {
                                     console.log('[carousel] lazy-fetching game', hash);
                                     const resp = await fetch('https://relay.slob.games/sync/game/' + encodeURIComponent(hash));
-                                    if (!resp.ok) return null;
+                                    if (!resp.ok) { __remoteFailedHashes.add(hash); return null; }
                                     const game = await resp.json();
-                                    if (!game || !game.content || !game.content_hash) return null;
+                                    if (!game || !game.content || !game.content_hash) { __remoteFailedHashes.add(hash); return null; }
                                     const helpers = await _waitSyncIngest(8000);
                                     if (!helpers) {
                                         console.warn('[carousel] sync helpers unavailable, skipping ingest');
@@ -3549,9 +3553,11 @@ pub fn canvas(_args: &[Value]) -> Value {
                                         const h = String(g._sync_hash || g.checksum || '').trim().toLowerCase();
                                         if (h === hash) return id;
                                     }
+                                    __remoteFailedHashes.add(hash);
                                     return null;
                                 } catch (e) {
                                     console.warn('[carousel] fetch failed for', hash, e);
+                                    __remoteFailedHashes.add(hash);
                                     return null;
                                 } finally {
                                     __remoteFetchInflight.delete(hash);
@@ -3562,8 +3568,10 @@ pub fn canvas(_args: &[Value]) -> Value {
                         }
 
                         // Resolve a carousel target to a local game id, fetching on demand.
+                        // Returns true on success, false if the target could not be activated
+                        // (so callers can skip to the next game).
                         async function _activateCarouselTarget(target) {
-                            if (!target) return;
+                            if (!target) return false;
                             // Wait for SDK to be ready — first-load restore can fire before init.
                             let _waits = 0;
                             while (!window._traitsSDK && _waits < 60) {
@@ -3572,11 +3580,31 @@ pub fn canvas(_args: &[Value]) -> Value {
                             }
                             if (target.remote) {
                                 const localId = await _fetchRemoteGameByHash(target.hash);
-                                if (localId) { try { await activateGame(localId); } catch (_) {} }
-                                else console.warn('[carousel] could not fetch', target.name);
-                                return;
+                                if (localId) {
+                                    try { await activateGame(localId); return true; } catch (_) { return false; }
+                                }
+                                console.warn('[carousel] could not fetch', target.name, '— blacklisting and skipping');
+                                if (target.hash) __remoteFailedHashes.add(target.hash);
+                                return false;
                             }
-                            try { await activateGame(target.id); } catch (_) {}
+                            try { await activateGame(target.id); return true; } catch (_) { return false; }
+                        }
+
+                        // Activate the next non-broken game in the carousel, starting from `startIdx`,
+                        // moving in `dir` (+1 or -1). Re-reads the list after each failure so a
+                        // freshly-blacklisted entry drops out of rotation immediately.
+                        async function _activateCarouselFrom(startIdx, dir) {
+                            for (let attempts = 0; attempts < 32; attempts++) {
+                                const { list } = _publicGamesList();
+                                if (!list.length) return;
+                                const idx = ((startIdx % list.length) + list.length) % list.length;
+                                const ok = await _activateCarouselTarget(list[idx]);
+                                if (ok) return;
+                                // Advance past the failed entry. The list will likely shrink on the
+                                // next iteration because the failed hash got blacklisted.
+                                startIdx = idx + dir;
+                            }
+                            console.warn('[carousel] gave up after 32 failed activations');
                         }
 
                         // Prefetch every published GitHub game (and its sprites, which are
@@ -3695,7 +3723,14 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 return;
                             }
                             __restoringCommunityCursor = true;
-                            try { await _activateCarouselTarget(target); } catch (_) {}
+                            try {
+                                const ok = await _activateCarouselTarget(target);
+                                if (!ok) {
+                                    // Target unreachable — advance through the list until something works.
+                                    const startIdx = Math.max(0, list.findIndex(g => g === target) + 1);
+                                    await _activateCarouselFrom(startIdx, 1);
+                                }
+                            } catch (_) {}
                             __restoringCommunityCursor = false;
                         }
 
@@ -3753,7 +3788,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     : (idx - 1 + list.length) % list.length;
                                 console.log('[carousel] ' + direction + ': ' + (list[idx]?.name || '?') + ' [' + (idx+1) + '/' + list.length + '] → ' + list[next].name + ' [' + (next+1) + '/' + list.length + ']' + (list[next].remote ? ' (remote, fetching)' : ''));
                                 console.log('[carousel] games:', list.map((g,i) => (i===next ? '▶ ' : '  ') + (i+1) + '. ' + g.name + (g.remote ? ' [remote]' : '')).join('\n'));
-                                _activateCarouselTarget(list[next]);
+                                _activateCarouselFrom(next, direction === 'next' ? 1 : -1);
                             }
 
                             function getGameLabel(direction) {
@@ -3940,7 +3975,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     let idx = list.findIndex(g => g.id === activeId);
                                     if (idx < 0) idx = 0;
                                     const next = (idx + 1) % list.length;
-                                    _activateCarouselTarget(list[next]);
+                                    _activateCarouselFrom(next, 1);
                                     fabGameSelect.querySelector('span:last-child').textContent = list[next].name;
                                 });
                             }
@@ -3988,7 +4023,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     : (idx - 1 + list.length) % list.length;
                                 console.log('[carousel] ' + direction + ': ' + (list[idx]?.name || '?') + ' [' + (idx+1) + '/' + list.length + '] → ' + list[next].name + ' [' + (next+1) + '/' + list.length + ']' + (list[next].remote ? ' (remote, fetching)' : ''));
                                 console.log('[carousel] games:', list.map((g,i) => (i===next ? '▶ ' : '  ') + (i+1) + '. ' + g.name + (g.remote ? ' [remote]' : '')).join('\n'));
-                                _activateCarouselTarget(list[next]);
+                                _activateCarouselFrom(next, direction === 'next' ? 1 : -1);
                             }
 
                             function animateSwitch(direction) {
