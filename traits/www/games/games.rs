@@ -63,10 +63,12 @@ const CSS: &str = r##"
 .btn-del:hover{background:rgba(255,60,60,0.12);border-color:rgba(255,60,60,0.4)}
 .btn-ren{background:none;border:1px solid rgba(0,224,255,0.2);color:#00e0ff;font-size:0.6rem;padding:1px 6px;border-radius:3px;cursor:pointer;text-transform:uppercase;letter-spacing:0.04em;font-weight:600;transition:all 0.2s}
 .btn-ren:hover{background:rgba(0,224,255,0.12);border-color:rgba(0,224,255,0.4)}
-.play-icon{position:absolute;top:50%;right:0.75rem;transform:translateY(-50%);width:28px;height:28px;border-radius:50%;background:rgba(0,224,255,0.08);border:1px solid rgba(0,224,255,0.15);color:#00e0ff;display:flex;align-items:center;justify-content:center;font-size:0.75rem;opacity:0;transition:opacity 0.2s}
-.game-card:hover .play-icon{opacity:1}
+.play-icon{position:absolute;top:0.75rem;right:0.75rem;width:28px;height:28px;border-radius:50%;background:rgba(0,224,255,0.08);border:1px solid rgba(0,224,255,0.15);color:#00e0ff;display:flex;align-items:center;justify-content:center;font-size:0.75rem;opacity:0;transition:opacity 0.2s,background 0.15s,transform 0.15s;cursor:pointer;z-index:2}
+.game-card:hover .play-icon,.game-card.selected-game .play-icon{opacity:1}
+.play-icon:hover{background:rgba(0,224,255,0.22);border-color:rgba(0,224,255,0.5);transform:scale(1.08)}
 .game-card.active-game{border-color:rgba(0,255,136,0.25)}
 .game-card.active-game .gname{color:#00ff88}
+.game-card.selected-game{border-color:rgba(0,224,255,0.55);box-shadow:0 0 0 1px rgba(0,224,255,0.25),0 4px 20px rgba(0,224,255,0.08)}
 .empty{color:#5a6570;font-size:0.82rem;font-style:italic;padding:0.5rem 0}
 .loading{color:#5a6570;font-size:0.82rem;padding:0.5rem 0}
 .status-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0}
@@ -1199,6 +1201,7 @@ const JS: &str = r##"
       +'<div class="play-icon">\u25b6</div>';
     div.querySelector('[data-ren]').addEventListener('click',function(e){e.stopPropagation();renameLocalGame(g.id,g.name)});
     div.querySelector('[data-del]').addEventListener('click',function(e){e.stopPropagation();deleteLocalGame(g.id,g.name)});
+    div.querySelector('.play-icon').addEventListener('click',function(e){e.stopPropagation();activateAndGoCanvas(g.id,g.game||null)});
     var pubBtn=div.querySelector('[data-publish-local]');
     console.log('[games:makeLocalCard]',g.name,'pubBtn=',!!pubBtn,'badge=',JSON.stringify(g.publishBadge),'gameId=',g.gameId,'isPublished=',g.isPublished,'offline=',g.offline,'unsynced=',g.unsynced);
     if(pubBtn){
@@ -1226,7 +1229,7 @@ const JS: &str = r##"
         publishLocalGame(g.id);
       });
     }
-    div.addEventListener('click',function(){activateAndGoCanvas(g.id,g.game||null)});
+    div.addEventListener('click',function(){selectCard(div)});
     return div;
   }
 
@@ -1244,7 +1247,8 @@ const JS: &str = r##"
     div.querySelector('[data-pub]').addEventListener('click',function(e){e.stopPropagation();setPublished(g.game_id,!isPub)});
     div.querySelector('[data-ren]').addEventListener('click',function(e){e.stopPropagation();renameRelayGame(g.game_id,g.name,g.content_hash)});
     div.querySelector('[data-del]').addEventListener('click',function(e){e.stopPropagation();deleteRelayGame(g.game_id,g.name)});
-    div.addEventListener('click',function(){playOrFetch(g.content_hash,g.name)});
+    div.querySelector('.play-icon').addEventListener('click',function(e){e.stopPropagation();playOrFetch(g.content_hash,g.name)});
+    div.addEventListener('click',function(){selectCard(div)});
     return div;
   }
 
@@ -1258,8 +1262,15 @@ const JS: &str = r##"
     div.innerHTML='<div class="gname">'+esc(g.name||'Untitled')+'</div>'
       +'<div class="gmeta">'+meta+'</div>'
       +'<div class="play-icon">\u25b6</div>';
-    div.addEventListener('click',function(){playOrFetch(g.content_hash,g.name)});
+    div.querySelector('.play-icon').addEventListener('click',function(e){e.stopPropagation();playOrFetch(g.content_hash,g.name)});
+    div.addEventListener('click',function(){selectCard(div)});
     return div;
+  }
+
+  function selectCard(div){
+    var prev=document.querySelectorAll('.game-card.selected-game');
+    for(var i=0;i<prev.length;i++){if(prev[i]!==div)prev[i].classList.remove('selected-game')}
+    div.classList.toggle('selected-game');
   }
 
   function playFromVfs(contentHash,name){
