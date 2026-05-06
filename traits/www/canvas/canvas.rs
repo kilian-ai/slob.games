@@ -3567,6 +3567,54 @@ pub fn canvas(_args: &[Value]) -> Value {
                             return p;
                         }
 
+                        // Track GitHub resource-backfill attempts per content_hash so we don't
+                        // hammer raw.githubusercontent.com in a loop. Defined at outer scope so
+                        // both _activateCarouselTarget and the WS-scope _requestMissingResources
+                        // can share the cache.
+                        var __ghBackfillAttempts = new Map(); // hash -> Promise<number written>
+
+                        // Refetch a game's resources from GitHub (via the relay's /sync/game/{hash}
+                        // which inlines `resources`) and write any missing sprite/media files into
+                        // IndexedDB (or pvfs for small text). Idempotent per hash.
+                        async function _githubBackfillForHash(gameHash) {
+                            gameHash = String(gameHash || '').trim().toLowerCase();
+                            if (!gameHash) return 0;
+                            if (__ghBackfillAttempts.has(gameHash)) return __ghBackfillAttempts.get(gameHash);
+                            const p = (async () => {
+                                try {
+                                    const resp = await fetch('https://relay.slob.games/sync/game/' + encodeURIComponent(gameHash));
+                                    if (!resp.ok) return 0;
+                                    const game = await resp.json();
+                                    const resources = (game && game.resources && typeof game.resources === 'object') ? game.resources : {};
+                                    const have = (typeof _readPvfsFilesWithSprites === 'function') ? _readPvfsFilesWithSprites() : {};
+                                    let written = 0;
+                                    for (const path of Object.keys(resources)) {
+                                        if (!path || path === 'canvas/app.html' || path === 'canvas/games.json') continue;
+                                        if (have[path]) continue;
+                                        const val = resources[path];
+                                        if (typeof val !== 'string' || !val) continue;
+                                        if (typeof _isSpriteOrMediaPath === 'function' && _isSpriteOrMediaPath(path) && typeof _writeIdbSprite === 'function') {
+                                            try { await _writeIdbSprite(path, val); } catch (_) {}
+                                        } else {
+                                            try {
+                                                const raw = JSON.parse(localStorage.getItem('traits.pvfs') || '{}') || {};
+                                                raw[path] = val;
+                                                localStorage.setItem('traits.pvfs', JSON.stringify(raw));
+                                            } catch (_) {}
+                                        }
+                                        written++;
+                                    }
+                                    if (written) console.log('[github-backfill]', gameHash.slice(0,8), 'wrote', written, 'resource(s)');
+                                    return written;
+                                } catch (e) {
+                                    console.warn('[github-backfill] failed for', gameHash.slice(0,8), e);
+                                    return 0;
+                                }
+                            })();
+                            __ghBackfillAttempts.set(gameHash, p);
+                            return p;
+                        }
+
                         // Resolve a carousel target to a local game id, fetching on demand.
                         // Returns true on success, false if the target could not be activated
                         // (so callers can skip to the next game).
@@ -3586,6 +3634,12 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 console.warn('[carousel] could not fetch', target.name, '— blacklisting and skipping');
                                 if (target.hash) __remoteFailedHashes.add(target.hash);
                                 return false;
+                            }
+                            // Local game — but its sprites may have been ingested via the old P2P
+                            // path which never delivered them. Backfill from GitHub before loading
+                            // so the iframe doesn't trip "Invalid VFS image payload" errors.
+                            if (target.hash && typeof _githubBackfillForHash === 'function') {
+                                try { await _githubBackfillForHash(target.hash); } catch (_) {}
                             }
                             try { await activateGame(target.id); return true; } catch (_) { return false; }
                         }
@@ -4449,10 +4503,45 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                             // ── P2P Resource Sync ──
 
-                            // Detect missing resources for synced games and request via WebSocket
-                            function _requestMissingResources(games) {
-                                if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                            // Detect missing resources for synced games. Tries GitHub backfill first
+                            // (authoritative source — every published game's sprites live there), and
+                            // only falls back to peer-to-peer WebSocket requests for whatever is still
+                            // missing afterwards.
+                            async function _requestMissingResources(games) {
                                 if (!Array.isArray(games) || !games.length) return;
+
+                                // First pass: trigger GitHub backfill for every game with a content_hash.
+                                // De-duped per hash via __ghBackfillAttempts.
+                                const hashesNeedingBackfill = new Set();
+                                {
+                                    const files0 = _readPvfsFilesWithSprites();
+                                    for (const g of games) {
+                                        const gameHash = String(g.content_hash || g._sync_hash || g.checksum || '').trim().toLowerCase();
+                                        if (!gameHash) continue;
+                                        let anyMissing = false;
+                                        if (Array.isArray(g.resource_paths)) {
+                                            for (const p2 of g.resource_paths) {
+                                                if (p2 && !files0[p2]) { anyMissing = true; break; }
+                                            }
+                                        }
+                                        if (!anyMissing && g.content) {
+                                            const lower = String(g.content).toLowerCase();
+                                            if (lower.indexOf('sprites/') !== -1 || lower.indexOf('assets/') !== -1 ||
+                                                lower.indexOf('images/') !== -1 || lower.indexOf('textures/') !== -1 ||
+                                                lower.indexOf('audio/') !== -1) {
+                                                anyMissing = true; // let backfill confirm
+                                            }
+                                        }
+                                        if (anyMissing) hashesNeedingBackfill.add(gameHash);
+                                    }
+                                }
+                                if (hashesNeedingBackfill.size) {
+                                    await Promise.all(Array.from(hashesNeedingBackfill).map(h => _githubBackfillForHash(h).catch(() => 0)));
+                                }
+
+                                // Second pass: build a list of paths still missing after backfill — those
+                                // are the only ones we ask peers for.
+                                if (!ws || ws.readyState !== WebSocket.OPEN) return;
                                 var allMissing = [];
                                 var files = _readPvfsFilesWithSprites();
                                 for (var i = 0; i < games.length; i++) {
@@ -4486,7 +4575,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 }
                                 if (allMissing.length === 0) return;
                                 _p2pNonce = String(Date.now()) + Math.random().toString(36).slice(2, 6);
-                                console.log('[p2p] requesting', allMissing.length, 'missing resource(s)');
+                                console.log('[p2p] requesting', allMissing.length, 'missing resource(s) (after GitHub backfill)');
                                 ws.send(JSON.stringify({
                                     type: 'need-resources',
                                     items: allMissing.slice(0, 50),
