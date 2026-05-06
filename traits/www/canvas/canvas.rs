@@ -402,7 +402,9 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 width: calc(100% / var(--mobile-vp-scale)) !important;
                                 height: calc(var(--app-vh) / var(--mobile-vp-scale)) !important;
                                 border-radius: 0 !important;
-                                transform: scale(var(--mobile-vp-scale)) !important;
+                                /* No !important on transform: the carousel JS sets inline
+                                   transforms during swipe and they need to win. */
+                                transform: scale(var(--mobile-vp-scale));
                                 transform-origin: top left !important;
                             }
                             #canvas-fab {
