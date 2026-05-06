@@ -1506,20 +1506,55 @@ const JS: &str = r##"
   async function publishAllToGitHub(btn){
     var gameIds=Object.keys(__relayMineByGameId);
     if(!gameIds.length){alert('No games on relay to publish.');return}
-    if(btn)btn.disabled=true;
-    var ok=0,fail=0,errors=[];
+    if(btn){btn.disabled=true;btn.textContent='\u2191 checking\u2026'}
+    // 1. Fetch current GitHub catalog so we only upload games that aren't there yet.
+    var existing={}; // owner/game_id → entry, also keyed by content_hash
+    try{
+      var r0=await fetch(RELAY+'/github/games',{cache:'no-store'});
+      if(r0.ok){
+        var d0=await r0.json();
+        var arr=(d0&&d0.games)||[];
+        for(var k=0;k<arr.length;k++){
+          var e=arr[k]||{};
+          var oid=String(e.owner||'').toLowerCase()+'/'+String(e.game_id||'').toLowerCase();
+          existing[oid]=e;
+          if(e.content_hash)existing['hash:'+String(e.content_hash).toLowerCase()]=e;
+          if(e.checksum)existing['hash:'+String(e.checksum).toLowerCase()]=e;
+        }
+      }
+    }catch(_){/* fall through — if catalog fetch fails, just publish all */}
+    // 2. Filter to games not already on GitHub.
+    var pending=[];
+    var skipped=0;
     for(var i=0;i<gameIds.length;i++){
+      var gid=gameIds[i];
+      var meta=__relayMineByGameId[gid]||{};
+      var ownerKey=(String(meta.owner||'').toLowerCase()||String(__relayUser||'').toLowerCase())+'/'+String(gid).toLowerCase();
+      var hashKey=meta.content_hash?'hash:'+String(meta.content_hash).toLowerCase():null;
+      if(existing[ownerKey]||(hashKey&&existing[hashKey])){skipped++;continue}
+      pending.push(gid);
+    }
+    if(!pending.length){
+      if(btn){btn.disabled=false;btn.textContent='\u2191 GitHub'}
+      alert('All '+gameIds.length+' games already on GitHub. Nothing to upload.');
+      return;
+    }
+    // 3. Upload missing ones.
+    var ok=0,fail=0,errors=[];
+    for(var j=0;j<pending.length;j++){
+      if(btn)btn.textContent='\u2191 '+(j+1)+'/'+pending.length;
       try{
-        var r=await fetch(RELAY+'/internal/game/'+encodeURIComponent(gameIds[i])+'/github-publish',{
+        var r=await fetch(RELAY+'/internal/game/'+encodeURIComponent(pending[j])+'/github-publish',{
           method:'PATCH',headers:authHeaders(),body:JSON.stringify({})
         });
         var d=null;try{d=await r.json()}catch(_){}
         if(r.ok)ok++;
-        else{fail++;errors.push(gameIds[i]+': '+(d&&d.error||r.status))}
-      }catch(e){fail++;errors.push(gameIds[i]+': '+String(e&&e.message||e))}
+        else{fail++;errors.push(pending[j]+': '+(d&&d.error||r.status))}
+      }catch(e){fail++;errors.push(pending[j]+': '+String(e&&e.message||e))}
     }
-    if(btn)btn.disabled=false;
-    var msg='Published '+ok+' game'+(ok!==1?'s':'')+ ' to GitHub.';
+    if(btn){btn.disabled=false;btn.textContent='\u2191 GitHub'}
+    var msg='Uploaded '+ok+' new game'+(ok!==1?'s':'')+' to GitHub.';
+    if(skipped)msg+=' Skipped '+skipped+' already on GitHub.';
     if(fail)msg+='\n'+fail+' failed:\n'+errors.join('\n');
     alert(msg);
   }
@@ -1534,7 +1569,7 @@ const JS: &str = r##"
     btn.id='publishAllBtn';
     btn.className='publish-all-btn';
     btn.textContent='↑ GitHub';
-    btn.title='Publish all your games to GitHub catalog';
+    btn.title='Upload all your games not yet on GitHub';
     btn.onclick=function(){publishAllToGitHub(btn)};
     h2.parentNode.insertBefore(btn,h2.nextSibling);
   }
