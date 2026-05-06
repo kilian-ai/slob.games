@@ -1504,9 +1504,26 @@ const JS: &str = r##"
   }
 
   async function publishAllToGitHub(btn){
-    var gameIds=Object.keys(__relayMineByGameId);
-    if(!gameIds.length){alert('No games on relay to publish.');return}
     if(btn){btn.disabled=true;btn.textContent='\u2191 checking\u2026'}
+    // 0. Sync any local-only games to relay first so their content is available
+    //    on the server for the github-publish step to pull from.
+    var col=readGamesCollection();var localIds=Object.keys(col.games||{});
+    var locallySynced=0,localFailed=0;
+    for(var li=0;li<localIds.length;li++){
+      var lid=localIds[li];var lg=col.games[lid]||{};
+      if(!lg.content)continue;
+      var lgid=relayGameIdForLocal(lid,lg).toLowerCase();
+      if(__relayMineByGameId[lgid])continue; // already on relay
+      if(btn)btn.textContent='\u2191 sync '+(locallySynced+localFailed+1)+'/'+localIds.length;
+      try{await syncLocalToRelay(lid);locallySynced++}
+      catch(e){localFailed++;console.warn('[games:publishAll] local sync failed for',lid,e)}
+    }
+    var gameIds=Object.keys(__relayMineByGameId);
+    if(!gameIds.length){
+      if(btn){btn.disabled=false;btn.textContent='\u2191 GitHub'}
+      alert('No games to publish.');return
+    }
+    if(btn)btn.textContent='\u2191 checking\u2026';
     // 1. Fetch current GitHub catalog so we only upload games that aren't there yet.
     var existing={}; // owner/game_id → entry, also keyed by content_hash
     try{
@@ -1554,7 +1571,9 @@ const JS: &str = r##"
     }
     if(btn){btn.disabled=false;btn.textContent='\u2191 GitHub'}
     var msg='Uploaded '+ok+' new game'+(ok!==1?'s':'')+' to GitHub.';
+    if(locallySynced)msg='Synced '+locallySynced+' local game'+(locallySynced!==1?'s':'')+' to relay first.\n'+msg;
     if(skipped)msg+=' Skipped '+skipped+' already on GitHub.';
+    if(localFailed)msg+='\n'+localFailed+' local sync failure(s).';
     if(fail)msg+='\n'+fail+' failed:\n'+errors.join('\n');
     alert(msg);
   }
