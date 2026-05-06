@@ -908,11 +908,24 @@ const JS: &str = r##"
       console.log('[games:setPublished] response status=',r.status,'ok=',r.ok);
       if(r.ok){
         var rd=null;try{rd=await r.clone().json()}catch(_){}console.log('[games:setPublished] success:',rd);
-        // Mirror to GitHub when publishing (fire-and-forget)
+        // Mirror to GitHub when publishing. Awaited so the user sees sprite-upload
+        // feedback (and we surface failures rather than swallowing them).
         if(published){
-          fetch(RELAY+'/internal/game/'+encodeURIComponent(gameId)+'/github-publish',{
-            method:'PATCH',headers:authHeaders(),body:JSON.stringify({})
-          }).then(function(gr){gr.json().then(function(gd){console.log('[games:github-publish]',gd)})}).catch(function(e){console.warn('[games:github-publish] failed:',e)});
+          try{
+            var gr=await fetch(RELAY+'/internal/game/'+encodeURIComponent(gameId)+'/github-publish',{
+              method:'PATCH',headers:authHeaders(),body:JSON.stringify({})
+            });
+            var gd=null;try{gd=await gr.json()}catch(_){}
+            if(!gr.ok){
+              console.warn('[games:github-publish] failed:',gr.status,gd);
+              alert('Published locally, but GitHub mirror failed: '+((gd&&gd.error)||gr.status));
+            } else {
+              console.log('[games:github-publish] ok:',gd);
+              if(gd&&typeof gd.sprite_count==='number'&&gd.sprite_count>0){
+                console.log('[games:github-publish]',gd.sprite_count,'sprite file(s) uploaded to GitHub');
+              }
+            }
+          }catch(e){console.warn('[games:github-publish] exception:',e);}
         }
         await renderRelay();await renderLocal();
       }

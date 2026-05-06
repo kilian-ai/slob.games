@@ -430,7 +430,7 @@ function makeReleaseVersion() {
 //                   → server sends { type:"ack", added:N } to sender
 
 const MAX_GAME_SIZE = 256 * 1024; // 256KB HTML content per game
-const MAX_GAME_PACKAGE_SIZE = 2 * 1024 * 1024; // HTML + resources bundle cap
+const MAX_GAME_PACKAGE_SIZE = 8 * 1024 * 1024; // HTML + resources bundle cap (sprites included)
 const MAX_TOTAL_GAMES = 500;
 const DEFAULT_EXTERNAL_POOL_SIZE = 64;
 
@@ -748,7 +748,7 @@ async function patchGameOnGitHub(owner, gameId, patch, token, repo) {
 // Key scheme:
 //   mygame:{owner}:{game_id} → full record { content, name, version, resources, ... }
 //   mygames:{owner} → array of summaries (no content)
-async function handleInternalRoutes(url, request, env) {
+async function handleInternalRoutes(url, request, env, ctx) {
   if (!env.AUTH_KV) return json({ error: 'storage not configured' }, 503);
   if (!env.RELAY_SECRET) return json({ error: 'RELAY_SECRET not configured' }, 503);
 
@@ -875,6 +875,23 @@ async function handleInternalRoutes(url, request, env) {
       published: prevPublished,
       resource_paths: paths,
     });
+    // If already published, auto-mirror the new content + sprites to GitHub so
+    // updates (especially new/changed sprite files) flow through without the user
+    // toggling publish off/on. Fire-and-forget; failures are logged.
+    if (prevPublished && env.GITHUB_TOKEN && env.GITHUB_REPO) {
+      const row = await getGame(user, gameId);
+      if (row) {
+        const mirrorTask = (async () => {
+          try {
+            const r = await publishGameToGitHub(row, env.GITHUB_TOKEN, env.GITHUB_REPO);
+            console.log('[github-mirror-on-update]', user, gameId, 'sprites=', r.sprite_count);
+          } catch (e) {
+            console.warn('[github-mirror-on-update] failed', user, gameId, String(e?.message || e).slice(0, 200));
+          }
+        })();
+        if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(mirrorTask);
+      }
+    }
     return json({ ok: true, owner: user, game_id: gameId, content_hash: checksum, checksum, version, published: !!prevPublished });
   }
 
@@ -2207,7 +2224,7 @@ export class GameRoom extends GameRoomV6 {}
 // ── Main Worker ───────────────────────────────────────────────────────────────
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
     // CORS preflight
@@ -2498,7 +2515,7 @@ export default {
 
       // Forward /sync/internal/* to Worker-level handler (uses AUTH_KV instead of broken DO)
       if (url.pathname.startsWith('/sync/internal/')) {
-        return handleInternalRoutes(url, request, env);
+        return handleInternalRoutes(url, request, env, ctx);
       }
 
       // ── /sync/github/* — public read endpoints for the dashboard ──
