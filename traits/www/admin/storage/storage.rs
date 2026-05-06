@@ -1219,6 +1219,7 @@ window.deleteGame = deleteGame;
 window.deleteVfs = deleteVfs;
 window.sortGamesBy = sortGamesBy;
 window.uploadSpritesToGithub = uploadSpritesToGithub;
+window.uploadOrphanGamesToGithub = uploadOrphanGamesToGithub;
 
 })();
 "##;
