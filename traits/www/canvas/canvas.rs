@@ -3559,10 +3559,87 @@ pub fn canvas(_args: &[Value]) -> Value {
                             try { await activateGame(target.id); } catch (_) {}
                         }
 
+                        // Prefetch every published GitHub game (and its sprites, which are
+                        // bundled into the JSON via `resources`) up front, so the carousel
+                        // can rotate through them instantly without per-swipe network round-
+                        // trips. Games already in local pvfs are skipped.
+                        // Concurrency-limited to avoid hammering the relay.
+                        var __prefetchInflight = false;
+                        var __prefetchDone = false;
+                        async function prefetchAllRemoteGames(concurrency) {
+                            if (__prefetchInflight || __prefetchDone) return;
+                            __prefetchInflight = true;
+                            try {
+                                const cat = __remoteCatalog || [];
+                                if (!cat.length) return;
+                                const col = readGamesCollection();
+                                const haveHashes = new Set();
+                                for (const g of Object.values(col.games || {})) {
+                                    const h = String(g._sync_hash || g.checksum || '').trim().toLowerCase();
+                                    if (h) haveHashes.add(h);
+                                }
+                                const todo = cat
+                                    .map(r => r.hash)
+                                    .filter(h => h && !haveHashes.has(h));
+                                if (!todo.length) {
+                                    console.log('[carousel] prefetch: all', cat.length, 'games already local');
+                                    __prefetchDone = true;
+                                    return;
+                                }
+                                console.log('[carousel] prefetch: downloading', todo.length, 'of', cat.length, 'games');
+                                const lim = Math.max(1, concurrency || 4);
+                                let i = 0, ok = 0, fail = 0;
+                                async function worker() {
+                                    while (i < todo.length) {
+                                        const idx = i++;
+                                        const h = todo[idx];
+                                        try {
+                                            const lid = await _fetchRemoteGameByHash(h);
+                                            if (lid) ok++; else fail++;
+                                        } catch (_) { fail++; }
+                                    }
+                                }
+                                await Promise.all(Array.from({ length: lim }, worker));
+                                console.log('[carousel] prefetch done:', ok, 'fetched,', fail, 'failed');
+                                __prefetchDone = (fail === 0);
+                            } finally {
+                                __prefetchInflight = false;
+                            }
+                        }
+
                         // Refresh catalog on canvas mount so all GitHub games show up immediately.
-                        refreshRemoteCatalog().then(n => {
-                            if (n > 0) console.log('[carousel] catalog ready:', n, 'remote games');
-                        }).catch(() => {});
+                        // Hardened with retries when the user has no local games yet — a fresh
+                        // install with no pvfs cache must succeed at fetching the catalog or the
+                        // carousel has nothing to show.
+                        async function _bootstrapRemoteGames() {
+                            const col = readGamesCollection();
+                            const localCount = Object.keys(col.games || {}).length;
+                            const aggressive = (localCount === 0);
+                            const maxAttempts = aggressive ? 8 : 2;
+                            let n = 0;
+                            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                                try { n = await refreshRemoteCatalog(); } catch (_) { n = 0; }
+                                if (n > 0) break;
+                                if (attempt < maxAttempts) {
+                                    const delay = Math.min(15000, 500 * Math.pow(2, attempt - 1));
+                                    console.warn('[carousel] catalog empty (attempt ' + attempt + '), retrying in ' + delay + 'ms');
+                                    await new Promise(r => setTimeout(r, delay));
+                                }
+                            }
+                            if (n > 0) {
+                                console.log('[carousel] catalog ready:', n, 'remote games');
+                                // Kick off background prefetch of all games + sprites.
+                                prefetchAllRemoteGames(4).catch(() => {});
+                                // If the user has no local games, activate the first one ASAP
+                                // so the canvas isn't blank while prefetch fills the rest.
+                                if (aggressive) {
+                                    try { await _restoreLastCommunityCursor(); } catch (_) {}
+                                }
+                            } else if (aggressive) {
+                                console.warn('[carousel] could not load catalog; carousel will be empty until network recovers');
+                            }
+                        }
+                        _bootstrapRemoteGames().catch(() => {});
 
                         // Log carousel game list once games are loaded
                         setTimeout(function() {
