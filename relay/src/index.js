@@ -919,6 +919,56 @@ async function handleInternalRoutes(url, request, env, ctx) {
     return json({ ok: true, deleted: gameId });
   }
 
+  // POST /internal/sprites/upload — upload one or many sprite files to the
+  // shared `games/_shared/sprites/` folder on GitHub. Body shape:
+  //   { files: { "sprites/foo.png": "<dataUrl|base64|text>", ... } }
+  // The basename is what gets written to GitHub; folder prefixes are dropped
+  // so all clients converge on a flat shared namespace.
+  if (path === '/internal/sprites/upload' && request.method === 'POST') {
+    if (!env.GITHUB_TOKEN || !env.GITHUB_REPO) return json({ error: 'GitHub not configured' }, 503);
+    let body = {};
+    try { body = await request.json(); } catch (_) { return json({ error: 'invalid JSON' }, 400); }
+    const filesIn = (body && body.files && typeof body.files === 'object') ? body.files : {};
+    const paths = Object.keys(filesIn);
+    if (!paths.length) return json({ error: 'no files' }, 400);
+    const BASE = `https://api.github.com/repos/${env.GITHUB_REPO}/contents`;
+    const headers = {
+      Authorization: `token ${env.GITHUB_TOKEN}`,
+      'Content-Type': 'application/json',
+      'User-Agent': 'slob-games-relay/1.0',
+      Accept: 'application/vnd.github.v3+json',
+    };
+    const wrote = [];
+    const skipped = [];
+    const failed = [];
+    for (const p of paths) {
+      try {
+        if (!_isSpriteOrMediaPath(p)) { skipped.push({ path: p, reason: 'not media' }); continue; }
+        const b64 = _toBase64ForGitHub(filesIn[p]);
+        if (!b64) { skipped.push({ path: p, reason: 'empty' }); continue; }
+        const basename = String(p).split('/').pop().replace(/\.\./g, '').replace(/[^A-Za-z0-9._-]/g, '_');
+        if (!basename) { skipped.push({ path: p, reason: 'bad basename' }); continue; }
+        const filePath = `games/_shared/sprites/${basename}`;
+        await _ghPutFile(BASE, headers, filePath, b64, `shared sprite: ${basename} (by ${user})`);
+        wrote.push(basename);
+      } catch (e) {
+        failed.push({ path: p, error: String(e?.message || e).slice(0, 200) });
+      }
+    }
+    // Update games/_shared/sprites/index.json with the current listing.
+    try {
+      const list = await _ghListDir(BASE, headers, 'games/_shared/sprites');
+      const idx = { sprites: list.filter(it => it && it.type === 'file' && it.name !== 'index.json').map(it => ({
+        name: it.name, size: it.size, sha: it.sha, download_url: it.download_url,
+      })) };
+      const idxContent = btoa(unescape(encodeURIComponent(JSON.stringify(idx, null, 2))));
+      await _ghPutFile(BASE, headers, 'games/_shared/sprites/index.json', idxContent, `shared sprites: index (${idx.sprites.length})`);
+    } catch (e) {
+      console.warn('[shared-sprites:index] failed', String(e?.message || e).slice(0, 200));
+    }
+    return json({ ok: true, wrote, skipped, failed });
+  }
+
   return json({ error: 'not found' }, 404);
 }
 
@@ -2543,6 +2593,34 @@ export default {
             status: 200,
             headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...cors() },
           });
+        } catch (e) {
+          return json({ error: String(e?.message || e) }, 502);
+        }
+      }
+
+      // GET /sync/github/sprites → list shared sprite files in games/_shared/sprites
+      if (url.pathname === '/sync/github/sprites' && request.method === 'GET') {
+        if (!env.GITHUB_REPO) return json({ error: 'catalog not configured' }, 503);
+        try {
+          const apiUrl = `https://api.github.com/repos/${env.GITHUB_REPO}/contents/games/_shared/sprites`;
+          const apiHeaders = {
+            'User-Agent': 'slob-games-relay/1.0',
+            Accept: 'application/vnd.github.v3+json',
+            ...(env.GITHUB_TOKEN ? { Authorization: `token ${env.GITHUB_TOKEN}` } : {}),
+          };
+          const r = await fetch(apiUrl, { headers: apiHeaders });
+          if (!r.ok) return json({ files: [] });
+          const items = await r.json().catch(() => []);
+          const files = (Array.isArray(items) ? items : [])
+            .filter(it => it && it.type === 'file' && it.name !== 'index.json')
+            .map(it => ({
+              name: it.name,
+              path: it.path,
+              size: it.size,
+              sha: it.sha,
+              download_url: it.download_url,
+            }));
+          return json({ files });
         } catch (e) {
           return json({ error: String(e?.message || e) }, 502);
         }

@@ -49,6 +49,13 @@ pub fn dashboard(_args: &[Value]) -> Value {
                         div id="githubTable" {}
                     }
 
+                    section.card id="githubSharedCard" {
+                        h2 { "Shared Sprites (GitHub)" }
+                        p.note id="githubSharedStatus" { "Loading shared sprites\u{2026}" }
+                        p.note { "Sprites in " code { "games/_shared/sprites/" } " — used as fallback when a game's own folder is missing a resource (before P2P)." }
+                        div id="githubSharedGrid" {}
+                    }
+
                     section.card id="adminTerminalCard" {
                       h2 { "Traits Terminal" }
                       p.note {
@@ -729,6 +736,48 @@ async function toggleGithubSprites(key) {
   }
   h += '</div>';
   body.innerHTML = h;
+}
+
+async function refreshGithubSharedSprites() {
+  var statusEl = document.getElementById('githubSharedStatus');
+  var grid = document.getElementById('githubSharedGrid');
+  if (!grid) return;
+  if (statusEl) statusEl.textContent = 'Loading shared sprites\u2026';
+  var r;
+  try { r = await apiFetch('/github/sprites'); }
+  catch (e) { if (statusEl) statusEl.textContent = 'Failed to load shared sprites'; return; }
+  if (r && r.ok === false) {
+    if (statusEl) statusEl.textContent = 'Error: ' + (r.error || 'failed');
+    return;
+  }
+  var files = (r && r.files) || [];
+  if (!files.length) {
+    if (statusEl) statusEl.textContent = 'No shared sprites yet. Upload from the Storage page.';
+    grid.innerHTML = '';
+    return;
+  }
+  var totalBytes = 0;
+  for (var i = 0; i < files.length; i++) totalBytes += (files[i].size || 0);
+  if (statusEl) statusEl.textContent = files.length + ' files, ' + Math.round(totalBytes / 1024) + ' KB total';
+  var h = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px">';
+  for (var j = 0; j < files.length; j++) {
+    var f = files[j];
+    var isImage = /\.(png|jpe?g|gif|webp|svg)$/i.test(f.name);
+    h += '<div style="display:flex;align-items:center;gap:8px;padding:6px;border:1px solid rgba(255,255,255,0.06);border-radius:4px">';
+    if (isImage && f.download_url) {
+      h += '<img src="' + esc(f.download_url) + '" style="width:32px;height:32px;object-fit:contain;background:#000;border-radius:2px" loading="lazy">';
+    } else {
+      h += '<div style="width:32px;height:32px;display:flex;align-items:center;justify-content:center;background:#222;border-radius:2px;font-size:10px;color:#888">file</div>';
+    }
+    h += '<div style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><div title="' + esc(f.name) + '" style="font-size:11px">' + esc(f.name) + '</div>';
+    h += '<div style="font-size:10px;color:#888">' + (f.size ? Math.round(f.size / 1024) + ' KB' : '\u2014') + '</div></div>';
+    if (f.download_url) {
+      h += '<a class="btn-sm" href="' + esc(f.download_url) + '" target="_blank" rel="noopener">DL</a>';
+    }
+    h += '</div>';
+  }
+  h += '</div>';
+  grid.innerHTML = h;
 }
 
 async function disableGithubGame(key) {
@@ -2015,6 +2064,7 @@ window.copyAdminTerminalCommand = copyAdminTerminalCommand;
 window.runAdminTerminalCommand = runAdminTerminalCommand;
 window.refreshGithubCatalog = refreshGithubCatalog;
 window.toggleGithubSprites = toggleGithubSprites;
+window.refreshGithubSharedSprites = refreshGithubSharedSprites;
 window.disableGithubGame = disableGithubGame;
 window.enableGithubGame = enableGithubGame;
 window.renameGithubGame = renameGithubGame;
@@ -2022,6 +2072,7 @@ window.deleteGithubGame = deleteGithubGame;
 load();
 renderPvfsGames();
 refreshGithubCatalog();
+refreshGithubSharedSprites();
 initAdminTerminal();
 })();
 "##;

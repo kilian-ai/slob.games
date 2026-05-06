@@ -81,6 +81,10 @@ pub fn storage(_args: &[Value]) -> Value {
                     section.card {
                         h2 { "Sprites & Resources" }
                         p.note id="spritesCount" { "Loading…" }
+                        div style="margin:6px 0;" {
+                            button id="btnUploadSpritesGithub" onclick="uploadSpritesToGithub()" { "Upload all to GitHub" }
+                            span.note id="uploadSpritesStatus" style="margin-left:8px;" {}
+                        }
                         table id="spritesTable" {
                             tr { td colspan="2" { "Loading…" } }
                         }
@@ -1037,6 +1041,73 @@ function deleteGame(id) {
 // ══════════════════════════════════════════════════════════════
 render();
 
+// ══════════════════════════════════════════════════════════════
+// Upload all sprites to GitHub (shared folder)
+// ══════════════════════════════════════════════════════════════
+async function uploadSpritesToGithub() {
+  var status = byId('uploadSpritesStatus');
+  var btn = byId('btnUploadSpritesGithub');
+  function setStatus(t) { if (status) status.textContent = t; }
+  if (!_data || !_data.sprites || !_data.sprites.length) { setStatus('No sprites to upload.'); return; }
+  var token = '';
+  try { token = (localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '').trim(); } catch(_) {}
+  if (!token) { setStatus('Sign in first (no token).'); return; }
+  var bases = ['https://relay.slob.games/sync', 'https://relay.traits.build/sync'];
+  // Batch sprites into chunks (~3 MB per request) so we don't blow CF Worker limits.
+  var sprites = _data.sprites.slice();
+  var batches = [];
+  var cur = {}, curBytes = 0, MAX = 3 * 1024 * 1024;
+  for (var i = 0; i < sprites.length; i++) {
+    var sp = sprites[i];
+    var c = sp.content || '';
+    if (!c) continue;
+    if (curBytes + c.length > MAX && Object.keys(cur).length) {
+      batches.push(cur); cur = {}; curBytes = 0;
+    }
+    cur[sp.path] = c;
+    curBytes += c.length;
+  }
+  if (Object.keys(cur).length) batches.push(cur);
+  if (!batches.length) { setStatus('Nothing to upload.'); return; }
+  if (btn) btn.disabled = true;
+  setStatus('Uploading 0/' + sprites.length + '…');
+  var totalWrote = 0, totalSkipped = 0, totalFailed = 0;
+  for (var b = 0; b < batches.length; b++) {
+    var body = JSON.stringify({ files: batches[b] });
+    var lastErr = null;
+    var ok = false;
+    for (var k = 0; k < bases.length && !ok; k++) {
+      try {
+        var r = await fetch(bases[k] + '/internal/sprites/upload', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: body,
+        });
+        var txt = await r.text();
+        var resp = {};
+        try { resp = txt ? JSON.parse(txt) : {}; } catch(_) {}
+        if (!r.ok) { lastErr = resp.error || ('HTTP ' + r.status); continue; }
+        ok = true;
+        totalWrote += (resp.wrote || []).length;
+        totalSkipped += (resp.skipped || []).length;
+        totalFailed += (resp.failed || []).length;
+        if (resp.failed && resp.failed.length) {
+          console.warn('[shared-sprites:upload] failed batch entries', resp.failed);
+        }
+      } catch (e) {
+        lastErr = String(e && e.message || e);
+      }
+    }
+    if (!ok) {
+      console.error('[shared-sprites:upload] batch failed:', lastErr);
+      totalFailed += Object.keys(batches[b]).length;
+    }
+    setStatus('Uploaded ' + (totalWrote + totalSkipped + totalFailed) + '/' + sprites.length + '…');
+  }
+  setStatus('Done. wrote=' + totalWrote + ' skipped=' + totalSkipped + ' failed=' + totalFailed);
+  if (btn) btn.disabled = false;
+}
+
 // Expose to onclick handlers
 window.previewGame = previewGame;
 window.previewSprite = previewSprite;
@@ -1050,6 +1121,7 @@ window.renameGame = renameGame;
 window.deleteGame = deleteGame;
 window.deleteVfs = deleteVfs;
 window.sortGamesBy = sortGamesBy;
+window.uploadSpritesToGithub = uploadSpritesToGithub;
 
 })();
 "##;

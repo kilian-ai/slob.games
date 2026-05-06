@@ -3615,6 +3615,65 @@ pub fn canvas(_args: &[Value]) -> Value {
                             return p;
                         }
 
+                        // ── Shared GitHub sprites fallback ─────────────────────────────────
+                        // After per-game backfill, any sprite path the running game still
+                        // can't find should be looked up in the shared `games/_shared/sprites/`
+                        // folder before we resort to P2P. Index is fetched lazily once.
+                        var __sharedSpriteIndex = null; // {basename: download_url, ...}
+                        var __sharedSpriteIndexPromise = null;
+                        async function _fetchSharedSpriteIndex() {
+                            if (__sharedSpriteIndex) return __sharedSpriteIndex;
+                            if (__sharedSpriteIndexPromise) return __sharedSpriteIndexPromise;
+                            __sharedSpriteIndexPromise = (async () => {
+                                try {
+                                    const r = await fetch('https://relay.slob.games/sync/github/sprites');
+                                    if (!r.ok) { __sharedSpriteIndex = {}; return __sharedSpriteIndex; }
+                                    const d = await r.json();
+                                    const map = {};
+                                    for (const f of (d.files || [])) {
+                                        if (f && f.name && f.download_url) map[f.name] = f.download_url;
+                                    }
+                                    __sharedSpriteIndex = map;
+                                    return map;
+                                } catch (_) {
+                                    __sharedSpriteIndex = {};
+                                    return __sharedSpriteIndex;
+                                }
+                            })();
+                            return __sharedSpriteIndexPromise;
+                        }
+
+                        // For each missing path (e.g. "sprites/foo.png"), look for the basename
+                        // in the shared GitHub folder. If found, fetch and write to IDB.
+                        // Returns array of paths actually written.
+                        async function _sharedSpriteBackfill(missingPaths) {
+                            if (!Array.isArray(missingPaths) || !missingPaths.length) return [];
+                            const idx = await _fetchSharedSpriteIndex();
+                            if (!idx || !Object.keys(idx).length) return [];
+                            const wrote = [];
+                            for (const p of missingPaths) {
+                                const base = String(p || '').split('/').pop();
+                                const url = idx[base];
+                                if (!url) continue;
+                                try {
+                                    const r = await fetch(url);
+                                    if (!r.ok) continue;
+                                    const blob = await r.blob();
+                                    const reader = new FileReader();
+                                    const dataUrl = await new Promise((resolve, reject) => {
+                                        reader.onload = () => resolve(reader.result);
+                                        reader.onerror = reject;
+                                        reader.readAsDataURL(blob);
+                                    });
+                                    if (typeof _writeIdbSprite === 'function') {
+                                        try { await _writeIdbSprite(p, dataUrl); wrote.push(p); } catch (_) {}
+                                    }
+                                } catch (_) {}
+                            }
+                            if (wrote.length) console.log('[shared-sprites] backfilled', wrote.length, 'from shared folder:', wrote.join(', '));
+                            return wrote;
+                        }
+
                         // Resolve a carousel target to a local game id, fetching on demand.
                         // Returns true on success, false if the target could not be activated
                         // (so callers can skip to the next game).
@@ -3641,6 +3700,32 @@ pub fn canvas(_args: &[Value]) -> Value {
                             if (target.hash && typeof _githubBackfillForHash === 'function') {
                                 try { await _githubBackfillForHash(target.hash); } catch (_) {}
                             }
+                            // Then check for any still-missing sprite paths referenced in the
+                            // local game's content and try the shared sprites folder as fallback.
+                            try {
+                                const col = (typeof readGamesCollection === 'function') ? readGamesCollection() : { games: {} };
+                                const lg = (col.games || {})[target.id];
+                                if (lg) {
+                                    const have = (typeof _readPvfsFilesWithSprites === 'function') ? _readPvfsFilesWithSprites() : {};
+                                    const missing = [];
+                                    if (Array.isArray(lg.resource_paths)) {
+                                        for (const p of lg.resource_paths) { if (p && !have[p]) missing.push(p); }
+                                    }
+                                    const content = lg.content || '';
+                                    if (content) {
+                                        const re = /(?:sprites|assets|images|textures|audio)\/[A-Za-z0-9_\-]+\.[A-Za-z0-9]+/g;
+                                        const seen = new Set(missing);
+                                        const matches = content.match(re) || [];
+                                        for (const m of matches) {
+                                            if (!have[m] && !seen.has(m)) { missing.push(m); seen.add(m); }
+                                        }
+                                    }
+                                    if (missing.length) {
+                                        console.log('[missing-sprites] activating', target.name, '— missing:', missing.join(', '));
+                                        try { await _sharedSpriteBackfill(missing); } catch (_) {}
+                                    }
+                                }
+                            } catch (_) {}
                             try { await activateGame(target.id); return true; } catch (_) { return false; }
                         }
 
@@ -4574,8 +4659,18 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     }
                                 }
                                 if (allMissing.length === 0) return;
+                                // Step 2.5: try the shared sprites folder before resorting to P2P.
+                                console.log('[missing-sprites] after per-game backfill:', allMissing.map(function(x){return x.path}).join(', '));
+                                try {
+                                    const wrote = await _sharedSpriteBackfill(allMissing.map(function(x){return x.path}));
+                                    if (wrote && wrote.length) {
+                                        const wroteSet = new Set(wrote);
+                                        allMissing = allMissing.filter(function(x){ return !wroteSet.has(x.path); });
+                                    }
+                                } catch (_) {}
+                                if (allMissing.length === 0) return;
                                 _p2pNonce = String(Date.now()) + Math.random().toString(36).slice(2, 6);
-                                console.log('[p2p] requesting', allMissing.length, 'missing resource(s) (after GitHub backfill)');
+                                console.log('[p2p] requesting', allMissing.length, 'missing resource(s):', allMissing.map(function(x){return x.path}).join(', '));
                                 ws.send(JSON.stringify({
                                     type: 'need-resources',
                                     items: allMissing.slice(0, 50),
