@@ -373,7 +373,12 @@ pub fn canvas(_args: &[Value]) -> Value {
                         /* ── Mobile fullscreen ── */
                         @media (max-width: 768px) and (pointer: coarse) {
                             .canvas-header { display: none !important; }
-                            :root { --mobile-vp-trim: 140px; }
+                            /* Instead of trimming the iframe (which left a black bar at the bottom),
+                               we scale the iframe content down. The iframe's internal viewport is
+                               sized larger than the screen, then scaled to fit — so the rendered
+                               HTML appears smaller and a 100vh page is no longer clipped by the
+                               iOS browser chrome at the bottom. */
+                            :root { --mobile-vp-trim: 0px; --mobile-vp-scale: 0.88; }
                             #canvas-container {
                                 height: var(--app-vh) !important;
                                 min-height: var(--app-vh) !important;
@@ -389,13 +394,16 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 padding: 0 !important; background: #000 !important;
                                 transform: none !important;
                                 margin: 0 !important;
+                                overflow: hidden !important;
                             }
                             .phone-notch, .phone-home-bar { display: none !important; }
                             .phone-nav-bracket { display: none !important; }
                             #phone-viewport {
-                                width: 100% !important;
-                                height: calc(var(--app-vh) - var(--mobile-vp-trim)) !important;
+                                width: calc(100% / var(--mobile-vp-scale)) !important;
+                                height: calc(var(--app-vh) / var(--mobile-vp-scale)) !important;
                                 border-radius: 0 !important;
+                                transform: scale(var(--mobile-vp-scale)) !important;
+                                transform-origin: top left !important;
                             }
                             #canvas-fab {
                                 transition: opacity 0.3s;
