@@ -3406,6 +3406,21 @@ pub fn canvas(_args: &[Value]) -> Value {
                         // file (via hoisting) don't hit the temporal dead zone.
                         var __remoteCatalog = [];
                         var __remoteFetchInflight = new Map(); // hash -> Promise<localId|null>
+                        // Bridge for sync helpers defined inside initGameSync() (which is wrapped in
+                        // an async IIFE far below). Outer-scope code (carousel prefetch / lazy fetch)
+                        // sets these via initGameSync once available, then waits for them.
+                        var __syncIngest = null; // { addSyncedGames, localGamesWithHashes }
+                        async function _waitSyncIngest(timeoutMs) {
+                            const deadline = Date.now() + (timeoutMs || 8000);
+                            while (!__syncIngest && Date.now() < deadline) {
+                                await new Promise(r => setTimeout(r, 100));
+                            }
+                            return __syncIngest;
+                        }
+                        // Mobile viewport scale — must match --mobile-vp-scale CSS var. Defined at
+                        // outer scope so any handler (mobile or desktop bracket) can reference it.
+                        var MOBILE_VP_SCALE = 0.88;
+                        var _vpBaseTransform = 'scale(' + MOBILE_VP_SCALE + ')';
 
                         async function refreshRemoteCatalog() {
                             try {
@@ -3522,8 +3537,13 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     if (!resp.ok) return null;
                                     const game = await resp.json();
                                     if (!game || !game.content || !game.content_hash) return null;
-                                    const localHashes = (await localGamesWithHashes()).map(g => g.hash);
-                                    addSyncedGames([game], localHashes);
+                                    const helpers = await _waitSyncIngest(8000);
+                                    if (!helpers) {
+                                        console.warn('[carousel] sync helpers unavailable, skipping ingest');
+                                        return null;
+                                    }
+                                    const localHashes = (await helpers.localGamesWithHashes()).map(g => g.hash);
+                                    helpers.addSyncedGames([game], localHashes);
                                     const col = readGamesCollection();
                                     for (const [id, g] of Object.entries(col.games || {})) {
                                         const h = String(g._sync_hash || g.checksum || '').trim().toLowerCase();
@@ -3749,11 +3769,7 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                             // ── Carousel gesture state ──
                             const SWIPE_THRESHOLD = 0.15; // fraction of screen width
-                            // Must match --mobile-vp-scale in CSS. The phone-viewport iframe is
-                            // pre-scaled, so any inline transform we set during the carousel must
-                            // include this scale or the iframe will jump to full size.
-                            const MOBILE_VP_SCALE = 0.88;
-                            const _vpBaseTransform = 'scale(' + MOBILE_VP_SCALE + ')';
+                            // (MOBILE_VP_SCALE / _vpBaseTransform are defined at outer scope above)
                             let _gesture = null; // { startX, startY, tracking, swiping }
                             let _carouselPrevLabel = null;
                             let _carouselNextLabel = null;
@@ -4115,6 +4131,11 @@ pub fn canvas(_args: &[Value]) -> Value {
                             const RELAY_WS = 'wss://relay.slob.games/sync';
                             const MAX_PUSH_SIZE = 256 * 1024; // legacy content-only limit
                             const MAX_PUSH_PACKAGE_SIZE = 2 * 1024 * 1024; // content + resources package limit
+
+                            // Expose ingest helpers to outer-scope carousel code. Function declarations
+                            // below are hoisted to the top of this function body, so we can publish
+                            // them here before any code that depends on them runs.
+                            __syncIngest = { addSyncedGames, localGamesWithHashes };
 
                             function slugify(s) {
                                 return String(s || '')
