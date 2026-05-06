@@ -93,6 +93,11 @@ pub fn storage(_args: &[Value]) -> Value {
                     // Other VFS
                     section.card {
                         h2 { "Other VFS Files" }
+                        p.note { "Files in pvfs that are not tracked by games.json. Likely orphan game versions from old saves." }
+                        div style="margin:6px 0;" {
+                            button id="btnUploadOrphansGithub" onclick="uploadOrphanGamesToGithub()" { "Upload orphan games → tmp/" }
+                            span.note id="uploadOrphansStatus" style="margin-left:8px;" {}
+                        }
                         table id="otherTable" {
                             tr { td colspan="2" { "Loading…" } }
                         }
@@ -1103,6 +1108,98 @@ async function uploadSpritesToGithub() {
       totalFailed += Object.keys(batches[b]).length;
     }
     setStatus('Uploaded ' + (totalWrote + totalSkipped + totalFailed) + '/' + sprites.length + '…');
+  }
+  setStatus('Done. wrote=' + totalWrote + ' skipped=' + totalSkipped + ' failed=' + totalFailed);
+  if (btn) btn.disabled = false;
+}
+
+// ══════════════════════════════════════════════════════════════
+// Upload orphan VFS "games" (HTML files not tracked in games.json) → tmp/ on GitHub
+// ══════════════════════════════════════════════════════════════
+async function uploadOrphanGamesToGithub() {
+  var status = byId('uploadOrphansStatus');
+  var btn = byId('btnUploadOrphansGithub');
+  function setStatus(t) { if (status) status.textContent = t; }
+  if (!_data) { setStatus('Storage not loaded yet.'); return; }
+  var token = '';
+  try { token = (localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '').trim(); } catch(_) {}
+  if (!token) { setStatus('Sign in first (no token).'); return; }
+
+  // Build set of HTML contents already tracked by games.json so we don't re-upload them.
+  var trackedContents = new Set();
+  for (var gi = 0; gi < (_data.games || []).length; gi++) {
+    var c = _data.games[gi].content || '';
+    if (c) trackedContents.add(c);
+  }
+
+  // Candidate orphans: items in otherVfs whose content looks like an HTML game.
+  function looksLikeHtml(s) {
+    if (!s || typeof s !== 'string' || s.length < 64) return false;
+    var head = s.slice(0, 4096).toLowerCase();
+    return head.indexOf('<html') !== -1 || head.indexOf('<!doctype html') !== -1 || head.indexOf('<canvas') !== -1;
+  }
+  var orphans = [];
+  var seen = new Set();
+  for (var i = 0; i < (_data.otherVfs || []).length; i++) {
+    var item = _data.otherVfs[i];
+    var content = item.content || '';
+    if (!looksLikeHtml(content)) continue;
+    if (trackedContents.has(content)) continue;
+    if (seen.has(content)) continue;
+    seen.add(content);
+    orphans.push({ path: item.path, content: content });
+  }
+  if (!orphans.length) { setStatus('No orphan game HTML found in pvfs.'); return; }
+
+  // Batch into ~3 MB requests.
+  var batches = [];
+  var cur = {}, curBytes = 0, MAX = 3 * 1024 * 1024;
+  for (var j = 0; j < orphans.length; j++) {
+    var o = orphans[j];
+    if (curBytes + o.content.length > MAX && Object.keys(cur).length) {
+      batches.push(cur); cur = {}; curBytes = 0;
+    }
+    cur[o.path] = o.content;
+    curBytes += o.content.length;
+  }
+  if (Object.keys(cur).length) batches.push(cur);
+
+  var bases = ['https://relay.slob.games/sync', 'https://relay.traits.build/sync'];
+  if (btn) btn.disabled = true;
+  setStatus('Uploading ' + orphans.length + ' orphan(s) in ' + batches.length + ' batch(es)…');
+  var totalWrote = 0, totalSkipped = 0, totalFailed = 0;
+  var processed = 0;
+  for (var b = 0; b < batches.length; b++) {
+    var body = JSON.stringify({ files: batches[b] });
+    var lastErr = null, ok = false;
+    for (var k = 0; k < bases.length && !ok; k++) {
+      try {
+        var r = await fetch(bases[k] + '/internal/games/upload-tmp', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: body,
+        });
+        var txt = await r.text();
+        var resp = {};
+        try { resp = txt ? JSON.parse(txt) : {}; } catch(_) {}
+        if (!r.ok) { lastErr = resp.error || ('HTTP ' + r.status); continue; }
+        ok = true;
+        totalWrote += (resp.wrote || []).length;
+        totalSkipped += (resp.skipped || []).length;
+        totalFailed += (resp.failed || []).length;
+        if (resp.failed && resp.failed.length) console.warn('[orphans:upload] failed entries', resp.failed);
+        if (resp.skipped && resp.skipped.length) console.log('[orphans:upload] skipped entries', resp.skipped);
+        if (resp.wrote && resp.wrote.length) console.log('[orphans:upload] wrote entries', resp.wrote);
+      } catch (e) {
+        lastErr = String(e && e.message || e);
+      }
+    }
+    if (!ok) {
+      console.error('[orphans:upload] batch failed:', lastErr);
+      totalFailed += Object.keys(batches[b]).length;
+    }
+    processed += Object.keys(batches[b]).length;
+    setStatus('Processed ' + processed + '/' + orphans.length + '…');
   }
   setStatus('Done. wrote=' + totalWrote + ' skipped=' + totalSkipped + ' failed=' + totalFailed);
   if (btn) btn.disabled = false;

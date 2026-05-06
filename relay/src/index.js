@@ -969,6 +969,59 @@ async function handleInternalRoutes(url, request, env, ctx) {
     return json({ ok: true, wrote, skipped, failed });
   }
 
+  // POST /internal/games/upload-tmp — dump orphan VFS HTML "games" (those not
+  // tracked by games.json) into the GitHub `tmp/` folder for later triage.
+  // Body shape: { files: { "<source-path>": "<html string>", ... } }
+  // Each file is written as `tmp/<sha8>.html` (content-addressed) so that
+  // duplicate content from multiple clients naturally collapses to one blob.
+  if (path === '/internal/games/upload-tmp' && request.method === 'POST') {
+    if (!env.GITHUB_TOKEN || !env.GITHUB_REPO) return json({ error: 'GitHub not configured' }, 503);
+    let body = {};
+    try { body = await request.json(); } catch (_) { return json({ error: 'invalid JSON' }, 400); }
+    const filesIn = (body && body.files && typeof body.files === 'object') ? body.files : {};
+    const paths = Object.keys(filesIn);
+    if (!paths.length) return json({ error: 'no files' }, 400);
+    const BASE = `https://api.github.com/repos/${env.GITHUB_REPO}/contents`;
+    const headers = {
+      Authorization: `token ${env.GITHUB_TOKEN}`,
+      'Content-Type': 'application/json',
+      'User-Agent': 'slob-games-relay/1.0',
+      Accept: 'application/vnd.github.v3+json',
+    };
+    async function _sha8(text) {
+      const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(text || '')));
+      const arr = new Uint8Array(buf);
+      let hex = '';
+      for (let i = 0; i < arr.length; i++) hex += arr[i].toString(16).padStart(2, '0');
+      return hex.slice(0, 16);
+    }
+    const wrote = [];
+    const skipped = [];
+    const failed = [];
+    const seen = new Set();
+    for (const p of paths) {
+      const content = String(filesIn[p] || '');
+      if (!content || content.length < 32) { skipped.push({ path: p, reason: 'empty' }); continue; }
+      try {
+        const hash = await _sha8(content);
+        if (seen.has(hash)) { skipped.push({ path: p, reason: 'dup-in-batch', hash }); continue; }
+        seen.add(hash);
+        const filePath = `tmp/${hash}.html`;
+        // If file already exists, skip — this endpoint is idempotent and dedupes
+        // across clients via content-addressing.
+        const ex = await fetch(`${BASE}/${filePath}`, { headers });
+        if (ex.ok) { skipped.push({ path: p, reason: 'exists', hash, target: filePath }); continue; }
+        const b64 = _toBase64ForGitHub(content);
+        if (!b64) { skipped.push({ path: p, reason: 'encode-failed', hash }); continue; }
+        await _ghPutFile(BASE, headers, filePath, b64, `tmp game: ${hash} (from ${user}, src=${String(p).slice(0, 80)})`);
+        wrote.push({ path: p, hash, target: filePath, size: content.length });
+      } catch (e) {
+        failed.push({ path: p, error: String(e?.message || e).slice(0, 200) });
+      }
+    }
+    return json({ ok: true, wrote, skipped, failed });
+  }
+
   return json({ error: 'not found' }, 404);
 }
 
