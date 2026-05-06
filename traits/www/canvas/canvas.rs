@@ -3670,6 +3670,11 @@ pub fn canvas(_args: &[Value]) -> Value {
 
                             // ── Carousel gesture state ──
                             const SWIPE_THRESHOLD = 0.15; // fraction of screen width
+                            // Must match --mobile-vp-scale in CSS. The phone-viewport iframe is
+                            // pre-scaled, so any inline transform we set during the carousel must
+                            // include this scale or the iframe will jump to full size.
+                            const MOBILE_VP_SCALE = 0.88;
+                            const _vpBaseTransform = 'scale(' + MOBILE_VP_SCALE + ')';
                             let _gesture = null; // { startX, startY, tracking, swiping }
                             let _carouselPrevLabel = null;
                             let _carouselNextLabel = null;
@@ -3710,7 +3715,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 const pct = dx / sw;
                                 if (!_gesture.swiping && Math.abs(dx) > 10) _gesture.swiping = true;
                                 const vp = document.getElementById('phone-viewport');
-                                if (vp) vp.style.transform = 'translateX(' + dx + 'px)';
+                                if (vp) vp.style.transform = 'translateX(' + dx + 'px) ' + _vpBaseTransform;
                                 // Show peeking labels
                                 if (_carouselPrevLabel) {
                                     const show = pct > 0.05;
@@ -3737,6 +3742,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 if (!g.swiping) {
                                     // It was a two-finger tap (no significant drag)
                                     if (vp) { vp.style.transition = ''; vp.style.transform = ''; }
+                                    // (clearing inline transform lets the CSS scale rule reapply)
                                     if (g.wasPaused) {
                                         // Was already paused → unpause + hide chrome
                                         resumeGame();
@@ -3756,14 +3762,14 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     const direction = pct > 0 ? 'prev' : 'next';
                                     if (vp) {
                                         vp.style.transition = 'transform 0.2s ease-out';
-                                        vp.style.transform = 'translateX(' + (pct > 0 ? sw : -sw) + 'px)';
+                                        vp.style.transform = 'translateX(' + (pct > 0 ? sw : -sw) + 'px) ' + _vpBaseTransform;
                                     }
                                     setTimeout(() => {
                                         switchGame(direction);
                                         // Snap to other side then animate in
                                         if (vp) {
                                             vp.style.transition = 'none';
-                                            vp.style.transform = 'translateX(' + (pct > 0 ? -sw : sw) + 'px)';
+                                            vp.style.transform = 'translateX(' + (pct > 0 ? -sw : sw) + 'px) ' + _vpBaseTransform;
                                             requestAnimationFrame(() => {
                                                 if (vp) {
                                                     vp.style.transition = 'transform 0.25s ease-out';
@@ -3896,13 +3902,13 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 const w = frame ? frame.clientWidth : window.innerWidth;
                                 if (vp) {
                                     vp.style.transition = 'transform 0.2s ease-out';
-                                    vp.style.transform = 'translateX(' + (direction === 'prev' ? w : -w) + 'px)';
+                                    vp.style.transform = 'translateX(' + (direction === 'prev' ? w : -w) + 'px) ' + _vpBaseTransform;
                                 }
                                 setTimeout(() => {
                                     switchGame(direction);
                                     if (vp) {
                                         vp.style.transition = 'none';
-                                        vp.style.transform = 'translateX(' + (direction === 'prev' ? -w : w) + 'px)';
+                                        vp.style.transform = 'translateX(' + (direction === 'prev' ? -w : w) + 'px) ' + _vpBaseTransform;
                                         requestAnimationFrame(() => {
                                             if (vp) {
                                                 vp.style.transition = 'transform 0.22s ease-out';
@@ -3965,7 +3971,7 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 beginDesktopGesture();
                                 desktopGesture.dx += (-e.deltaX);
                                 const vp = document.getElementById('phone-viewport');
-                                if (vp) vp.style.transform = 'translateX(' + desktopGesture.dx + 'px)';
+                                if (vp) vp.style.transform = 'translateX(' + desktopGesture.dx + 'px) ' + _vpBaseTransform;
                                 scheduleDesktopGestureEnd();
                             }
 
