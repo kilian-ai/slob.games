@@ -799,6 +799,21 @@ async function handleInternalRoutes(url, request, env, ctx) {
     return json(summaries);
   }
 
+  // POST /internal/score — forward to DO for source-of-truth score write + broadcast.
+  // Worker has already verified the bearer token; DO will re-verify via authUser.
+  if (path === '/internal/score' && request.method === 'POST') {
+    try {
+      const room = env.GAME_ROOM.get(env.GAME_ROOM.idFromName('global6'));
+      const doUrl = new URL(request.url);
+      doUrl.pathname = '/internal/score';
+      // Re-create a Request preserving method, headers (incl. Authorization), and body
+      return await room.fetch(new Request(doUrl.toString(), request));
+    } catch (e) {
+      console.error('[score-fwd]', String(e?.message || e).slice(0, 300));
+      return json({ error: 'service temporarily unavailable' }, 503);
+    }
+  }
+
   // PATCH /internal/game/:gameId/publish
   const publishMatch = path.match(/^\/internal\/game\/([^/]+)\/publish$/);
   if (publishMatch && request.method === 'PATCH') {
@@ -1864,6 +1879,37 @@ export class GameRoomV6 {
         const rows = index.filter(g => g.owner === user);
         rows.sort((a, b) => b.updated.localeCompare(a.updated));
         return json(rows);
+      }
+
+      // POST /internal/score — submit a high score (auth required, server forces player=user)
+      // Body: { game_hash, score }
+      if (url.pathname === "/internal/score" && request.method === "POST") {
+        const user = await this.authUser(request);
+        if (!user) return json({ error: "auth required" }, 401);
+        const body = await request.json().catch(() => ({}));
+        const gameHash = String(body.game_hash || "").trim().toLowerCase();
+        const incoming = Math.floor(Number(body.score));
+        if (!/^[0-9a-f]{8,128}$/.test(gameHash)) return json({ error: "invalid game_hash" }, 400);
+        if (!Number.isFinite(incoming) || incoming < 0 || incoming > 1e9) {
+          return json({ error: "invalid score" }, 400);
+        }
+        // Rate limit: 1 submission / 2s per user+game
+        const rlKey = `rl:score:${user}:${gameHash}`;
+        const last = (await this.state.storage.get(rlKey)) || 0;
+        const now = Date.now();
+        if (now - last < 2000) return json({ error: "rate limited" }, 429);
+        await this.state.storage.put(rlKey, now);
+        // Only write if higher than existing
+        const existing = await this._getScore(gameHash);
+        if (existing && incoming <= existing.score) {
+          return json({ ok: true, accepted: false, current: existing });
+        }
+        await this._putScore(gameHash, incoming, user);
+        const msg = JSON.stringify({ type: "score-update", game_hash: gameHash, score: incoming, player: user });
+        for (const sock of this.state.getWebSockets()) {
+          try { sock.send(msg); } catch (_) {}
+        }
+        return json({ ok: true, accepted: true, score: incoming, player: user });
       }
 
       // PATCH /internal/game/:gameId/publish — toggle published flag

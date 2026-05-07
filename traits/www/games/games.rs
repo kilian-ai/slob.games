@@ -54,6 +54,7 @@ const CSS: &str = r##"
 .badge.publish-dim{background:rgba(120,136,158,0.12);color:#8da0b8;cursor:pointer;opacity:.82}
 .badge.publish-dim:hover{background:rgba(141,160,184,0.22);color:#b9c7d9;opacity:1}
 .badge.offline{background:rgba(255,176,32,0.12);color:#ffcc66;cursor:default;opacity:.95}
+.badge.hs{background:rgba(255,204,0,0.10);color:#ffd24a;font-weight:700}
 .publish-all-btn{font-size:0.65rem;padding:2px 8px;border-radius:4px;border:1px solid rgba(0,255,136,0.3);background:rgba(0,255,136,0.06);color:#00ff88;cursor:pointer;font-family:inherit;letter-spacing:0.04em;text-transform:uppercase;font-weight:600;transition:all 0.15s;margin-left:0.75rem;vertical-align:middle}
 .publish-all-btn:hover{background:rgba(0,255,136,0.14);border-color:rgba(0,255,136,0.6)}
 .publish-all-btn:disabled{opacity:0.4;cursor:default}
@@ -91,6 +92,29 @@ const JS: &str = r##"
   var __relayHealth={ok:true,status:200,msg:''};
   var __fetchingHashes={};
   var __githubCatalogUrl='';
+
+  // ── High-score helpers ──
+  function fmtScoreBadge(g){
+    var s=Number(g&&g.highscore);
+    if(!Number.isFinite(s)||s<=0)return '';
+    var p=String(g.highscore_player||'').trim();
+    var label='\uD83C\uDFC6 '+s+(p?' \u00b7 '+p:'');
+    return ' <span class="badge hs" title="top score">'+esc(label)+'</span>';
+  }
+  function _seedHighScoresFromRows(rows){
+    if(!rows||!rows.length)return;
+    try{
+      var hs=window.__highScores=window.__highScores||{};
+      for(var i=0;i<rows.length;i++){
+        var g=rows[i]||{};
+        var h=normHash(g.content_hash||g.checksum||'');
+        var s=Number(g.highscore);
+        if(!h||!Number.isFinite(s)||s<=0)continue;
+        var prev=hs[h]||{score:0,player:''};
+        if(s>prev.score){hs[h]={score:s,player:String(g.highscore_player||'')}}
+      }
+    }catch(_){}
+  }
 
   // ── Deletion blacklist: prevent re-sync of intentionally deleted games ──
   var DELETED_KEY='traits.deleted_games';
@@ -1192,6 +1216,7 @@ const JS: &str = r##"
     }
     if(g.version) meta+=' <span style="opacity:0.25">\u00b7</span> '+esc(g.version);
     if(g.size) meta+=' <span style="opacity:0.25">\u00b7</span> '+fmtSize(g.size);
+    meta+=fmtScoreBadge(g.relayRow||g.game||g);
     var subMeta='';
     if(g.syncNote){subMeta='<div class="submeta">'+esc(g.syncNote)+'</div>'}
     div.innerHTML='<div class="gname">'+esc(g.name||'Untitled')+'</div>'
@@ -1240,6 +1265,7 @@ const JS: &str = r##"
     var pubBadge=isPub?'<span class="badge pub" data-pub="1">published</span>':'<span class="badge draft" data-pub="1">draft</span>';
     var meta='<span class="badge relay">yours</span> '+pubBadge;
     if(g.size) meta+=' <span style="opacity:0.25">\u00b7</span> '+fmtSize(g.size);
+    meta+=fmtScoreBadge(g);
     div.innerHTML='<div class="gname">'+esc(g.name||'Untitled')+'</div>'
       +'<div class="gmeta">'+meta+'</div>'
       +'<div class="gactions"><button class="btn-ren" data-ren="1">rename</button> <button class="btn-del" data-del="1">delete</button></div>'
@@ -1259,6 +1285,7 @@ const JS: &str = r##"
     var status=getGameVfsStatus(chash);
     var meta='<span class="status-dot '+status+'" data-hash="'+esc(chash)+'"></span> <span class="badge relay">community</span>';
     if(g.size) meta+=' <span style="opacity:0.25">\u00b7</span> '+fmtSize(g.size);
+    meta+=fmtScoreBadge(g);
     div.innerHTML='<div class="gname">'+esc(g.name||'Untitled')+'</div>'
       +'<div class="gmeta">'+meta+'</div>'
       +'<div class="play-icon">\u25b6</div>';
@@ -1380,6 +1407,8 @@ const JS: &str = r##"
 
       console.log('[games:renderLocal] game=',g.name,'id=',g.id,'scope=',localScope,'isExternalLocal=',isExternalLocal,'hasSyncIdentity=',hasSyncIdentity,'gameId=',gameId,'syncOwner=',syncOwner,'ownerForLookup=',ownerForLookup,'relayKey=',relayKey,'relay=',relay?{name:relay.name,published:relay.published,checksum:relay.checksum}:null,'badge=',JSON.stringify(g.publishBadge));
       g.syncNote='';
+      // Surface high score from the matched relay row (if any) so makeLocalCard can render it.
+      g.relayRow=relay||null;
       enriched.push(g);
     }
 
@@ -1435,6 +1464,7 @@ const JS: &str = r##"
     }else{
       publicGames=Array.isArray(publicResp.data)?publicResp.data:[];
     }
+    _seedHighScoresFromRows(publicGames);
 
     // If logged in, show user's own games with publish/delete controls
     if(t){
@@ -1448,6 +1478,7 @@ const JS: &str = r##"
         var myGames=[];
         if(myResp.ok){
           myGames=Array.isArray(myResp.data)?myResp.data:[];
+          _seedHighScoresFromRows(myGames);
         }else if(myResp.status===401){
           // stale token in this browser context; continue as logged-out view
           __relayUser='';

@@ -2147,6 +2147,32 @@ pub fn canvas(_args: &[Value]) -> Value {
                                     }
                                     return {score: 0, player: ''};
                                 },
+                                highscore: {
+                                    get: function() {
+                                        try {
+                                            var hs = window.parent.__highScores;
+                                            var hash = window.parent.__activeGameHash;
+                                            if (hs && hash && hs[hash]) return hs[hash];
+                                        } catch(_) {}
+                                        return {score: 0, player: ''};
+                                    },
+                                    submit: function(score, player) {
+                                        var n = Math.floor(Number(score));
+                                        if (!isFinite(n) || n < 0) return false;
+                                        var p = (typeof player === 'string') ? player.slice(0, 50) : '';
+                                        try { window.parent.postMessage({type:'canvas-score', score:n, player:p}, '*'); } catch(_) { return false; }
+                                        return true;
+                                    },
+                                    onChange: function(cb) {
+                                        if (typeof cb !== 'function') return function(){};
+                                        var handler = function(e) {
+                                            if (!e || !e.data || e.data.type !== 'highscore-update') return;
+                                            try { cb({score: Number(e.data.score)||0, player: String(e.data.player||'')}); } catch(_) {}
+                                        };
+                                        window.addEventListener('message', handler);
+                                        return function() { try { window.removeEventListener('message', handler); } catch(_) {} };
+                                    },
+                                },
                             };
                             if (!window.loadVFSImage) {
                                 window.loadVFSImage = function(path, opts) { return window.traits.loadVFSImage(path, opts); };
@@ -2836,7 +2862,8 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 if (__gameLogs.length > __GAME_LOG_MAX) __gameLogs.shift();
                             }
                             if (e.data?.type === 'canvas-score') {
-                                // Game reported a score — forward to sync WebSocket
+                                // Game reported a score — forward to relay (auth'd REST preferred,
+                                // WS fallback for anonymous users).
                                 const hash = window.__activeGameHash;
                                 if (!hash) return;
                                 const score = Math.floor(Number(e.data.score));
@@ -2847,8 +2874,16 @@ pub fn canvas(_args: &[Value]) -> Value {
                                 if (score > current.score || (score === current.score && player && !current.player)) {
                                     window.__highScores[hash] = {score, player: player || current.player};
                                 }
-                                // Forward to relay via the sync WebSocket
-                                if (window.__syncWs && window.__syncWs.readyState === WebSocket.OPEN) {
+                                // Prefer authenticated REST: server forces player=user, rate-limits, broadcasts.
+                                const _tok = (function(){ try { return (localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '').trim(); } catch(_) { return ''; } })();
+                                if (_tok) {
+                                    fetch('https://relay.slob.games/sync/internal/score', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + _tok },
+                                        body: JSON.stringify({ game_hash: hash, score: score }),
+                                    }).catch(function(){});
+                                } else if (window.__syncWs && window.__syncWs.readyState === WebSocket.OPEN) {
+                                    // Anonymous fallback (legacy unauthenticated path).
                                     window.__syncWs.send(JSON.stringify({
                                         type: 'score', game_hash: hash, score: score, player: player || current.player
                                     }));

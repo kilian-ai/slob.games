@@ -250,6 +250,13 @@ pub fn init() -> Result<JsValue, JsValue> {
             // 2. Fall back to helper REST dispatch for non-WASM traits
             helper_dispatch(path, args)
         },
+        dispatch_skip_components: |path, args| {
+            // Same as dispatch — WASM kernel has no component layer to skip.
+            if let Some(result) = wasm_traits::dispatch(path, args) {
+                return Some(result);
+            }
+            helper_dispatch(path, args)
+        },
         registry_all: || {
             get_registry().all().iter().map(|t| serde_json::json!({
                 "path": t.path,
