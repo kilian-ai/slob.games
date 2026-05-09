@@ -464,20 +464,36 @@ function _toBase64ForGitHub(value) {
 }
 
 async function _ghPutFile(BASE, headers, path, base64Content, message) {
-  // Read existing sha first (so subsequent updates can overwrite)
-  const ex = await fetch(`${BASE}/${path}`, { headers });
-  const exData = ex.ok ? await ex.json().catch(() => ({})) : {};
-  const sha = exData.sha;
-  const put = await fetch(`${BASE}/${path}`, {
-    method: 'PUT', headers,
-    body: JSON.stringify({ message, content: base64Content, ...(sha ? { sha } : {}) }),
-  });
+  // Read existing file (if any) and compare content to decide whether to update.
+  const normalizedB64 = String(base64Content || '').replace(/\s+/g, '');
+  let exData = null;
+  try {
+    const ex = await fetch(`${BASE}/${path}`, { headers });
+    if (ex.ok) {
+      const d = await ex.json();
+      exData = d;
+      const remoteB64 = String(d.content || '').replace(/\s+/g, '');
+      if (remoteB64 === normalizedB64) {
+        // Content identical — no update needed.
+        return { ok: true, updated: false, path };
+      }
+    }
+  } catch (err) {
+    // GET failed — we'll attempt to PUT (create) below.
+  }
+
+  const sha = exData?.sha || null;
+  const body = JSON.stringify({ message, content: normalizedB64, ...(sha ? { sha } : {}) });
+  const put = await fetch(`${BASE}/${path}`, { method: 'PUT', headers, body });
   if (!put.ok) {
-    const err = await put.json().catch(() => ({}));
+    let err = {};
+    try { err = await put.json(); } catch (_) {}
     throw new Error(`GitHub PUT ${path} failed (${put.status}): ${err.message || ''}`);
   }
-  return await put.json().catch(() => ({}));
+  const res = await put.json();
+  return { ok: true, updated: true, sha: res?.content?.sha || res?.commit?.sha || null, path };
 }
+
 
 async function _ghDeleteFile(BASE, headers, path, message) {
   const ex = await fetch(`${BASE}/${path}`, { headers });
