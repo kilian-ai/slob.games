@@ -3314,10 +3314,7 @@ class Traits {
                     // ── Model response transcript ──
                     else if (type === 'response.audio_transcript.done') {
                         if (msg.transcript) {
-                            let spoken = msg.transcript.trim();
-                            if (_canvasAgentRunning) {
-                                spoken = 'Still updating the game. I will confirm when it is fully finished and synced.';
-                            }
+                            const spoken = msg.transcript.trim();
                             if (opts.onResponse) opts.onResponse(spoken);
                             _appendLocalVoiceHistory(voiceSessionId, 'assistant', spoken);
                             try { await _self.call('sys.voice.history', ['append', 'assistant', spoken]); } catch(_) {}
@@ -3385,6 +3382,9 @@ class Traits {
                             // even though the build is still in progress.  The model will only
                             // speak after the agent resolves (see completion block below).
                             _sendOutput(JSON.stringify({ status: 'building', message: 'Canvas agent is working on: ' + String(request || 'updating the current game').replace(/\s+/g, ' ').trim().slice(0, 220) }));
+                            if (_voiceDc && _voiceDc.readyState === 'open') {
+                                _sendDcJson({ type: 'response.create' }, 'response.create_early');
+                            }
 
                             let truncated = '';
                             try {
