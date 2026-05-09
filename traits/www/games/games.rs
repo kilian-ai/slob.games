@@ -1571,22 +1571,7 @@ const JS: &str = r##"
         }
       }
     }catch(_){/* fall through — if catalog fetch fails, just publish all */}
-    // 2. Filter to games not already on GitHub.
-    var pending=[];
-    var skipped=0;
-    for(var i=0;i<gameIds.length;i++){
-      var gid=gameIds[i];
-      var meta=__relayMineByGameId[gid]||{};
-      var ownerKey=(String(meta.owner||'').toLowerCase()||String(__relayUser||'').toLowerCase())+'/'+String(gid).toLowerCase();
-      var hashKey=meta.content_hash?'hash:'+String(meta.content_hash).toLowerCase():null;
-      if(existing[ownerKey]||(hashKey&&existing[hashKey])){skipped++;continue}
-      pending.push(gid);
-    }
-    if(!pending.length){
-      if(btn){btn.disabled=false;btn.textContent='\u2191 GitHub'}
-      alert('All '+gameIds.length+' games already on GitHub. Nothing to upload.');
-      return;
-    }
+    // 2. Filter to games not already on GitHub — include updates when local is newer.\n    var pending=[];\n    var skipped=0;\n    for(var i=0;i<gameIds.length;i++){\n      var gid=gameIds[i];\n      var meta=__relayMineByGameId[gid]||{};\n      var ownerKey=(String(meta.owner||'').toLowerCase()||String(__relayUser||'').toLowerCase())+'/'+String(gid).toLowerCase();\n      var hashKey=meta.content_hash?'hash:'+String(meta.content_hash).toLowerCase():null;\n      var existingByOwner = existing[ownerKey];\n      var existingByHash = hashKey && existing[hashKey];\n      // If identical by hash, skip.\n      if(existingByHash){ skipped++; continue; }\n      if(existingByOwner){\n        // Decide whether to update: prefer content_hash mismatch, otherwise compare updated timestamps.\n        var needUpdate = false;\n        try {\n          var localHash = String(meta.content_hash||meta.checksum||'').toLowerCase();\n          var remoteHash = String(existingByOwner.content_hash||existingByOwner.checksum||'').toLowerCase();\n          if(localHash && remoteHash && localHash !== remoteHash){\n            needUpdate = true;\n          } else if(meta.updated && existingByOwner.updated){\n            var lts = Date.parse(String(meta.updated));\n            var rts = Date.parse(String(existingByOwner.updated));\n            if(!isNaN(lts) && !isNaN(rts) && lts > rts) needUpdate = true;\n          } else if(meta.updated && !existingByOwner.updated){\n            // Local has an updated timestamp but remote doesn't — prefer uploading.\n            needUpdate = true;\n          }\n        } catch(e){ needUpdate = true; }\n        if(!needUpdate){ skipped++; continue; }\n        // Include for update.\n        pending.push(gid);\n        continue;\n      }\n      // Not present by owner or hash: create new\n      pending.push(gid);\n    }\n    if(!pending.length){\n      if(btn){btn.disabled=false;btn.textContent='\\u2191 GitHub'}\n      alert('All '+gameIds.length+' games already on GitHub. Nothing to upload.');\n      return;\n    }\n
     // 3. Upload missing ones.
     var ok=0,fail=0,errors=[];
     for(var j=0;j<pending.length;j++){
