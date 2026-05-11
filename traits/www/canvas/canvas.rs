@@ -501,10 +501,6 @@ pub fn canvas(_args: &[Value]) -> Value {
                             span .fab-icon { "🎤" }
                             span #fabVoiceLabel { "Start Voice" }
                         }
-                        button #fabSplats {
-                            span .fab-icon { "🔮" }
-                            span { "Splat Viewer" }
-                        }
                         button #fabShare {
                             span .fab-icon { "📤" }
                             span { "Share Project" }
@@ -2998,22 +2994,6 @@ pub fn canvas(_args: &[Value]) -> Value {
                             fabVoiceBtn.querySelector('.fab-icon').textContent = '⏳';
                             window.dispatchEvent(new CustomEvent('traits-voice-control', { detail: { voice_control_action: 'start' } }));
                         });
-                        // Splat viewer button
-                        document.getElementById('fabSplats').addEventListener('click', async () => {
-                            fabMenu.classList.remove('show');
-                            fabToggle.classList.remove('open');
-                            try {
-                                const sdk = window._traitsSDK;
-                                if (!sdk) return;
-                                const splats = await sdk.call('www.splats', ['render']);
-                                const html = (typeof splats === 'string') ? splats : splats?.result;
-                                if (html && typeof html === 'string') {
-                                    await sdk.call('sys.canvas', ['set', html]);
-                                    renderCanvas(html);
-                                }
-                            } catch(e) { console.warn('splat load:', e); }
-                        });
-
                         // Share / Receive project via WebRTC P2P
                         document.getElementById('fabShare').addEventListener('click', () => {
                             fabMenu.classList.remove('show'); fabToggle.classList.remove('open');
