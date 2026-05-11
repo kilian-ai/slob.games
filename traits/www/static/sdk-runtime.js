@@ -3039,7 +3039,10 @@ class Traits {
 
         const rawKey = opts.apiKey || _voiceApiKey || await _ensureVoiceApiKey(this);
         const apiKey = rawKey ? rawKey.trim() : null;
-        if (!apiKey) {
+        // Check whether we can route through the relay proxy (user is logged in)
+        const _voiceUserToken = (() => { try { return (localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '').trim(); } catch(_) { return ''; } })();
+        const _hasRelayAuth = !!_voiceUserToken;
+        if (!apiKey && !_hasRelayAuth) {
             const msg = 'OpenAI API key required. Set OPENAI_API_KEY in Settings > Secrets';
             _dispatchVoiceEvent('error', { message: msg });
             return { ok: false, error: msg };
@@ -3154,39 +3157,67 @@ class Traits {
             }
 
             // ── Ephemeral token: browser WebRTC needs a short-lived token ──
-            // Direct browser fetch to OpenAI (CORS: *) — fast, no dispatch cascade.
-            // Avoids relay timeout (60s) when stale pairing code is in localStorage.
             let ephemeralKey = null;
-            try {
-                const resp = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': 'Bearer ' + apiKey,
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        session: { type: 'realtime', model,
-                                   audio: { output: { voice: voice } } }
-                    })
-                });
-                const data = await resp.json();
-                if (resp.ok) {
-                    const token = (data.client_secret && data.client_secret.value) || data.value;
-                    if (token) {
-                        ephemeralKey = token;
-                        console.log('[Voice] Got ephemeral token via direct fetch');
+
+            // Try relay proxy first when logged in — the API key stays server-side
+            if (_hasRelayAuth) {
+                try {
+                    const relayBase = _relayServer();
+                    const relayResp = await fetch(relayBase + '/auth/voice-token', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': 'Bearer ' + _voiceUserToken,
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ model, voice }),
+                    });
+                    const relayData = await relayResp.json();
+                    if (relayResp.ok && relayData.token) {
+                        ephemeralKey = relayData.token;
+                        console.log('[Voice] Got ephemeral token via relay proxy');
                     } else {
-                        console.warn('[Voice] Token response missing value:', JSON.stringify(data).slice(0, 200));
+                        console.warn('[Voice] Relay voice-token failed:', relayData.error || relayResp.status);
                     }
-                } else {
-                    console.warn('[Voice] Token request failed:', resp.status, JSON.stringify(data).slice(0, 300));
+                } catch(e) {
+                    console.log('[Voice] Relay voice-token error:', e.message || e);
                 }
-            } catch(e) {
-                console.log('[Voice] Direct ephemeral token fetch failed:', e.message || e);
+            }
+
+            // Fall back to direct OpenAI fetch if relay didn't produce a token and we have a local API key
+            if (!ephemeralKey && apiKey) {
+                try {
+                    const resp = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': 'Bearer ' + apiKey,
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            session: { type: 'realtime', model,
+                                       audio: { output: { voice: voice } } }
+                        })
+                    });
+                    const data = await resp.json();
+                    if (resp.ok) {
+                        const token = (data.client_secret && data.client_secret.value) || data.value;
+                        if (token) {
+                            ephemeralKey = token;
+                            console.log('[Voice] Got ephemeral token via direct fetch');
+                        } else {
+                            console.warn('[Voice] Token response missing value:', JSON.stringify(data).slice(0, 200));
+                        }
+                    } else {
+                        console.warn('[Voice] Token request failed:', resp.status, JSON.stringify(data).slice(0, 300));
+                    }
+                } catch(e) {
+                    console.log('[Voice] Direct ephemeral token fetch failed:', e.message || e);
+                }
             }
 
             if (!ephemeralKey) {
-                const msg = 'Could not obtain ephemeral token. Check that your OPENAI_API_KEY is valid and has Realtime API access.';
+                const msg = _hasRelayAuth
+                    ? 'Could not obtain ephemeral token via relay. Voice may not be enabled on this server.'
+                    : 'Could not obtain ephemeral token. Check that your OPENAI_API_KEY is valid and has Realtime API access.';
                 _dispatchVoiceEvent('error', { message: msg });
                 return { ok: false, error: msg };
             }

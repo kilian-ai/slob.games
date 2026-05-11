@@ -2510,6 +2510,44 @@ export default {
         return json({ url: catalogUrl, repo: repo || null });
       }
 
+      // POST /auth/voice-token — proxy OpenAI realtime ephemeral token for authenticated users.
+      // The relay's OPENAI_API_KEY never leaves the server; the client only receives a
+      // short-lived ephemeral token valid for one WebRTC session.
+      if (authPath === '/auth/voice-token' && request.method === 'POST') {
+        const user = await kvAuthUser(request);
+        if (!user) return json({ error: "auth required" }, 401);
+        if (!env.OPENAI_API_KEY) return json({ error: "voice not configured on this relay" }, 503);
+        const body = await request.json().catch(() => ({}));
+        const model = String(body.model || 'gpt-realtime-mini-2025-12-15');
+        const voice = String(body.voice || 'shimmer');
+        // Allowlist accepted models to prevent abuse of the relay key
+        const ALLOWED_VOICE_MODELS = [
+          'gpt-realtime-mini-2025-12-15',
+          'gpt-4o-realtime-preview-2024-12-17',
+          'gpt-4o-mini-realtime-preview-2024-12-17',
+          'gpt-4o-realtime-preview',
+          'gpt-4o-mini-realtime-preview',
+        ];
+        if (!ALLOWED_VOICE_MODELS.includes(model)) return json({ error: "model not allowed" }, 400);
+        try {
+          const oaiResp = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
+            method: 'POST',
+            headers: {
+              'Authorization': 'Bearer ' + env.OPENAI_API_KEY,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ session: { type: 'realtime', model, audio: { output: { voice } } } }),
+          });
+          const data = await oaiResp.json();
+          if (!oaiResp.ok) return json({ error: data?.error?.message || 'OpenAI error', status: oaiResp.status }, 502);
+          const token = (data.client_secret && data.client_secret.value) || data.value;
+          if (!token) return json({ error: 'no ephemeral token in response' }, 502);
+          return json({ ok: true, token });
+        } catch (e) {
+          return json({ error: e.message || 'relay error' }, 502);
+        }
+      }
+
       return json({ error: "not found" }, 404);
     }
 
