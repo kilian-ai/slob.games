@@ -3282,19 +3282,31 @@ class Traits {
                     } else if (type === 'response.created' || type === 'response.done') {
                         const usage = msg.response?.usage;
                         console.log('[Voice] [DEBUG]', type, usage ? '| tokens: in=' + (usage.input_tokens || 0) + ' out=' + (usage.output_tokens || 0) : '');
-                        // On response.done: flush queued tool calls now that items are committed
+                        // On response.done: schedule queued tool calls to run asynchronously
+                        // so we don't block the DataChannel `message` handler (which can
+                        // cause the PeerConnection to stall/disconnect on heavy work).
                         if (type === 'response.done' && _voicePendingToolCalls.length > 0) {
                             const pending = _voicePendingToolCalls.splice(0);
-                            console.log('[Voice] [DEBUG] Flushing', pending.length, 'queued tool calls');
-                            let needsResponse = false;
-                            for (const tc of pending) {
-                                const wants = await tc.execute();
-                                if (wants !== false) needsResponse = true;
-                            }
-                            // Send one response.create if any handler needs the model to respond
-                            if (needsResponse && _voiceDc && _voiceDc.readyState === 'open') {
-                                _voiceDc.send(JSON.stringify({ type: 'response.create' }));
-                            }
+                            console.log('[Voice] [DEBUG] Scheduling flush of', pending.length, 'queued tool calls');
+                            setTimeout(async () => {
+                                try {
+                                    let needsResponse = false;
+                                    for (const tc of pending) {
+                                        try {
+                                            const wants = await tc.execute();
+                                            if (wants !== false) needsResponse = true;
+                                        } catch (e) {
+                                            console.error('[Voice] queued tool execution error:', e && (e.message || e));
+                                        }
+                                    }
+                                    if (needsResponse && _voiceDc && _voiceDc.readyState === 'open') {
+                                        try { _voiceDc.send(JSON.stringify({ type: 'response.create' })); }
+                                        catch (e) { console.warn('[Voice] Failed to send response.create after queued tools:', e && (e.message || e)); }
+                                    }
+                                } catch (e) {
+                                    console.error('[Voice] Error flushing queued tool calls:', e && (e.message || e));
+                                }
+                            }, 0);
                         }
                     } else if (!type?.startsWith('response.audio') && !type?.startsWith('input_audio_buffer') && type !== 'response.text.delta' && type !== 'response.audio_transcript.delta') {
                         // Log all non-audio-streaming events
