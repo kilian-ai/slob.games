@@ -878,6 +878,7 @@ function updateStatusBar() {
     relayServerDot.className = 'dot off';
     relayServerText.textContent = 'relay api: down';
   }
+}
 
 async function refreshRelayStatus() {
   if (!sdk || typeof sdk.relayStatus !== 'function') return;
