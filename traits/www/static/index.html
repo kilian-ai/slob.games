@@ -718,16 +718,10 @@ async function _startGlobalVoice() {
   const _guestToken = (localStorage.getItem('traits.secret.SLOB_USER_TOKEN') || '').trim();
   const _guestExpired = _guestToken && typeof _isTokenExpired === 'function' && _isTokenExpired(_guestToken);
   if (!_guestToken || _guestExpired) {
-    if (window.speechSynthesis) {
-      const _utt = new SpeechSynthesisUtterance(
-        "Hey there! With slob dot games you can create and adapt games just by talking — it's pretty awesome. " +
-        "To get started with voice you just need a free account. " +
-        "It only takes a moment — I'll open the sign-up form for you right now!"
-      );
-      _utt.rate = 1.05;
-      _utt.pitch = 1.0;
-      window.speechSynthesis.speak(_utt);
-    }
+    try {
+      const _guestAudio = new Audio('/audio/guest-welcome.mp3');
+      _guestAudio.play().catch(() => {});
+    } catch (_) {}
     _voiceOverlay.classList.add('on');
     _voiceLabel.textContent = '🎙 Sign up to use voice →';
     setTimeout(() => {
