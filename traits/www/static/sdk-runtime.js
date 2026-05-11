@@ -746,10 +746,10 @@ function _appendLocalVoiceHistory(sessionId, role, content) {
 
 async function _resolveVoiceSessionId(sdk, opts = {}, model = '') {
     if (opts.sessionId && String(opts.sessionId).trim()) {
-        const sid = String(opts.sessionId).trim();
-        try { localStorage.setItem(LS_VOICE_SESSION_ID, sid); } catch (_) {}
-        _voiceSessionId = sid;
-        return sid;
+            const sid = String(opts.sessionId).trim(); 
+            try { localStorage.setItem(LS_VOICE_SESSION_ID, sid); } catch (_) {} 
+            _voiceSessionId = sid; 
+            return sid; 
     }
 
     try {
